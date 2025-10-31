@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -7,31 +7,111 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Heart } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
+import { supabase } from "@/integrations/supabase/client";
+import { z } from "zod";
+
+const loginSchema = z.object({
+  email: z.string().email("Invalid email address"),
+  password: z.string().min(6, "Password must be at least 6 characters"),
+});
+
+const signupSchema = z.object({
+  organizationName: z.string().min(1, "Organization name is required"),
+  email: z.string().email("Invalid email address"),
+  password: z.string().min(6, "Password must be at least 6 characters"),
+});
 
 export default function Auth() {
   const navigate = useNavigate();
   const [isLoading, setIsLoading] = useState(false);
+  const [loginForm, setLoginForm] = useState({ email: "", password: "" });
+  const [signupForm, setSignupForm] = useState({
+    organizationName: "",
+    email: "",
+    password: "",
+  });
+
+  useEffect(() => {
+    // Check if user is already logged in
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) {
+        navigate("/dashboard");
+      }
+    });
+
+    // Listen for auth state changes
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session) {
+        navigate("/dashboard");
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, [navigate]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
-    // Simulate login
-    setTimeout(() => {
-      toast.success("Logged in successfully");
-      navigate("/dashboard");
+
+    try {
+      const validated = loginSchema.parse(loginForm);
+
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: validated.email,
+        password: validated.password,
+      });
+
+      if (error) {
+        toast.error(error.message);
+      } else if (data.session) {
+        toast.success("Logged in successfully");
+        navigate("/dashboard");
+      }
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        toast.error(error.errors[0].message);
+      } else {
+        toast.error("Failed to log in");
+      }
+    } finally {
       setIsLoading(false);
-    }, 1000);
+    }
   };
 
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
-    // Simulate signup
-    setTimeout(() => {
-      toast.success("Account created successfully");
-      navigate("/dashboard");
+
+    try {
+      const validated = signupSchema.parse(signupForm);
+
+      const { data, error } = await supabase.auth.signUp({
+        email: validated.email,
+        password: validated.password,
+        options: {
+          data: {
+            organization_name: validated.organizationName,
+          },
+        },
+      });
+
+      if (error) {
+        toast.error(error.message);
+      } else if (data.user) {
+        toast.success("Account created successfully!");
+        navigate("/dashboard");
+      }
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        toast.error(error.errors[0].message);
+      } else {
+        toast.error("Failed to create account");
+      }
+    } finally {
       setIsLoading(false);
-    }, 1000);
+    }
   };
 
   return (
@@ -65,6 +145,10 @@ export default function Auth() {
                       id="login-email"
                       type="email"
                       placeholder="your.email@example.com"
+                      value={loginForm.email}
+                      onChange={(e) =>
+                        setLoginForm({ ...loginForm, email: e.target.value })
+                      }
                       required
                     />
                   </div>
@@ -73,6 +157,10 @@ export default function Auth() {
                     <Input
                       id="login-password"
                       type="password"
+                      value={loginForm.password}
+                      onChange={(e) =>
+                        setLoginForm({ ...loginForm, password: e.target.value })
+                      }
                       required
                     />
                   </div>
@@ -89,6 +177,13 @@ export default function Auth() {
                     <Input
                       id="signup-name"
                       placeholder="Your NGO Name"
+                      value={signupForm.organizationName}
+                      onChange={(e) =>
+                        setSignupForm({
+                          ...signupForm,
+                          organizationName: e.target.value,
+                        })
+                      }
                       required
                     />
                   </div>
@@ -98,6 +193,10 @@ export default function Auth() {
                       id="signup-email"
                       type="email"
                       placeholder="your.email@example.com"
+                      value={signupForm.email}
+                      onChange={(e) =>
+                        setSignupForm({ ...signupForm, email: e.target.value })
+                      }
                       required
                     />
                   </div>
@@ -106,6 +205,10 @@ export default function Auth() {
                     <Input
                       id="signup-password"
                       type="password"
+                      value={signupForm.password}
+                      onChange={(e) =>
+                        setSignupForm({ ...signupForm, password: e.target.value })
+                      }
                       required
                     />
                   </div>

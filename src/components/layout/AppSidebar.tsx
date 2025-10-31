@@ -13,6 +13,7 @@ import {
   Settings,
   Heart,
 } from "lucide-react";
+import { UserMenu } from "./UserMenu";
 import {
   Sidebar,
   SidebarContent,
@@ -130,13 +131,16 @@ export function AppSidebar() {
       </SidebarContent>
 
       <SidebarFooter className="border-t border-sidebar-border p-4">
-        <Link
-          to="/settings"
-          className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent"
-        >
-          <Settings className="h-4 w-4" />
-          <span>Settings</span>
-        </Link>
+        <div className="flex items-center justify-between gap-2">
+          <Link
+            to="/settings"
+            className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent"
+          >
+            <Settings className="h-4 w-4" />
+            <span>Settings</span>
+          </Link>
+          <UserMenu />
+        </div>
       </SidebarFooter>
     </Sidebar>
   );
