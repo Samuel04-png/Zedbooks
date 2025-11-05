@@ -8,6 +8,10 @@ import Auth from "./pages/Auth";
 import Dashboard from "./pages/Dashboard";
 import Invoices from "./pages/Invoices";
 import NewInvoice from "./pages/NewInvoice";
+import Employees from "./pages/Employees";
+import NewEmployee from "./pages/NewEmployee";
+import Payroll from "./pages/Payroll";
+import NewPayrollRun from "./pages/NewPayrollRun";
 import ComingSoon from "./pages/ComingSoon";
 import NotFound from "./pages/NotFound";
 
@@ -38,7 +42,10 @@ const App = () => (
           <Route path="/inventory" element={<AppLayout><ComingSoon title="Inventory" /></AppLayout>} />
           <Route path="/bank-accounts" element={<AppLayout><ComingSoon title="Bank Accounts" /></AppLayout>} />
           <Route path="/reconciliation" element={<AppLayout><ComingSoon title="Reconciliation" /></AppLayout>} />
-          <Route path="/payroll" element={<AppLayout><ComingSoon title="Payroll" description="Zambian payroll with PAYE, NAPSA, and NHIMA compliance" /></AppLayout>} />
+          <Route path="/employees" element={<AppLayout><Employees /></AppLayout>} />
+          <Route path="/employees/new" element={<AppLayout><NewEmployee /></AppLayout>} />
+          <Route path="/payroll" element={<AppLayout><Payroll /></AppLayout>} />
+          <Route path="/payroll/new" element={<AppLayout><NewPayrollRun /></AppLayout>} />
           <Route path="/time-tracking" element={<AppLayout><ComingSoon title="Time & Contractors" /></AppLayout>} />
           <Route path="/projects" element={<AppLayout><ComingSoon title="Projects" /></AppLayout>} />
           <Route path="/donors" element={<AppLayout><ComingSoon title="Donors & Grants" /></AppLayout>} />

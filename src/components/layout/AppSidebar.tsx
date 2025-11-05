@@ -69,6 +69,7 @@ const navigation = [
   {
     title: "People",
     items: [
+      { title: "Employees", icon: Users, href: "/employees" },
       { title: "Payroll", icon: DollarSign, href: "/payroll" },
       { title: "Time & Contractors", icon: Clock, href: "/time-tracking" },
     ],
