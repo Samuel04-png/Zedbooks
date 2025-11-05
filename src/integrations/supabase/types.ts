@@ -14,6 +14,201 @@ export type Database = {
   }
   public: {
     Tables: {
+      employees: {
+        Row: {
+          bank_account_number: string | null
+          bank_branch: string | null
+          bank_name: string | null
+          basic_salary: number
+          created_at: string
+          department: string | null
+          email: string | null
+          employee_number: string
+          employment_date: string
+          employment_status: string | null
+          full_name: string
+          housing_allowance: number | null
+          id: string
+          napsa_number: string | null
+          nhima_number: string | null
+          other_allowances: number | null
+          phone: string | null
+          position: string | null
+          tpin: string | null
+          transport_allowance: number | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          bank_account_number?: string | null
+          bank_branch?: string | null
+          bank_name?: string | null
+          basic_salary: number
+          created_at?: string
+          department?: string | null
+          email?: string | null
+          employee_number: string
+          employment_date: string
+          employment_status?: string | null
+          full_name: string
+          housing_allowance?: number | null
+          id?: string
+          napsa_number?: string | null
+          nhima_number?: string | null
+          other_allowances?: number | null
+          phone?: string | null
+          position?: string | null
+          tpin?: string | null
+          transport_allowance?: number | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          bank_account_number?: string | null
+          bank_branch?: string | null
+          bank_name?: string | null
+          basic_salary?: number
+          created_at?: string
+          department?: string | null
+          email?: string | null
+          employee_number?: string
+          employment_date?: string
+          employment_status?: string | null
+          full_name?: string
+          housing_allowance?: number | null
+          id?: string
+          napsa_number?: string | null
+          nhima_number?: string | null
+          other_allowances?: number | null
+          phone?: string | null
+          position?: string | null
+          tpin?: string | null
+          transport_allowance?: number | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      payroll_items: {
+        Row: {
+          basic_salary: number
+          created_at: string
+          employee_id: string
+          gross_salary: number
+          housing_allowance: number | null
+          id: string
+          napsa_employee: number | null
+          napsa_employer: number | null
+          net_salary: number
+          nhima_employee: number | null
+          nhima_employer: number | null
+          other_allowances: number | null
+          other_deductions: number | null
+          paye: number | null
+          payroll_run_id: string
+          total_deductions: number
+          transport_allowance: number | null
+        }
+        Insert: {
+          basic_salary: number
+          created_at?: string
+          employee_id: string
+          gross_salary: number
+          housing_allowance?: number | null
+          id?: string
+          napsa_employee?: number | null
+          napsa_employer?: number | null
+          net_salary: number
+          nhima_employee?: number | null
+          nhima_employer?: number | null
+          other_allowances?: number | null
+          other_deductions?: number | null
+          paye?: number | null
+          payroll_run_id: string
+          total_deductions: number
+          transport_allowance?: number | null
+        }
+        Update: {
+          basic_salary?: number
+          created_at?: string
+          employee_id?: string
+          gross_salary?: number
+          housing_allowance?: number | null
+          id?: string
+          napsa_employee?: number | null
+          napsa_employer?: number | null
+          net_salary?: number
+          nhima_employee?: number | null
+          nhima_employer?: number | null
+          other_allowances?: number | null
+          other_deductions?: number | null
+          paye?: number | null
+          payroll_run_id?: string
+          total_deductions?: number
+          transport_allowance?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "payroll_items_employee_id_fkey"
+            columns: ["employee_id"]
+            isOneToOne: false
+            referencedRelation: "employees"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "payroll_items_payroll_run_id_fkey"
+            columns: ["payroll_run_id"]
+            isOneToOne: false
+            referencedRelation: "payroll_runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      payroll_runs: {
+        Row: {
+          created_at: string
+          id: string
+          notes: string | null
+          period_end: string
+          period_start: string
+          run_date: string
+          status: string | null
+          total_deductions: number | null
+          total_gross: number | null
+          total_net: number | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          notes?: string | null
+          period_end: string
+          period_start: string
+          run_date: string
+          status?: string | null
+          total_deductions?: number | null
+          total_gross?: number | null
+          total_net?: number | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          notes?: string | null
+          period_end?: string
+          period_start?: string
+          run_date?: string
+          status?: string | null
+          total_deductions?: number | null
+          total_gross?: number | null
+          total_net?: number | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           created_at: string
