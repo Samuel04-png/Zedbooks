@@ -150,11 +150,11 @@ export default function Payslip() {
               <span className="font-medium">{formatZMW(Number(payrollItem?.paye))}</span>
             </div>
             <div className="flex justify-between">
-              <span>NAPSA (Employee 5%)</span>
+              <span>NAPSA (Employee 10%)</span>
               <span className="font-medium">{formatZMW(Number(payrollItem?.napsa_employee))}</span>
             </div>
             <div className="flex justify-between">
-              <span>NHIMA (Employee 1%)</span>
+              <span>NHIMA (Employee 2%)</span>
               <span className="font-medium">{formatZMW(Number(payrollItem?.nhima_employee))}</span>
             </div>
             {Number(payrollItem?.advances_deducted) > 0 && (
@@ -183,11 +183,11 @@ export default function Payslip() {
           <h3 className="font-semibold mb-3">Employer Contributions (Not deducted from salary)</h3>
           <div className="space-y-2 text-sm">
             <div className="flex justify-between">
-              <span>NAPSA (Employer 5%)</span>
+              <span>NAPSA (Employer 10%)</span>
               <span>{formatZMW(Number(payrollItem?.napsa_employer))}</span>
             </div>
             <div className="flex justify-between">
-              <span>NHIMA (Employer 1%)</span>
+              <span>NHIMA (Employer 2%)</span>
               <span>{formatZMW(Number(payrollItem?.nhima_employer))}</span>
             </div>
           </div>

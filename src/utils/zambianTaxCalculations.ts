@@ -25,10 +25,10 @@ const PAYE_BANDS = [
 ];
 
 // Statutory Contribution Rates
-const NAPSA_EMPLOYEE_RATE = 0.05; // 5%
-const NAPSA_EMPLOYER_RATE = 0.05; // 5%
-const NHIMA_EMPLOYEE_RATE = 0.01; // 1%
-const NHIMA_EMPLOYER_RATE = 0.01; // 1%
+const NAPSA_EMPLOYEE_RATE = 0.10; // 10%
+const NAPSA_EMPLOYER_RATE = 0.10; // 10%
+const NHIMA_EMPLOYEE_RATE = 0.02; // 2%
+const NHIMA_EMPLOYER_RATE = 0.02; // 2%
 
 /**
  * Calculate PAYE using progressive tax bands
