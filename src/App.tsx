@@ -10,8 +10,12 @@ import Invoices from "./pages/Invoices";
 import NewInvoice from "./pages/NewInvoice";
 import Employees from "./pages/Employees";
 import NewEmployee from "./pages/NewEmployee";
+import EditEmployee from "./pages/EditEmployee";
+import BulkUploadEmployees from "./pages/BulkUploadEmployees";
 import Payroll from "./pages/Payroll";
 import NewPayrollRun from "./pages/NewPayrollRun";
+import PayrollDetail from "./pages/PayrollDetail";
+import Payslip from "./pages/Payslip";
 import ComingSoon from "./pages/ComingSoon";
 import NotFound from "./pages/NotFound";
 
@@ -44,8 +48,12 @@ const App = () => (
           <Route path="/reconciliation" element={<AppLayout><ComingSoon title="Reconciliation" /></AppLayout>} />
           <Route path="/employees" element={<AppLayout><Employees /></AppLayout>} />
           <Route path="/employees/new" element={<AppLayout><NewEmployee /></AppLayout>} />
+          <Route path="/employees/:id/edit" element={<AppLayout><EditEmployee /></AppLayout>} />
+          <Route path="/employees/bulk-upload" element={<AppLayout><BulkUploadEmployees /></AppLayout>} />
           <Route path="/payroll" element={<AppLayout><Payroll /></AppLayout>} />
           <Route path="/payroll/new" element={<AppLayout><NewPayrollRun /></AppLayout>} />
+          <Route path="/payroll/:id" element={<AppLayout><PayrollDetail /></AppLayout>} />
+          <Route path="/payroll/:runId/payslip/:employeeId" element={<AppLayout><Payslip /></AppLayout>} />
           <Route path="/time-tracking" element={<AppLayout><ComingSoon title="Time & Contractors" /></AppLayout>} />
           <Route path="/projects" element={<AppLayout><ComingSoon title="Projects" /></AppLayout>} />
           <Route path="/donors" element={<AppLayout><ComingSoon title="Donors & Grants" /></AppLayout>} />

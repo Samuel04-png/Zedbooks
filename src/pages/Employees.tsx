@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
-import { Plus, Pencil, Trash2 } from "lucide-react";
+import { Plus, Upload, Pencil, Trash2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import {
   Table,
@@ -52,10 +52,16 @@ export default function Employees() {
           <h1 className="text-3xl font-bold">Employees</h1>
           <p className="text-muted-foreground">Manage your employee records</p>
         </div>
-        <Button onClick={() => navigate("/employees/new")}>
-          <Plus className="mr-2 h-4 w-4" />
-          Add Employee
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => navigate("/employees/bulk-upload")}>
+            <Upload className="mr-2 h-4 w-4" />
+            Bulk Upload
+          </Button>
+          <Button onClick={() => navigate("/employees/new")}>
+            <Plus className="mr-2 h-4 w-4" />
+            Add Employee
+          </Button>
+        </div>
       </div>
 
       {isLoading ? (

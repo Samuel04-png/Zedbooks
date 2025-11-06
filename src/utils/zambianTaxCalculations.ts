@@ -11,6 +11,7 @@ export interface TaxCalculationResult {
   napsaEmployer: number;
   nhimaEmployee: number;
   nhimaEmployer: number;
+  advancesDeducted: number;
   totalDeductions: number;
   netSalary: number;
 }
@@ -86,23 +87,21 @@ export function calculatePayroll(
   housingAllowance: number = 0,
   transportAllowance: number = 0,
   otherAllowances: number = 0,
+  advancesDeducted: number = 0,
   otherDeductions: number = 0
 ): TaxCalculationResult {
   // Calculate gross salary
   const grossSalary = basicSalary + housingAllowance + transportAllowance + otherAllowances;
 
-  // Calculate NAPSA and NHIMA
+  // Calculate NAPSA and NHIMA on gross salary
   const napsa = calculateNAPSA(grossSalary);
   const nhima = calculateNHIMA(grossSalary);
 
-  // Taxable income = Gross - NAPSA employee contribution
-  const taxableIncome = grossSalary - napsa.employee;
+  // Calculate PAYE on gross salary (Zambian tax is on gross pay)
+  const paye = calculatePAYE(grossSalary);
 
-  // Calculate PAYE
-  const paye = calculatePAYE(taxableIncome);
-
-  // Total deductions
-  const totalDeductions = paye + napsa.employee + nhima.employee + otherDeductions;
+  // Total deductions including advances
+  const totalDeductions = paye + napsa.employee + nhima.employee + advancesDeducted + otherDeductions;
 
   // Net salary
   const netSalary = grossSalary - totalDeductions;
@@ -118,6 +117,7 @@ export function calculatePayroll(
     napsaEmployer: napsa.employer,
     nhimaEmployee: nhima.employee,
     nhimaEmployer: nhima.employer,
+    advancesDeducted,
     totalDeductions,
     netSalary
   };

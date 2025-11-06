@@ -86,12 +86,25 @@ export default function NewPayrollRun() {
       let totalDeductions = 0;
       let totalNet = 0;
 
+      // Get pending advances for each employee
+      const { data: advances } = await supabase
+        .from("advances")
+        .select("*")
+        .eq("status", "pending")
+        .lte("date_to_deduct", data.period_end)
+        .in("employee_id", employees.map(e => e.id));
+
       const payrollItems = employees.map((employee) => {
+        // Calculate total advances to deduct for this employee
+        const employeeAdvances = advances?.filter(a => a.employee_id === employee.id) || [];
+        const totalAdvances = employeeAdvances.reduce((sum, adv) => sum + Number(adv.amount), 0);
+
         const calculation = calculatePayroll(
           Number(employee.basic_salary),
           Number(employee.housing_allowance || 0),
           Number(employee.transport_allowance || 0),
-          Number(employee.other_allowances || 0)
+          Number(employee.other_allowances || 0),
+          totalAdvances
         );
 
         totalGross += calculation.grossSalary;
@@ -111,6 +124,7 @@ export default function NewPayrollRun() {
           napsa_employer: calculation.napsaEmployer,
           nhima_employee: calculation.nhimaEmployee,
           nhima_employer: calculation.nhimaEmployer,
+          advances_deducted: calculation.advancesDeducted,
           total_deductions: calculation.totalDeductions,
           net_salary: calculation.netSalary,
         };
@@ -121,6 +135,15 @@ export default function NewPayrollRun() {
         .insert(payrollItems);
 
       if (itemsError) throw itemsError;
+
+      // Mark advances as deducted
+      if (advances && advances.length > 0) {
+        await supabase
+          .from("advances")
+          .update({ status: "deducted" })
+          .in("id", advances.map(a => a.id));
+      }
+
 
       // Update payroll run totals
       const { error: updateError } = await supabase

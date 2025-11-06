@@ -14,6 +14,50 @@ export type Database = {
   }
   public: {
     Tables: {
+      advances: {
+        Row: {
+          amount: number
+          created_at: string
+          date_given: string
+          date_to_deduct: string | null
+          employee_id: string
+          id: string
+          reason: string | null
+          status: string | null
+          updated_at: string
+        }
+        Insert: {
+          amount: number
+          created_at?: string
+          date_given: string
+          date_to_deduct?: string | null
+          employee_id: string
+          id?: string
+          reason?: string | null
+          status?: string | null
+          updated_at?: string
+        }
+        Update: {
+          amount?: number
+          created_at?: string
+          date_given?: string
+          date_to_deduct?: string | null
+          employee_id?: string
+          id?: string
+          reason?: string | null
+          status?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "advances_employee_id_fkey"
+            columns: ["employee_id"]
+            isOneToOne: false
+            referencedRelation: "employees"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       employees: {
         Row: {
           bank_account_number: string | null
@@ -91,6 +135,7 @@ export type Database = {
       }
       payroll_items: {
         Row: {
+          advances_deducted: number | null
           basic_salary: number
           created_at: string
           employee_id: string
@@ -110,6 +155,7 @@ export type Database = {
           transport_allowance: number | null
         }
         Insert: {
+          advances_deducted?: number | null
           basic_salary: number
           created_at?: string
           employee_id: string
@@ -129,6 +175,7 @@ export type Database = {
           transport_allowance?: number | null
         }
         Update: {
+          advances_deducted?: number | null
           basic_salary?: number
           created_at?: string
           employee_id?: string
