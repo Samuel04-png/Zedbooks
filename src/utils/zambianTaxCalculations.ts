@@ -55,13 +55,14 @@ export function calculatePAYE(taxableIncome: number): number {
 
 /**
  * Calculate NAPSA contributions (employee and employer)
+ * NAPSA is calculated on basic salary only, not gross
  */
-export function calculateNAPSA(grossSalary: number): {
+export function calculateNAPSA(basicSalary: number): {
   employee: number;
   employer: number;
 } {
-  const employee = Math.round(grossSalary * NAPSA_EMPLOYEE_RATE * 100) / 100;
-  const employer = Math.round(grossSalary * NAPSA_EMPLOYER_RATE * 100) / 100;
+  const employee = Math.round(basicSalary * NAPSA_EMPLOYEE_RATE * 100) / 100;
+  const employer = Math.round(basicSalary * NAPSA_EMPLOYER_RATE * 100) / 100;
   
   return { employee, employer };
 }
@@ -93,11 +94,13 @@ export function calculatePayroll(
   // Calculate gross salary
   const grossSalary = basicSalary + housingAllowance + transportAllowance + otherAllowances;
 
-  // Calculate NAPSA and NHIMA on gross salary
-  const napsa = calculateNAPSA(grossSalary);
+  // Calculate NAPSA on basic salary only
+  const napsa = calculateNAPSA(basicSalary);
+  
+  // Calculate NHIMA on gross salary
   const nhima = calculateNHIMA(grossSalary);
 
-  // Calculate PAYE on gross salary (Zambian tax is on gross pay)
+  // Calculate PAYE on gross salary
   const paye = calculatePAYE(grossSalary);
 
   // Total deductions including advances
