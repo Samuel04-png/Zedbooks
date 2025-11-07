@@ -71,6 +71,7 @@ const navigation = [
     items: [
       { title: "Employees", icon: Users, href: "/employees" },
       { title: "Payroll", icon: DollarSign, href: "/payroll" },
+      { title: "Advances", icon: Wallet, href: "/advances" },
       { title: "Time & Contractors", icon: Clock, href: "/time-tracking" },
     ],
   },
@@ -85,6 +86,8 @@ const navigation = [
     title: "Reports",
     items: [
       { title: "Reports", icon: BarChart3, href: "/reports" },
+      { title: "Payroll Reports", icon: FileText, href: "/payroll-reports" },
+      { title: "ZRA Compliance", icon: FileText, href: "/zra-compliance" },
     ],
   },
 ];

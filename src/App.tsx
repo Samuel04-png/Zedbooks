@@ -16,6 +16,9 @@ import Payroll from "./pages/Payroll";
 import NewPayrollRun from "./pages/NewPayrollRun";
 import PayrollDetail from "./pages/PayrollDetail";
 import Payslip from "./pages/Payslip";
+import Advances from "./pages/Advances";
+import PayrollReports from "./pages/PayrollReports";
+import ZRACompliance from "./pages/ZRACompliance";
 import ComingSoon from "./pages/ComingSoon";
 import NotFound from "./pages/NotFound";
 
@@ -54,10 +57,13 @@ const App = () => (
           <Route path="/payroll/new" element={<AppLayout><NewPayrollRun /></AppLayout>} />
           <Route path="/payroll/:id" element={<AppLayout><PayrollDetail /></AppLayout>} />
           <Route path="/payroll/:runId/payslip/:employeeId" element={<AppLayout><Payslip /></AppLayout>} />
+          <Route path="/advances" element={<AppLayout><Advances /></AppLayout>} />
           <Route path="/time-tracking" element={<AppLayout><ComingSoon title="Time & Contractors" /></AppLayout>} />
           <Route path="/projects" element={<AppLayout><ComingSoon title="Projects" /></AppLayout>} />
           <Route path="/donors" element={<AppLayout><ComingSoon title="Donors & Grants" /></AppLayout>} />
           <Route path="/reports" element={<AppLayout><ComingSoon title="Reports" /></AppLayout>} />
+          <Route path="/payroll-reports" element={<AppLayout><PayrollReports /></AppLayout>} />
+          <Route path="/zra-compliance" element={<AppLayout><ZRACompliance /></AppLayout>} />
           <Route path="/settings" element={<AppLayout><ComingSoon title="Settings" /></AppLayout>} />
           
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
