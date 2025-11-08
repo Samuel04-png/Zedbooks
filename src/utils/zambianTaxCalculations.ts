@@ -27,7 +27,8 @@ const PAYE_BANDS = [
 // Statutory Contribution Rates
 const NAPSA_EMPLOYEE_RATE = 0.05; // 5%
 const NAPSA_EMPLOYER_RATE = 0.05; // 5%
-const NAPSA_EMPLOYER_CAP = 1221.80; // Maximum K1,221.80 per month
+const NAPSA_BASE_CAP = 26840; // Maximum base for NAPSA calculation
+const NAPSA_EMPLOYER_CAP = 1342; // Maximum K1,342 per month (5% of K26,840)
 const NHIMA_EMPLOYEE_RATE = 0.01; // 1%
 const NHIMA_EMPLOYER_RATE = 0.01; // 1%
 
@@ -57,14 +58,15 @@ export function calculatePAYE(taxableIncome: number): number {
 /**
  * Calculate NAPSA contributions (employee and employer)
  * NAPSA Employee: 5% of basic salary
- * NAPSA Employer: 5% of gross salary, capped at K1,221.80
+ * NAPSA Employer: 5% of gross salary, capped at base of K26,840 (max K1,342)
  */
 export function calculateNAPSA(basicSalary: number, grossSalary: number): {
   employee: number;
   employer: number;
 } {
   const employee = Math.round(basicSalary * NAPSA_EMPLOYEE_RATE * 100) / 100;
-  const employerUncapped = Math.round(grossSalary * NAPSA_EMPLOYER_RATE * 100) / 100;
+  const napsaBase = Math.min(grossSalary, NAPSA_BASE_CAP);
+  const employerUncapped = Math.round(napsaBase * NAPSA_EMPLOYER_RATE * 100) / 100;
   const employer = Math.min(employerUncapped, NAPSA_EMPLOYER_CAP);
   
   return { employee, employer };
