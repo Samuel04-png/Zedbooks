@@ -27,6 +27,7 @@ const PAYE_BANDS = [
 // Statutory Contribution Rates
 const NAPSA_EMPLOYEE_RATE = 0.05; // 5%
 const NAPSA_EMPLOYER_RATE = 0.05; // 5%
+const NAPSA_EMPLOYER_CAP = 1221.80; // Maximum K1,221.80 per month
 const NHIMA_EMPLOYEE_RATE = 0.01; // 1%
 const NHIMA_EMPLOYER_RATE = 0.01; // 1%
 
@@ -55,27 +56,30 @@ export function calculatePAYE(taxableIncome: number): number {
 
 /**
  * Calculate NAPSA contributions (employee and employer)
- * NAPSA is calculated on basic salary only, not gross
+ * NAPSA Employee: 5% of basic salary
+ * NAPSA Employer: 5% of gross salary, capped at K1,221.80
  */
-export function calculateNAPSA(basicSalary: number): {
+export function calculateNAPSA(basicSalary: number, grossSalary: number): {
   employee: number;
   employer: number;
 } {
   const employee = Math.round(basicSalary * NAPSA_EMPLOYEE_RATE * 100) / 100;
-  const employer = Math.round(basicSalary * NAPSA_EMPLOYER_RATE * 100) / 100;
+  const employerUncapped = Math.round(grossSalary * NAPSA_EMPLOYER_RATE * 100) / 100;
+  const employer = Math.min(employerUncapped, NAPSA_EMPLOYER_CAP);
   
   return { employee, employer };
 }
 
 /**
  * Calculate NHIMA contributions (employee and employer)
+ * NHIMA is calculated on basic salary only (1% each)
  */
-export function calculateNHIMA(grossSalary: number): {
+export function calculateNHIMA(basicSalary: number): {
   employee: number;
   employer: number;
 } {
-  const employee = Math.round(grossSalary * NHIMA_EMPLOYEE_RATE * 100) / 100;
-  const employer = Math.round(grossSalary * NHIMA_EMPLOYER_RATE * 100) / 100;
+  const employee = Math.round(basicSalary * NHIMA_EMPLOYEE_RATE * 100) / 100;
+  const employer = Math.round(basicSalary * NHIMA_EMPLOYER_RATE * 100) / 100;
   
   return { employee, employer };
 }
@@ -94,11 +98,11 @@ export function calculatePayroll(
   // Calculate gross salary
   const grossSalary = basicSalary + housingAllowance + transportAllowance + otherAllowances;
 
-  // Calculate NAPSA on basic salary only
-  const napsa = calculateNAPSA(basicSalary);
+  // Calculate NAPSA: Employee on basic, Employer on gross (capped)
+  const napsa = calculateNAPSA(basicSalary, grossSalary);
   
-  // Calculate NHIMA on gross salary
-  const nhima = calculateNHIMA(grossSalary);
+  // Calculate NHIMA on basic salary
+  const nhima = calculateNHIMA(basicSalary);
 
   // Calculate PAYE on gross salary
   const paye = calculatePAYE(grossSalary);
