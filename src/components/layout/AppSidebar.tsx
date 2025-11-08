@@ -12,6 +12,7 @@ import {
   BarChart3,
   Settings,
   Heart,
+  Calculator,
 } from "lucide-react";
 import { UserMenu } from "./UserMenu";
 import {
@@ -88,6 +89,7 @@ const navigation = [
       { title: "Reports", icon: BarChart3, href: "/reports" },
       { title: "Payroll Reports", icon: FileText, href: "/payroll-reports" },
       { title: "ZRA Compliance", icon: FileText, href: "/zra-compliance" },
+      { title: "Tax Calculator", icon: Calculator, href: "/tax-calculator" },
     ],
   },
 ];

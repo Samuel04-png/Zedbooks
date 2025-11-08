@@ -64,6 +64,9 @@ export type Database = {
           bank_branch: string | null
           bank_name: string | null
           basic_salary: number
+          contract_end_date: string | null
+          contract_start_date: string | null
+          contract_type: string | null
           created_at: string
           department: string | null
           email: string | null
@@ -71,6 +74,8 @@ export type Database = {
           employment_date: string
           employment_status: string | null
           full_name: string
+          gratuity_rate: number | null
+          has_gratuity: boolean | null
           housing_allowance: number | null
           id: string
           napsa_number: string | null
@@ -88,6 +93,9 @@ export type Database = {
           bank_branch?: string | null
           bank_name?: string | null
           basic_salary: number
+          contract_end_date?: string | null
+          contract_start_date?: string | null
+          contract_type?: string | null
           created_at?: string
           department?: string | null
           email?: string | null
@@ -95,6 +103,8 @@ export type Database = {
           employment_date: string
           employment_status?: string | null
           full_name: string
+          gratuity_rate?: number | null
+          has_gratuity?: boolean | null
           housing_allowance?: number | null
           id?: string
           napsa_number?: string | null
@@ -112,6 +122,9 @@ export type Database = {
           bank_branch?: string | null
           bank_name?: string | null
           basic_salary?: number
+          contract_end_date?: string | null
+          contract_start_date?: string | null
+          contract_type?: string | null
           created_at?: string
           department?: string | null
           email?: string | null
@@ -119,6 +132,8 @@ export type Database = {
           employment_date?: string
           employment_status?: string | null
           full_name?: string
+          gratuity_rate?: number | null
+          has_gratuity?: boolean | null
           housing_allowance?: number | null
           id?: string
           napsa_number?: string | null

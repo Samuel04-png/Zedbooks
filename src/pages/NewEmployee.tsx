@@ -1,3 +1,4 @@
+import * as React from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -20,6 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { ArrowLeft } from "lucide-react";
 
@@ -36,6 +38,11 @@ const employeeSchema = z.object({
   other_allowances: z.string().optional(),
   employment_date: z.string().min(1, "Employment date is required"),
   employment_status: z.string().default("active"),
+  contract_type: z.string().optional(),
+  contract_start_date: z.string().optional(),
+  contract_end_date: z.string().optional(),
+  has_gratuity: z.boolean().default(false),
+  gratuity_rate: z.string().optional(),
   tpin: z.string().optional(),
   nhima_number: z.string().optional(),
   napsa_number: z.string().optional(),
@@ -53,8 +60,18 @@ export default function NewEmployee() {
     resolver: zodResolver(employeeSchema),
     defaultValues: {
       employment_status: "active",
+      has_gratuity: false,
     },
   });
+
+  // Auto-calculate housing allowance (30% of basic salary)
+  const basicSalary = form.watch("basic_salary");
+  React.useEffect(() => {
+    if (basicSalary && !isNaN(Number(basicSalary))) {
+      const housingAllowance = (Number(basicSalary) * 0.3).toFixed(2);
+      form.setValue("housing_allowance", housingAllowance);
+    }
+  }, [basicSalary, form]);
 
   const onSubmit = async (data: EmployeeFormData) => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -76,6 +93,11 @@ export default function NewEmployee() {
       other_allowances: data.other_allowances ? Number(data.other_allowances) : 0,
       employment_date: data.employment_date,
       employment_status: data.employment_status || 'active',
+      contract_type: data.contract_type || null,
+      contract_start_date: data.contract_start_date || null,
+      contract_end_date: data.contract_end_date || null,
+      has_gratuity: data.has_gratuity || false,
+      gratuity_rate: data.gratuity_rate ? Number(data.gratuity_rate) : 0,
       tpin: data.tpin || null,
       nhima_number: data.nhima_number || null,
       napsa_number: data.napsa_number || null,
@@ -235,6 +257,101 @@ export default function NewEmployee() {
           </div>
 
           <div className="border rounded-lg p-6 space-y-6">
+            <h2 className="text-xl font-semibold">Contract Details</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <FormField
+                control={form.control}
+                name="contract_type"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Contract Type</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value}>
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select contract type" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value="permanent">Permanent</SelectItem>
+                        <SelectItem value="fixed-term">Fixed-Term</SelectItem>
+                        <SelectItem value="temporary">Temporary</SelectItem>
+                        <SelectItem value="internship">Internship</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="contract_start_date"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Contract Start Date</FormLabel>
+                    <FormControl>
+                      <Input type="date" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="contract_end_date"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Contract End Date</FormLabel>
+                    <FormControl>
+                      <Input type="date" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="has_gratuity"
+                render={({ field }) => (
+                  <FormItem className="flex flex-row items-center justify-between rounded-lg border p-4">
+                    <div className="space-y-0.5">
+                      <FormLabel className="text-base">Attracts Gratuity</FormLabel>
+                      <div className="text-sm text-muted-foreground">
+                        Enable if this contract includes gratuity
+                      </div>
+                    </div>
+                    <FormControl>
+                      <Switch
+                        checked={field.value}
+                        onCheckedChange={field.onChange}
+                      />
+                    </FormControl>
+                  </FormItem>
+                )}
+              />
+              {form.watch("has_gratuity") && (
+                <FormField
+                  control={form.control}
+                  name="gratuity_rate"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Gratuity Rate (%)</FormLabel>
+                      <FormControl>
+                        <Input 
+                          type="number" 
+                          step="0.01" 
+                          placeholder="e.g., 25 for 25%" 
+                          {...field} 
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              )}
+            </div>
+          </div>
+
+          <div className="border rounded-lg p-6 space-y-6">
             <h2 className="text-xl font-semibold">Salary & Allowances</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <FormField
@@ -257,7 +374,14 @@ export default function NewEmployee() {
                   <FormItem>
                     <FormLabel>Housing Allowance (ZMW)</FormLabel>
                     <FormControl>
-                      <Input type="number" step="0.01" {...field} />
+                      <Input 
+                        type="number" 
+                        step="0.01" 
+                        {...field} 
+                        placeholder="Auto-calculated at 30% of basic salary"
+                        readOnly
+                        className="bg-muted"
+                      />
                     </FormControl>
                     <FormMessage />
                   </FormItem>

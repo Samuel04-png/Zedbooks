@@ -19,6 +19,7 @@ import Payslip from "./pages/Payslip";
 import Advances from "./pages/Advances";
 import PayrollReports from "./pages/PayrollReports";
 import ZRACompliance from "./pages/ZRACompliance";
+import TaxCalculator from "./pages/TaxCalculator";
 import ComingSoon from "./pages/ComingSoon";
 import NotFound from "./pages/NotFound";
 
@@ -64,6 +65,7 @@ const App = () => (
           <Route path="/reports" element={<AppLayout><ComingSoon title="Reports" /></AppLayout>} />
           <Route path="/payroll-reports" element={<AppLayout><PayrollReports /></AppLayout>} />
           <Route path="/zra-compliance" element={<AppLayout><ZRACompliance /></AppLayout>} />
+          <Route path="/tax-calculator" element={<AppLayout><TaxCalculator /></AppLayout>} />
           <Route path="/settings" element={<AppLayout><ComingSoon title="Settings" /></AppLayout>} />
           
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
