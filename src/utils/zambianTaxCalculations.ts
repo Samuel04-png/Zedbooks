@@ -16,12 +16,12 @@ export interface TaxCalculationResult {
   netSalary: number;
 }
 
-// PAYE Tax Bands for 2025/26 (Monthly)
+// PAYE Tax Bands for 2025/26 (Monthly) - ZRA Standards
 const PAYE_BANDS = [
   { min: 0, max: 5100, rate: 0 },
-  { min: 5100, max: 7100, rate: 0.20 },
-  { min: 7100, max: 9200, rate: 0.30 },
-  { min: 9200, max: Infinity, rate: 0.37 }
+  { min: 5100, max: 6800, rate: 0.20 },
+  { min: 6800, max: 8900, rate: 0.30 },
+  { min: 8900, max: Infinity, rate: 0.37 }
 ];
 
 // Statutory Contribution Rates
@@ -57,17 +57,15 @@ export function calculatePAYE(taxableIncome: number): number {
 
 /**
  * Calculate NAPSA contributions (employee and employer)
- * NAPSA Employee: 5% of gross salary (deducted from employee)
- * NAPSA Employer: 5% of gross salary, capped at base of K26,840 (max K1,342)
+ * NAPSA: 5% of gross salary, capped at K1,342.00
  */
 export function calculateNAPSA(basicSalary: number, grossSalary: number): {
   employee: number;
   employer: number;
 } {
-  const employee = Math.round(grossSalary * NAPSA_EMPLOYEE_RATE * 100) / 100;
-  const napsaBase = Math.min(grossSalary, NAPSA_BASE_CAP);
-  const employerUncapped = Math.round(napsaBase * NAPSA_EMPLOYER_RATE * 100) / 100;
-  const employer = Math.min(employerUncapped, NAPSA_EMPLOYER_CAP);
+  const uncappedNAPSA = Math.round(grossSalary * NAPSA_EMPLOYEE_RATE * 100) / 100;
+  const employee = Math.min(uncappedNAPSA, NAPSA_EMPLOYER_CAP);
+  const employer = employee; // Same as employee contribution
   
   return { employee, employer };
 }
@@ -88,6 +86,7 @@ export function calculateNHIMA(basicSalary: number): {
 
 /**
  * Calculate complete payroll for an employee
+ * Following ZRA, NAPSA, and NHIMA standards
  */
 export function calculatePayroll(
   basicSalary: number,
@@ -100,14 +99,17 @@ export function calculatePayroll(
   // Calculate gross salary
   const grossSalary = basicSalary + housingAllowance + transportAllowance + otherAllowances;
 
-  // Calculate NAPSA: Employee 5% on gross, Employer 5% on gross (capped)
+  // Calculate NAPSA: 5% of gross, capped at K1,342
   const napsa = calculateNAPSA(basicSalary, grossSalary);
   
   // Calculate NHIMA: 1% on basic salary
   const nhima = calculateNHIMA(basicSalary);
 
-  // Calculate PAYE on gross salary
-  const paye = calculatePAYE(grossSalary);
+  // Calculate taxable income: gross - NAPSA (as per ZRA standards)
+  const taxableIncome = grossSalary - napsa.employee;
+
+  // Calculate PAYE on taxable income
+  const paye = calculatePAYE(taxableIncome);
 
   // Total deductions: statutory deductions + advances + other deductions
   const totalDeductions = napsa.employee + nhima.employee + paye + advancesDeducted + otherDeductions;
