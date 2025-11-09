@@ -106,13 +106,13 @@ export function calculatePayroll(
   // Calculate NHIMA on basic salary
   const nhima = calculateNHIMA(basicSalary);
 
-  // Calculate PAYE on gross salary
+  // Calculate PAYE on gross salary (for reference only, not deducted)
   const paye = calculatePAYE(grossSalary);
 
-  // Total deductions including advances
-  const totalDeductions = paye + napsa.employee + nhima.employee + advancesDeducted + otherDeductions;
+  // Total deductions: only advances and other deductions (no statutory deductions for employee)
+  const totalDeductions = advancesDeducted + otherDeductions;
 
-  // Net salary
+  // Net salary: gross minus advances only (no PAYE, NAPSA, or NHIMA deducted from employee)
   const netSalary = grossSalary - totalDeductions;
 
   return {

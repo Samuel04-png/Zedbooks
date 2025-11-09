@@ -66,14 +66,13 @@ export default function PayrollDetail() {
       "Transport",
       "Other Allowances",
       "Gross Salary",
-      "PAYE",
-      "NAPSA Employee",
-      "NAPSA Employer",
-      "NHIMA Employee",
-      "NHIMA Employer",
-      "Advances",
-      "Total Deductions",
+      "Advances Deducted",
       "Net Salary",
+      "PAYE (Employer)",
+      "NAPSA Employee (Employer)",
+      "NAPSA Employer",
+      "NHIMA Employee (Employer)",
+      "NHIMA Employer",
     ];
 
     const rows = payrollItems.map((item: any) => [
@@ -84,14 +83,13 @@ export default function PayrollDetail() {
       item.transport_allowance,
       item.other_allowances,
       item.gross_salary,
+      item.advances_deducted || 0,
+      item.net_salary,
       item.paye,
       item.napsa_employee,
       item.napsa_employer,
       item.nhima_employee,
       item.nhima_employer,
-      item.advances_deducted || 0,
-      item.total_deductions,
-      item.net_salary,
     ]);
 
     const csvContent = [
@@ -165,11 +163,7 @@ export default function PayrollDetail() {
             <TableRow>
               <TableHead>Employee</TableHead>
               <TableHead>Gross</TableHead>
-              <TableHead>PAYE</TableHead>
-              <TableHead>NAPSA</TableHead>
-              <TableHead>NHIMA</TableHead>
               <TableHead>Advances</TableHead>
-              <TableHead>Total Deductions</TableHead>
               <TableHead>Net Salary</TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
@@ -184,11 +178,7 @@ export default function PayrollDetail() {
                   </div>
                 </TableCell>
                 <TableCell>{formatZMW(Number(item.gross_salary))}</TableCell>
-                <TableCell>{formatZMW(Number(item.paye))}</TableCell>
-                <TableCell>{formatZMW(Number(item.napsa_employee))}</TableCell>
-                <TableCell>{formatZMW(Number(item.nhima_employee))}</TableCell>
                 <TableCell>{formatZMW(Number(item.advances_deducted || 0))}</TableCell>
-                <TableCell>{formatZMW(Number(item.total_deductions))}</TableCell>
                 <TableCell className="font-medium">{formatZMW(Number(item.net_salary))}</TableCell>
                 <TableCell className="text-right">
                   <Button
