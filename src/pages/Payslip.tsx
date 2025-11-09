@@ -142,21 +142,33 @@ export default function Payslip() {
         </div>
 
         {/* Deductions */}
-        {Number(payrollItem?.advances_deducted) > 0 && (
-          <div className="mb-6">
-            <h3 className="font-semibold mb-3 text-lg">Deductions</h3>
-            <div className="space-y-2">
+        <div className="mb-6">
+          <h3 className="font-semibold mb-3 text-lg">Deductions</h3>
+          <div className="space-y-2">
+            <div className="flex justify-between">
+              <span>NAPSA (5%)</span>
+              <span className="font-medium">{formatZMW(Number(payrollItem?.napsa_employee))}</span>
+            </div>
+            <div className="flex justify-between">
+              <span>NHIMA (1%)</span>
+              <span className="font-medium">{formatZMW(Number(payrollItem?.nhima_employee))}</span>
+            </div>
+            <div className="flex justify-between">
+              <span>PAYE</span>
+              <span className="font-medium">{formatZMW(Number(payrollItem?.paye))}</span>
+            </div>
+            {Number(payrollItem?.advances_deducted) > 0 && (
               <div className="flex justify-between">
                 <span>Advances Deducted</span>
                 <span className="font-medium">{formatZMW(Number(payrollItem?.advances_deducted))}</span>
               </div>
-              <div className="flex justify-between pt-2 border-t font-bold">
-                <span>Total Deductions</span>
-                <span>{formatZMW(Number(payrollItem?.total_deductions))}</span>
-              </div>
+            )}
+            <div className="flex justify-between pt-2 border-t font-bold">
+              <span>Total Deductions</span>
+              <span>{formatZMW(Number(payrollItem?.total_deductions))}</span>
             </div>
           </div>
-        )}
+        </div>
 
         {/* Net Salary */}
         <div className="border-t-2 pt-4">
@@ -166,29 +178,17 @@ export default function Payslip() {
           </div>
         </div>
 
-        {/* Employer Contributions */}
+        {/* Employer Contributions (For Record Only) */}
         <div className="mt-8 pt-4 border-t">
-          <h3 className="font-semibold mb-3">Employer Statutory Contributions</h3>
+          <h3 className="font-semibold mb-3 text-sm text-muted-foreground">Employer Contributions (For Record Only)</h3>
           <div className="space-y-2 text-sm">
             <div className="flex justify-between">
-              <span>PAYE (Reference)</span>
-              <span>{formatZMW(Number(payrollItem?.paye))}</span>
-            </div>
-            <div className="flex justify-between">
-              <span>NAPSA (Employer 5%)</span>
+              <span>NAPSA Employer (5%)</span>
               <span>{formatZMW(Number(payrollItem?.napsa_employer))}</span>
             </div>
             <div className="flex justify-between">
-              <span>NAPSA (Employee 5%)</span>
-              <span>{formatZMW(Number(payrollItem?.napsa_employee))}</span>
-            </div>
-            <div className="flex justify-between">
-              <span>NHIMA (Employer 1%)</span>
+              <span>NHIMA Employer (1%)</span>
               <span>{formatZMW(Number(payrollItem?.nhima_employer))}</span>
-            </div>
-            <div className="flex justify-between">
-              <span>NHIMA (Employee 1%)</span>
-              <span>{formatZMW(Number(payrollItem?.nhima_employee))}</span>
             </div>
           </div>
         </div>

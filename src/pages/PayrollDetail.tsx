@@ -163,7 +163,7 @@ export default function PayrollDetail() {
             <TableRow>
               <TableHead>Employee</TableHead>
               <TableHead>Gross</TableHead>
-              <TableHead>Advances</TableHead>
+              <TableHead>Deductions</TableHead>
               <TableHead>Net Salary</TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
@@ -178,7 +178,7 @@ export default function PayrollDetail() {
                   </div>
                 </TableCell>
                 <TableCell>{formatZMW(Number(item.gross_salary))}</TableCell>
-                <TableCell>{formatZMW(Number(item.advances_deducted || 0))}</TableCell>
+                <TableCell>{formatZMW(Number(item.total_deductions))}</TableCell>
                 <TableCell className="font-medium">{formatZMW(Number(item.net_salary))}</TableCell>
                 <TableCell className="text-right">
                   <Button

@@ -57,14 +57,14 @@ export function calculatePAYE(taxableIncome: number): number {
 
 /**
  * Calculate NAPSA contributions (employee and employer)
- * NAPSA Employee: 5% of basic salary
+ * NAPSA Employee: 5% of gross salary (deducted from employee)
  * NAPSA Employer: 5% of gross salary, capped at base of K26,840 (max K1,342)
  */
 export function calculateNAPSA(basicSalary: number, grossSalary: number): {
   employee: number;
   employer: number;
 } {
-  const employee = Math.round(basicSalary * NAPSA_EMPLOYEE_RATE * 100) / 100;
+  const employee = Math.round(grossSalary * NAPSA_EMPLOYEE_RATE * 100) / 100;
   const napsaBase = Math.min(grossSalary, NAPSA_BASE_CAP);
   const employerUncapped = Math.round(napsaBase * NAPSA_EMPLOYER_RATE * 100) / 100;
   const employer = Math.min(employerUncapped, NAPSA_EMPLOYER_CAP);
@@ -100,19 +100,19 @@ export function calculatePayroll(
   // Calculate gross salary
   const grossSalary = basicSalary + housingAllowance + transportAllowance + otherAllowances;
 
-  // Calculate NAPSA: Employee on basic, Employer on gross (capped)
+  // Calculate NAPSA: Employee 5% on gross, Employer 5% on gross (capped)
   const napsa = calculateNAPSA(basicSalary, grossSalary);
   
-  // Calculate NHIMA on basic salary
+  // Calculate NHIMA: 1% on basic salary
   const nhima = calculateNHIMA(basicSalary);
 
-  // Calculate PAYE on gross salary (for reference only, not deducted)
+  // Calculate PAYE on gross salary
   const paye = calculatePAYE(grossSalary);
 
-  // Total deductions: only advances and other deductions (no statutory deductions for employee)
-  const totalDeductions = advancesDeducted + otherDeductions;
+  // Total deductions: statutory deductions + advances + other deductions
+  const totalDeductions = napsa.employee + nhima.employee + paye + advancesDeducted + otherDeductions;
 
-  // Net salary: gross minus advances only (no PAYE, NAPSA, or NHIMA deducted from employee)
+  // Net salary: gross minus all deductions
   const netSalary = grossSalary - totalDeductions;
 
   return {
