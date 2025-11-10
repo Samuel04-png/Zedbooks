@@ -43,9 +43,14 @@ export default function PayrollDetail() {
           employees (
             full_name,
             employee_number,
+            email,
+            position,
+            department,
             tpin,
             napsa_number,
-            nhima_number
+            nhima_number,
+            bank_name,
+            bank_account_number
           )
         `)
         .eq("payroll_run_id", id);
@@ -110,6 +115,115 @@ export default function PayrollDetail() {
     navigate(`/payroll/${id}/payslip/${employeeId}`);
   };
 
+  const sendPayslipEmails = async () => {
+    if (!payrollItems || !payrollRun) return;
+    
+    const confirmSend = window.confirm(
+      `Send payslips to ${payrollItems.length} employees via email?\n\nEach employee will receive a password-protected payslip.`
+    );
+    
+    if (!confirmSend) return;
+
+    toast.promise(
+      async () => {
+        for (const item of payrollItems) {
+          const employee = item.employees;
+          if (!employee.email) continue;
+
+          // Generate password: first 4 letters of last name + last 4 of TPIN
+          const lastName = employee.full_name.split(' ').pop() || '';
+          const password = lastName.toLowerCase().substring(0, 4) + 
+                          (employee.tpin?.slice(-4) || '0000');
+
+          await supabase.functions.invoke('send-payslip-email', {
+            body: {
+              employeeName: employee.full_name,
+              employeeEmail: employee.email,
+              period: `${new Date(payrollRun.period_start).toLocaleDateString()} - ${new Date(payrollRun.period_end).toLocaleDateString()}`,
+              payslipData: {
+                basicSalary: item.basic_salary,
+                housingAllowance: item.housing_allowance,
+                transportAllowance: item.transport_allowance,
+                otherAllowances: item.other_allowances,
+                grossSalary: item.gross_salary,
+                napsa: item.napsa_employee,
+                nhima: item.nhima_employee,
+                paye: item.paye,
+                totalDeductions: item.total_deductions,
+                netSalary: item.net_salary,
+                employeeNo: employee.employee_number,
+                position: employee.position,
+                department: employee.department,
+                tpin: employee.tpin,
+                napsaNo: employee.napsa_number,
+                nhimaNo: employee.nhima_number,
+                bankName: employee.bank_name,
+                accountNumber: employee.bank_account_number,
+              },
+              password,
+            },
+          });
+        }
+      },
+      {
+        loading: 'Sending payslip emails...',
+        success: 'Payslip emails sent successfully!',
+        error: 'Failed to send some emails. Please check console for details.',
+      }
+    );
+  };
+
+  const downloadBatchPayslips = () => {
+    if (!payrollItems || !payrollRun) return;
+    
+    // Generate batch payslip content
+    let batchContent = `PAYSLIPS - ${new Date(payrollRun.period_start).toLocaleDateString()} to ${new Date(payrollRun.period_end).toLocaleDateString()}\n`;
+    batchContent += '='.repeat(100) + '\n\n';
+
+    payrollItems.forEach((item, index) => {
+      const employee = item.employees;
+      batchContent += `PAYSLIP ${index + 1}\n`;
+      batchContent += '-'.repeat(100) + '\n';
+      batchContent += `Employee: ${employee.full_name} (${employee.employee_number})\n`;
+      batchContent += `Position: ${employee.position || 'N/A'}\n`;
+      batchContent += `Department: ${employee.department || 'N/A'}\n`;
+      batchContent += `TPIN: ${employee.tpin || 'N/A'}\n`;
+      batchContent += `NAPSA: ${employee.napsa_number || 'N/A'}\n`;
+      batchContent += `NHIMA: ${employee.nhima_number || 'N/A'}\n\n`;
+      
+      batchContent += `EARNINGS:\n`;
+      batchContent += `  Basic Salary:        K${item.basic_salary.toFixed(2)}\n`;
+      batchContent += `  Housing Allowance:   K${item.housing_allowance.toFixed(2)}\n`;
+      batchContent += `  Transport Allowance: K${item.transport_allowance.toFixed(2)}\n`;
+      batchContent += `  Other Allowances:    K${item.other_allowances.toFixed(2)}\n`;
+      batchContent += `  Gross Salary:        K${item.gross_salary.toFixed(2)}\n\n`;
+      
+      batchContent += `DEDUCTIONS:\n`;
+      batchContent += `  NAPSA (5%):          K${item.napsa_employee.toFixed(2)}\n`;
+      batchContent += `  NHIMA (1%):          K${item.nhima_employee.toFixed(2)}\n`;
+      batchContent += `  PAYE:                K${item.paye.toFixed(2)}\n`;
+      batchContent += `  Total Deductions:    K${item.total_deductions.toFixed(2)}\n\n`;
+      
+      batchContent += `NET PAY:               K${item.net_salary.toFixed(2)}\n`;
+      batchContent += `\nBank: ${employee.bank_name || 'N/A'}\n`;
+      batchContent += `Account: ${employee.bank_account_number || 'N/A'}\n`;
+      batchContent += '\n' + '='.repeat(100) + '\n\n';
+    });
+
+    const blob = new Blob([batchContent], { type: 'text/plain' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const month = new Date(payrollRun.period_start).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' });
+    a.download = `Payslips_${month.replace(' ', '_')}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
+    
+    toast.success('Batch payslips downloaded successfully!');
+  };
+
   if (isLoading) {
     return <div>Loading...</div>;
   }
@@ -134,10 +248,18 @@ export default function PayrollDetail() {
             </p>
           </div>
         </div>
-        <Button onClick={exportToCSV}>
-          <Download className="mr-2 h-4 w-4" />
-          Export CSV
-        </Button>
+        <div className="flex gap-2">
+          <Button onClick={sendPayslipEmails} variant="outline">
+            Email Payslips
+          </Button>
+          <Button onClick={downloadBatchPayslips} variant="outline">
+            Download All
+          </Button>
+          <Button onClick={exportToCSV}>
+            <Download className="mr-2 h-4 w-4" />
+            Export CSV
+          </Button>
+        </div>
       </div>
 
       {/* Summary Cards */}

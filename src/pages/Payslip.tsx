@@ -65,16 +65,13 @@ export default function Payslip() {
   const employee = payrollItem?.employees as any;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 max-w-4xl mx-auto">
       <div className="flex items-center justify-between print:hidden">
         <div className="flex items-center gap-4">
           <Button variant="ghost" size="sm" onClick={() => navigate(`/payroll/${runId}`)}>
             <ArrowLeft className="h-4 w-4 mr-2" />
-            Back
+            Back to Payroll Run
           </Button>
-          <div>
-            <h1 className="text-3xl font-bold">Payslip</h1>
-          </div>
         </div>
         <Button onClick={printPayslip}>
           <Download className="mr-2 h-4 w-4" />
@@ -82,125 +79,147 @@ export default function Payslip() {
         </Button>
       </div>
 
-      {/* Payslip Content */}
-      <div className="border rounded-lg p-8 bg-white text-black print:border-0">
-        <div className="text-center mb-8">
-          <h2 className="text-2xl font-bold">PAYSLIP</h2>
-          <p className="text-muted-foreground">
+      <div id="payslip-content" className="border-2 rounded-lg p-8 bg-card shadow-lg print:border-0 print:shadow-none">
+        <div className="text-center mb-8 pb-4 border-b-2 border-primary/20">
+          <h2 className="text-3xl font-bold text-primary mb-2">PAYSLIP</h2>
+          <p className="text-base font-medium text-muted-foreground">
             Pay Period: {payrollRun && format(new Date(payrollRun.period_start), "dd MMM yyyy")} - {payrollRun && format(new Date(payrollRun.period_end), "dd MMM yyyy")}
+          </p>
+          <p className="text-sm text-muted-foreground mt-2">
+            Generated on {format(new Date(), "dd MMM yyyy 'at' HH:mm")}
           </p>
         </div>
 
-        {/* Employee Information */}
-        <div className="grid grid-cols-2 gap-4 mb-8 pb-4 border-b">
-          <div>
-            <h3 className="font-semibold mb-2">Employee Information</h3>
-            <p><span className="text-muted-foreground">Name:</span> {employee?.full_name}</p>
-            <p><span className="text-muted-foreground">Employee No:</span> {employee?.employee_number}</p>
-            <p><span className="text-muted-foreground">Position:</span> {employee?.position || "N/A"}</p>
-            <p><span className="text-muted-foreground">Department:</span> {employee?.department || "N/A"}</p>
-          </div>
-          <div>
-            <h3 className="font-semibold mb-2">Statutory Information</h3>
-            <p><span className="text-muted-foreground">TPIN:</span> {employee?.tpin || "N/A"}</p>
-            <p><span className="text-muted-foreground">NAPSA No:</span> {employee?.napsa_number || "N/A"}</p>
-            <p><span className="text-muted-foreground">NHIMA No:</span> {employee?.nhima_number || "N/A"}</p>
+        <div className="bg-muted/30 p-4 rounded-lg mb-6">
+          <h3 className="text-lg font-semibold mb-4 text-primary">Employee Information</h3>
+          <div className="grid grid-cols-2 gap-4 text-sm">
+            <div className="space-y-2">
+              <p className="text-muted-foreground font-medium">Name</p>
+              <p className="font-semibold text-base">{employee?.full_name}</p>
+            </div>
+            <div className="space-y-2">
+              <p className="text-muted-foreground font-medium">Employee No</p>
+              <p className="font-semibold text-base">{employee?.employee_number}</p>
+            </div>
+            <div className="space-y-2">
+              <p className="text-muted-foreground font-medium">Position</p>
+              <p className="font-semibold text-base">{employee?.position || "N/A"}</p>
+            </div>
+            <div className="space-y-2">
+              <p className="text-muted-foreground font-medium">Department</p>
+              <p className="font-semibold text-base">{employee?.department || "N/A"}</p>
+            </div>
+            <div className="space-y-2">
+              <p className="text-muted-foreground font-medium">TPIN</p>
+              <p className="font-semibold text-base">{employee?.tpin || "N/A"}</p>
+            </div>
+            <div className="space-y-2">
+              <p className="text-muted-foreground font-medium">NAPSA No</p>
+              <p className="font-semibold text-base">{employee?.napsa_number || "N/A"}</p>
+            </div>
+            <div className="space-y-2">
+              <p className="text-muted-foreground font-medium">NHIMA No</p>
+              <p className="font-semibold text-base">{employee?.nhima_number || "N/A"}</p>
+            </div>
           </div>
         </div>
 
-        {/* Earnings */}
         <div className="mb-6">
-          <h3 className="font-semibold mb-3 text-lg">Earnings</h3>
-          <div className="space-y-2">
-            <div className="flex justify-between">
-              <span>Basic Salary</span>
-              <span className="font-medium">{formatZMW(Number(payrollItem?.basic_salary))}</span>
+          <h3 className="text-lg font-semibold mb-4 text-primary">Earnings</h3>
+          <div className="space-y-3">
+            <div className="flex justify-between py-2 border-b border-border/50">
+              <span className="text-muted-foreground">Basic Salary</span>
+              <span className="font-semibold">{formatZMW(Number(payrollItem?.basic_salary))}</span>
             </div>
-            {Number(payrollItem?.housing_allowance) > 0 && (
-              <div className="flex justify-between">
-                <span>Housing Allowance</span>
-                <span className="font-medium">{formatZMW(Number(payrollItem?.housing_allowance))}</span>
-              </div>
-            )}
-            {Number(payrollItem?.transport_allowance) > 0 && (
-              <div className="flex justify-between">
-                <span>Transport Allowance</span>
-                <span className="font-medium">{formatZMW(Number(payrollItem?.transport_allowance))}</span>
-              </div>
-            )}
-            {Number(payrollItem?.other_allowances) > 0 && (
-              <div className="flex justify-between">
-                <span>Other Allowances</span>
-                <span className="font-medium">{formatZMW(Number(payrollItem?.other_allowances))}</span>
-              </div>
-            )}
-            <div className="flex justify-between pt-2 border-t font-bold">
+            <div className="flex justify-between py-2 border-b border-border/50">
+              <span className="text-muted-foreground">Housing Allowance</span>
+              <span className="font-semibold">{formatZMW(Number(payrollItem?.housing_allowance))}</span>
+            </div>
+            <div className="flex justify-between py-2 border-b border-border/50">
+              <span className="text-muted-foreground">Transport Allowance</span>
+              <span className="font-semibold">{formatZMW(Number(payrollItem?.transport_allowance))}</span>
+            </div>
+            <div className="flex justify-between py-2 border-b border-border/50">
+              <span className="text-muted-foreground">Other Allowances</span>
+              <span className="font-semibold">{formatZMW(Number(payrollItem?.other_allowances))}</span>
+            </div>
+            <div className="flex justify-between pt-3 font-bold text-lg bg-primary/5 p-3 rounded-md">
               <span>Gross Salary</span>
-              <span>{formatZMW(Number(payrollItem?.gross_salary))}</span>
+              <span className="text-primary">{formatZMW(Number(payrollItem?.gross_salary))}</span>
             </div>
           </div>
         </div>
 
-        {/* Deductions */}
         <div className="mb-6">
-          <h3 className="font-semibold mb-3 text-lg">Deductions</h3>
-          <div className="space-y-2">
-            <div className="flex justify-between">
-              <span>NAPSA (5%)</span>
-              <span className="font-medium">{formatZMW(Number(payrollItem?.napsa_employee))}</span>
+          <h3 className="text-lg font-semibold mb-4 text-primary">Deductions</h3>
+          <div className="space-y-3">
+            <div className="flex justify-between py-2 border-b border-border/50">
+              <span className="text-muted-foreground">NAPSA (5%)</span>
+              <span className="font-semibold">{formatZMW(Number(payrollItem?.napsa_employee))}</span>
             </div>
-            <div className="flex justify-between">
-              <span>NHIMA (1%)</span>
-              <span className="font-medium">{formatZMW(Number(payrollItem?.nhima_employee))}</span>
+            <div className="flex justify-between py-2 border-b border-border/50">
+              <span className="text-muted-foreground">NHIMA (1%)</span>
+              <span className="font-semibold">{formatZMW(Number(payrollItem?.nhima_employee))}</span>
             </div>
-            <div className="flex justify-between">
-              <span>PAYE</span>
-              <span className="font-medium">{formatZMW(Number(payrollItem?.paye))}</span>
+            <div className="flex justify-between py-2 border-b border-border/50">
+              <span className="text-muted-foreground">PAYE</span>
+              <span className="font-semibold">{formatZMW(Number(payrollItem?.paye))}</span>
             </div>
             {Number(payrollItem?.advances_deducted) > 0 && (
-              <div className="flex justify-between">
-                <span>Advances Deducted</span>
-                <span className="font-medium">{formatZMW(Number(payrollItem?.advances_deducted))}</span>
+              <div className="flex justify-between py-2 border-b border-border/50">
+                <span className="text-muted-foreground">Advances Deducted</span>
+                <span className="font-semibold">{formatZMW(Number(payrollItem?.advances_deducted))}</span>
               </div>
             )}
-            <div className="flex justify-between pt-2 border-t font-bold">
+            <div className="flex justify-between pt-3 font-bold text-lg bg-destructive/5 p-3 rounded-md">
               <span>Total Deductions</span>
-              <span>{formatZMW(Number(payrollItem?.total_deductions))}</span>
+              <span className="text-destructive">{formatZMW(Number(payrollItem?.total_deductions))}</span>
             </div>
           </div>
         </div>
 
-        {/* Net Salary */}
-        <div className="border-t-2 pt-4">
-          <div className="flex justify-between text-xl font-bold">
-            <span>Net Salary</span>
-            <span>{formatZMW(Number(payrollItem?.net_salary))}</span>
+        <div className="pt-4 border-t-2 border-primary/30 mb-6">
+          <div className="flex justify-between text-2xl font-bold bg-primary/10 p-4 rounded-lg">
+            <span>Net Pay</span>
+            <span className="text-primary">{formatZMW(Number(payrollItem?.net_salary))}</span>
           </div>
         </div>
 
-        {/* Employer Contributions (For Record Only) */}
-        <div className="mt-8 pt-4 border-t">
-          <h3 className="font-semibold mb-3 text-sm text-muted-foreground">Employer Contributions (For Record Only)</h3>
-          <div className="space-y-2 text-sm">
-            <div className="flex justify-between">
-              <span>NAPSA Employer (5%)</span>
-              <span>{formatZMW(Number(payrollItem?.napsa_employer))}</span>
-            </div>
-            <div className="flex justify-between">
-              <span>NHIMA Employer (1%)</span>
-              <span>{formatZMW(Number(payrollItem?.nhima_employer))}</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Bank Information */}
         {employee?.bank_name && (
-          <div className="mt-8 pt-4 border-t">
-            <h3 className="font-semibold mb-2">Payment Details</h3>
-            <p className="text-sm"><span className="text-muted-foreground">Bank:</span> {employee.bank_name}</p>
-            <p className="text-sm"><span className="text-muted-foreground">Account:</span> {employee.bank_account_number}</p>
+          <div className="bg-muted/30 p-4 rounded-lg mb-6">
+            <h3 className="text-lg font-semibold mb-4 text-primary">Payment Details</h3>
+            <div className="space-y-3">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground font-medium">Bank</span>
+                <span className="font-semibold">{employee.bank_name}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground font-medium">Account Number</span>
+                <span className="font-semibold">{employee.bank_account_number}</span>
+              </div>
+            </div>
           </div>
         )}
+
+        <div className="bg-muted/20 p-4 rounded-lg border border-border/50 mb-6">
+          <h3 className="text-lg font-semibold mb-4 text-primary">Employer Contributions</h3>
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground mb-3 italic">For reference only - not deducted from employee salary</p>
+            <div className="flex justify-between py-2">
+              <span className="text-muted-foreground">NAPSA (Employer 5%)</span>
+              <span className="font-semibold">{formatZMW(Number(payrollItem?.napsa_employer))}</span>
+            </div>
+            <div className="flex justify-between py-2">
+              <span className="text-muted-foreground">NHIMA (Employer 1%)</span>
+              <span className="font-semibold">{formatZMW(Number(payrollItem?.nhima_employer))}</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="text-center text-xs text-muted-foreground pt-4 border-t">
+          <p className="font-semibold">This document is confidential. Please keep it secure.</p>
+          <p className="mt-1">Generated on {format(new Date(), "dd MMM yyyy 'at' HH:mm")}</p>
+        </div>
       </div>
     </div>
   );

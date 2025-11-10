@@ -105,11 +105,8 @@ export function calculatePayroll(
   // Calculate NHIMA: 1% on basic salary
   const nhima = calculateNHIMA(basicSalary);
 
-  // Calculate taxable income: gross - NAPSA (as per ZRA standards)
-  const taxableIncome = grossSalary - napsa.employee;
-
-  // Calculate PAYE on taxable income
-  const paye = calculatePAYE(taxableIncome);
+  // Calculate PAYE on gross salary (as per ZRA standards)
+  const paye = calculatePAYE(grossSalary);
 
   // Total deductions: statutory deductions + advances + other deductions
   const totalDeductions = napsa.employee + nhima.employee + paye + advancesDeducted + otherDeductions;
