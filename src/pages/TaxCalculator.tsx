@@ -31,8 +31,8 @@ export default function TaxCalculator() {
     }
 
     const paye = calculatePAYE(gross);
-    const napsa = calculateNAPSA(basic, gross);
-    const nhima = calculateNHIMA(basic);
+    const napsa = calculateNAPSA(gross);
+    const nhima = calculateNHIMA(gross);
 
     const totalDeductions = paye + napsa.employee + nhima.employee;
     const netSalary = gross - totalDeductions;
@@ -218,8 +218,8 @@ export default function TaxCalculator() {
             </div>
 
             <div className="mt-4 p-3 bg-muted rounded-lg text-xs space-y-1">
-              <p><strong>NAPSA:</strong> Employee 5% of basic, Employer 5% of gross (max K1,221.80)</p>
-              <p><strong>NHIMA:</strong> 1% of basic salary each (employee & employer)</p>
+              <p><strong>NAPSA:</strong> 5% of gross salary, capped at K1,342.00 (employee & employer)</p>
+              <p><strong>NHIMA:</strong> 1% of gross salary, capped at K250.00 (employee & employer)</p>
               <p><strong>PAYE:</strong> Progressive tax on gross salary</p>
             </div>
           </CardContent>
