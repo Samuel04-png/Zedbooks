@@ -228,6 +228,8 @@ export type Database = {
       }
       payroll_runs: {
         Row: {
+          approved_at: string | null
+          approved_by: string | null
           created_at: string
           id: string
           notes: string | null
@@ -242,6 +244,8 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          approved_at?: string | null
+          approved_by?: string | null
           created_at?: string
           id?: string
           notes?: string | null
@@ -256,6 +260,8 @@ export type Database = {
           user_id: string
         }
         Update: {
+          approved_at?: string | null
+          approved_by?: string | null
           created_at?: string
           id?: string
           notes?: string | null
