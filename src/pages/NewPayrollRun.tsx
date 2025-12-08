@@ -65,7 +65,7 @@ export default function NewPayrollRun() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Not authenticated");
 
-      // Create payroll run
+      // Create payroll run with pending_approval status
       const { data: payrollRun, error: runError } = await supabase
         .from("payroll_runs")
         .insert([{
@@ -74,7 +74,7 @@ export default function NewPayrollRun() {
           run_date: data.run_date,
           notes: data.notes || null,
           user_id: user.id,
-          status: "draft",
+          status: "pending_approval",
         }])
         .select()
         .single();
@@ -157,8 +157,8 @@ export default function NewPayrollRun() {
 
       if (updateError) throw updateError;
 
-      toast.success("Payroll run created successfully");
-      navigate(`/payroll/${payrollRun.id}`);
+      toast.success("Payroll run created and submitted for approval");
+      navigate(`/payroll/${payrollRun.id}/approve`);
     } catch (error) {
       console.error(error);
       toast.error("Failed to create payroll run");

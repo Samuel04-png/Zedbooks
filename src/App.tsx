@@ -16,6 +16,7 @@ import Payroll from "./pages/Payroll";
 import NewPayrollRun from "./pages/NewPayrollRun";
 import PayrollDetail from "./pages/PayrollDetail";
 import Payslip from "./pages/Payslip";
+import PayrollApproval from "./pages/PayrollApproval";
 import Advances from "./pages/Advances";
 import PayrollReports from "./pages/PayrollReports";
 import ZRACompliance from "./pages/ZRACompliance";
@@ -57,6 +58,7 @@ const App = () => (
           <Route path="/payroll" element={<AppLayout><Payroll /></AppLayout>} />
           <Route path="/payroll/new" element={<AppLayout><NewPayrollRun /></AppLayout>} />
           <Route path="/payroll/:id" element={<AppLayout><PayrollDetail /></AppLayout>} />
+          <Route path="/payroll/:id/approve" element={<AppLayout><PayrollApproval /></AppLayout>} />
           <Route path="/payroll/:runId/payslip/:employeeId" element={<AppLayout><Payslip /></AppLayout>} />
           <Route path="/advances" element={<AppLayout><Advances /></AppLayout>} />
           <Route path="/time-tracking" element={<AppLayout><ComingSoon title="Time & Contractors" /></AppLayout>} />
