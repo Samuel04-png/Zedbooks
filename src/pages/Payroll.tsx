@@ -74,21 +74,33 @@ export default function Payroll() {
                   <TableCell>{formatZMW(Number(run.total_net))}</TableCell>
                   <TableCell>
                     <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
-                      run.status === 'completed' 
+                      run.status === 'completed' || run.status === 'approved'
                         ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' 
+                        : run.status === 'pending_approval'
+                        ? 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200'
                         : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200'
                     }`}>
-                      {run.status}
+                      {run.status === 'pending_approval' ? 'Pending Approval' : run.status}
                     </span>
                   </TableCell>
                   <TableCell className="text-right">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => navigate(`/payroll/${run.id}`)}
-                    >
-                      View
-                    </Button>
+                    {run.status === 'pending_approval' ? (
+                      <Button
+                        variant="default"
+                        size="sm"
+                        onClick={() => navigate(`/payroll/${run.id}/approve`)}
+                      >
+                        Review & Approve
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => navigate(`/payroll/${run.id}`)}
+                      >
+                        View
+                      </Button>
+                    )}
                   </TableCell>
                 </TableRow>
               ))}
