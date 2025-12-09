@@ -72,13 +72,13 @@ export function calculateNAPSA(grossSalary: number): {
 
 /**
  * Calculate NHIMA contributions (employee and employer)
- * NHIMA: 1% of gross salary, capped at K250.00
+ * NHIMA: 1% of basic salary, capped at K250.00
  */
-export function calculateNHIMA(grossSalary: number): {
+export function calculateNHIMA(basicSalary: number): {
   employee: number;
   employer: number;
 } {
-  const uncappedNHIMA = Math.round(grossSalary * NHIMA_EMPLOYEE_RATE * 100) / 100;
+  const uncappedNHIMA = Math.round(basicSalary * NHIMA_EMPLOYEE_RATE * 100) / 100;
   const employee = Math.min(uncappedNHIMA, NHIMA_EMPLOYEE_CAP);
   const employer = employee; // Same as employee contribution
   
@@ -103,8 +103,8 @@ export function calculatePayroll(
   // Calculate NAPSA: 5% of gross, capped at K1,342
   const napsa = calculateNAPSA(grossSalary);
   
-  // Calculate NHIMA: 1% of gross, capped at K250
-  const nhima = calculateNHIMA(grossSalary);
+  // Calculate NHIMA: 1% of basic salary, capped at K250
+  const nhima = calculateNHIMA(basicSalary);
 
   // Calculate PAYE on gross salary (as per ZRA standards)
   const paye = calculatePAYE(grossSalary);
