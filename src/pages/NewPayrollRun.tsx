@@ -19,6 +19,8 @@ import { toast } from "sonner";
 import { ArrowLeft } from "lucide-react";
 import { calculatePayroll } from "@/utils/zambianTaxCalculations";
 import { useQuery } from "@tanstack/react-query";
+import { PayrollAdditionsDialog } from "@/components/payroll/PayrollAdditionsDialog";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 const payrollSchema = z.object({
   period_start: z.string().min(1, "Start date is required"),
@@ -29,10 +31,29 @@ const payrollSchema = z.object({
 
 type PayrollFormData = z.infer<typeof payrollSchema>;
 
+interface PayrollAddition {
+  id: string;
+  employee_id: string;
+  type: "earning" | "bonus" | "overtime" | "advance";
+  name: string;
+  amount: number;
+  total_amount?: number;
+  months_to_pay?: number;
+  monthly_deduction?: number;
+}
+
 export default function NewPayrollRun() {
   const navigate = useNavigate();
   const [isProcessing, setIsProcessing] = useState(false);
+  const [additions, setAdditions] = useState<PayrollAddition[]>([]);
 
+  const handleAddition = (addition: Omit<PayrollAddition, "id">) => {
+    setAdditions([...additions, { ...addition, id: crypto.randomUUID() }]);
+  };
+
+  const handleRemoveAddition = (id: string) => {
+    setAdditions(additions.filter((a) => a.id !== id));
+  };
   const form = useForm<PayrollFormData>({
     resolver: zodResolver(payrollSchema),
     defaultValues: {
@@ -136,6 +157,22 @@ export default function NewPayrollRun() {
 
       if (itemsError) throw itemsError;
 
+      // Save payroll additions
+      if (additions.length > 0) {
+        const additionsData = additions.map((a) => ({
+          payroll_run_id: payrollRun.id,
+          employee_id: a.employee_id,
+          type: a.type,
+          name: a.name,
+          amount: a.amount,
+          total_amount: a.total_amount,
+          months_to_pay: a.months_to_pay,
+          monthly_deduction: a.monthly_deduction,
+        }));
+
+        await supabase.from("payroll_additions").insert(additionsData);
+      }
+
       // Mark advances as deducted
       if (advances && advances.length > 0) {
         await supabase
@@ -143,7 +180,6 @@ export default function NewPayrollRun() {
           .update({ status: "deducted" })
           .in("id", advances.map(a => a.id));
       }
-
 
       // Update payroll run totals
       const { error: updateError } = await supabase
@@ -225,8 +261,24 @@ export default function NewPayrollRun() {
                     <FormMessage />
                   </FormItem>
                 )}
+            />
+          </div>
+
+          {/* Payroll Additions */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Payroll Additions</CardTitle>
+              <CardDescription>Add earnings, bonuses, overtime, or advances for this payroll run</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <PayrollAdditionsDialog
+                employees={employees?.map(e => ({ id: e.id, full_name: e.full_name, employee_number: e.employee_number })) || []}
+                additions={additions}
+                onAddition={handleAddition}
+                onRemove={handleRemoveAddition}
               />
-            </div>
+            </CardContent>
+          </Card>
             <FormField
               control={form.control}
               name="notes"

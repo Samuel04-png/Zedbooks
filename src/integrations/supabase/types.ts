@@ -58,6 +58,33 @@ export type Database = {
           },
         ]
       }
+      company_settings: {
+        Row: {
+          company_name: string
+          created_at: string
+          id: string
+          logo_url: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          company_name?: string
+          created_at?: string
+          id?: string
+          logo_url?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          company_name?: string
+          created_at?: string
+          id?: string
+          logo_url?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       employees: {
         Row: {
           bank_account_number: string | null
@@ -147,6 +174,63 @@ export type Database = {
           user_id?: string
         }
         Relationships: []
+      }
+      payroll_additions: {
+        Row: {
+          amount: number
+          created_at: string
+          employee_id: string
+          id: string
+          monthly_deduction: number | null
+          months_to_pay: number | null
+          name: string
+          payroll_run_id: string
+          remaining_balance: number | null
+          total_amount: number | null
+          type: string
+        }
+        Insert: {
+          amount: number
+          created_at?: string
+          employee_id: string
+          id?: string
+          monthly_deduction?: number | null
+          months_to_pay?: number | null
+          name: string
+          payroll_run_id: string
+          remaining_balance?: number | null
+          total_amount?: number | null
+          type: string
+        }
+        Update: {
+          amount?: number
+          created_at?: string
+          employee_id?: string
+          id?: string
+          monthly_deduction?: number | null
+          months_to_pay?: number | null
+          name?: string
+          payroll_run_id?: string
+          remaining_balance?: number | null
+          total_amount?: number | null
+          type?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "payroll_additions_employee_id_fkey"
+            columns: ["employee_id"]
+            isOneToOne: false
+            referencedRelation: "employees"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "payroll_additions_payroll_run_id_fkey"
+            columns: ["payroll_run_id"]
+            isOneToOne: false
+            referencedRelation: "payroll_runs"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       payroll_items: {
         Row: {

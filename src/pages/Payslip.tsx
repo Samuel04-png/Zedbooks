@@ -1,15 +1,30 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Download, Building2 } from "lucide-react";
+import { ArrowLeft, Download, Building2, Mail, Loader2, Settings } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { formatZMW } from "@/utils/zambianTaxCalculations";
 import { format } from "date-fns";
 import { toast } from "sonner";
+import { useCompanySettings } from "@/hooks/useCompanySettings";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { CompanyLogoUpload } from "@/components/payroll/CompanyLogoUpload";
 
 export default function Payslip() {
   const navigate = useNavigate();
   const { runId, employeeId } = useParams();
+  const [isSending, setIsSending] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  const { data: companySettings } = useCompanySettings();
 
   const { data: payrollRun } = useQuery({
     queryKey: ["payrollRun", runId],
@@ -41,7 +56,8 @@ export default function Payslip() {
             napsa_number,
             nhima_number,
             bank_name,
-            bank_account_number
+            bank_account_number,
+            email
           )
         `)
         .eq("payroll_run_id", runId)
@@ -53,9 +69,90 @@ export default function Payslip() {
     },
   });
 
+  const { data: additions } = useQuery({
+    queryKey: ["payroll-additions", runId, employeeId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("payroll_additions")
+        .select("*")
+        .eq("payroll_run_id", runId)
+        .eq("employee_id", employeeId);
+
+      if (error) throw error;
+      return data;
+    },
+  });
+
   const printPayslip = () => {
     window.print();
     toast.success("Print dialog opened");
+  };
+
+  const generatePassword = () => {
+    const accountNumber = employee?.bank_account_number || "";
+    const last4 = accountNumber.slice(-4).padStart(4, "0");
+    return last4;
+  };
+
+  const sendPayslipEmail = async () => {
+    if (!employee?.email) {
+      toast.error("Employee email not found");
+      return;
+    }
+
+    setIsSending(true);
+
+    try {
+      const period = payrollRun ? format(new Date(payrollRun.period_start), "MMMM yyyy") : "";
+      const password = generatePassword();
+
+      const additionalEarnings = additions?.filter(a => a.type !== "advance").reduce((sum, a) => sum + Number(a.amount), 0) || 0;
+      const advanceDeductions = additions?.filter(a => a.type === "advance").reduce((sum, a) => sum + Number(a.amount), 0) || 0;
+
+      const { error } = await supabase.functions.invoke("send-payslip-email", {
+        body: {
+          employeeName: employee.full_name,
+          employeeEmail: employee.email,
+          period,
+          companyName: companySettings?.company_name || "ZedBooks NGO",
+          companyLogoUrl: companySettings?.logo_url,
+          payslipData: {
+            basicSalary: Number(payrollItem?.basic_salary),
+            housingAllowance: Number(payrollItem?.housing_allowance),
+            transportAllowance: Number(payrollItem?.transport_allowance),
+            otherAllowances: Number(payrollItem?.other_allowances),
+            additionalEarnings,
+            grossSalary: Number(payrollItem?.gross_salary) + additionalEarnings,
+            napsa: Number(payrollItem?.napsa_employee),
+            nhima: Number(payrollItem?.nhima_employee),
+            paye: Number(payrollItem?.paye),
+            advancesDeducted: Number(payrollItem?.advances_deducted) + advanceDeductions,
+            totalDeductions: Number(payrollItem?.total_deductions) + advanceDeductions,
+            netSalary: Number(payrollItem?.net_salary) - advanceDeductions,
+            employeeNo: employee.employee_number,
+            position: employee.position || "",
+            department: employee.department || "",
+            tpin: employee.tpin || "",
+            napsaNo: employee.napsa_number || "",
+            nhimaNo: employee.nhima_number || "",
+            bankName: employee.bank_name || "",
+            accountNumber: employee.bank_account_number || "",
+          },
+          password,
+        },
+      });
+
+      if (error) throw error;
+
+      toast.success(`Payslip sent to ${employee.email}`, {
+        description: `Password: ${password}`,
+      });
+    } catch (error) {
+      console.error(error);
+      toast.error("Failed to send payslip email");
+    } finally {
+      setIsSending(false);
+    }
   };
 
   if (isLoading) {
@@ -67,6 +164,13 @@ export default function Payslip() {
   }
 
   const employee = payrollItem?.employees as any;
+  const earningsAdditions = additions?.filter(a => a.type !== "advance") || [];
+  const advanceAdditions = additions?.filter(a => a.type === "advance") || [];
+  const additionalEarningsTotal = earningsAdditions.reduce((sum, a) => sum + Number(a.amount), 0);
+  const advanceDeductionsTotal = advanceAdditions.reduce((sum, a) => sum + Number(a.amount), 0);
+  const adjustedGross = Number(payrollItem?.gross_salary) + additionalEarningsTotal;
+  const adjustedTotalDeductions = Number(payrollItem?.total_deductions) + advanceDeductionsTotal;
+  const adjustedNetPay = Number(payrollItem?.net_salary) - advanceDeductionsTotal;
 
   return (
     <div className="space-y-6 max-w-3xl mx-auto">
@@ -76,10 +180,42 @@ export default function Payslip() {
           <ArrowLeft className="h-4 w-4 mr-2" />
           Back to Payroll Run
         </Button>
-        <Button onClick={printPayslip}>
-          <Download className="mr-2 h-4 w-4" />
-          Print / Download
-        </Button>
+        <div className="flex gap-2">
+          <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+            <DialogTrigger asChild>
+              <Button variant="outline" size="sm">
+                <Settings className="h-4 w-4 mr-2" />
+                Company Settings
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Company Settings</DialogTitle>
+                <DialogDescription>
+                  Upload your company logo and set your company name
+                </DialogDescription>
+              </DialogHeader>
+              <CompanyLogoUpload />
+            </DialogContent>
+          </Dialog>
+          <Button variant="outline" onClick={sendPayslipEmail} disabled={isSending || !employee?.email}>
+            {isSending ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Sending...
+              </>
+            ) : (
+              <>
+                <Mail className="mr-2 h-4 w-4" />
+                Email Payslip
+              </>
+            )}
+          </Button>
+          <Button onClick={printPayslip}>
+            <Download className="mr-2 h-4 w-4" />
+            Print / Download
+          </Button>
+        </div>
       </div>
 
       {/* Payslip Document */}
@@ -89,11 +225,15 @@ export default function Payslip() {
         <div className="bg-primary text-primary-foreground p-6 rounded-t-lg print:rounded-none">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
-              <div className="bg-primary-foreground/20 p-3 rounded-lg">
-                <Building2 className="h-10 w-10" />
+              <div className="bg-primary-foreground/20 p-3 rounded-lg h-16 w-16 flex items-center justify-center overflow-hidden">
+                {companySettings?.logo_url ? (
+                  <img src={companySettings.logo_url} alt="Company Logo" className="h-full w-full object-contain" />
+                ) : (
+                  <Building2 className="h-10 w-10" />
+                )}
               </div>
               <div>
-                <h1 className="text-2xl font-bold">ZedBooks NGO</h1>
+                <h1 className="text-2xl font-bold">{companySettings?.company_name || "ZedBooks NGO"}</h1>
                 <p className="text-primary-foreground/80 text-sm">Accounting Suite</p>
               </div>
             </div>
@@ -174,9 +314,15 @@ export default function Payslip() {
                       <td className="px-4 py-2.5 text-muted-foreground">Other Allowances</td>
                       <td className="px-4 py-2.5 text-right font-medium">{formatZMW(Number(payrollItem?.other_allowances))}</td>
                     </tr>
+                    {earningsAdditions.map((addition: any) => (
+                      <tr key={addition.id} className="border-b">
+                        <td className="px-4 py-2.5 text-muted-foreground">{addition.name}</td>
+                        <td className="px-4 py-2.5 text-right font-medium">{formatZMW(Number(addition.amount))}</td>
+                      </tr>
+                    ))}
                     <tr className="bg-primary/5">
                       <td className="px-4 py-3 font-semibold">Gross Pay</td>
-                      <td className="px-4 py-3 text-right font-bold text-primary">{formatZMW(Number(payrollItem?.gross_salary))}</td>
+                      <td className="px-4 py-3 text-right font-bold text-primary">{formatZMW(adjustedGross)}</td>
                     </tr>
                   </tbody>
                 </table>
@@ -203,13 +349,19 @@ export default function Payslip() {
                     </tr>
                     {Number(payrollItem?.advances_deducted) > 0 && (
                       <tr className="border-b">
-                        <td className="px-4 py-2.5 text-muted-foreground">Advances Deducted</td>
+                        <td className="px-4 py-2.5 text-muted-foreground">Advances (Previous)</td>
                         <td className="px-4 py-2.5 text-right font-medium">{formatZMW(Number(payrollItem?.advances_deducted))}</td>
                       </tr>
                     )}
+                    {advanceAdditions.map((addition: any) => (
+                      <tr key={addition.id} className="border-b">
+                        <td className="px-4 py-2.5 text-muted-foreground">{addition.name}</td>
+                        <td className="px-4 py-2.5 text-right font-medium">{formatZMW(Number(addition.amount))}</td>
+                      </tr>
+                    ))}
                     <tr className="bg-destructive/5">
                       <td className="px-4 py-3 font-semibold">Total Deductions</td>
-                      <td className="px-4 py-3 text-right font-bold text-destructive">{formatZMW(Number(payrollItem?.total_deductions))}</td>
+                      <td className="px-4 py-3 text-right font-bold text-destructive">{formatZMW(adjustedTotalDeductions)}</td>
                     </tr>
                   </tbody>
                 </table>
@@ -224,7 +376,7 @@ export default function Payslip() {
                 <p className="text-primary-foreground/80 text-sm">Net Pay</p>
                 <p className="text-xs text-primary-foreground/60">Amount payable to employee</p>
               </div>
-              <p className="text-3xl font-bold">{formatZMW(Number(payrollItem?.net_salary))}</p>
+              <p className="text-3xl font-bold">{formatZMW(adjustedNetPay)}</p>
             </div>
           </div>
 
