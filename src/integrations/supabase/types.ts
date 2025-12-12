@@ -22,7 +22,11 @@ export type Database = {
           date_to_deduct: string | null
           employee_id: string
           id: string
+          monthly_deduction: number | null
+          months_deducted: number | null
+          months_to_repay: number | null
           reason: string | null
+          remaining_balance: number | null
           status: string | null
           updated_at: string
         }
@@ -33,7 +37,11 @@ export type Database = {
           date_to_deduct?: string | null
           employee_id: string
           id?: string
+          monthly_deduction?: number | null
+          months_deducted?: number | null
+          months_to_repay?: number | null
           reason?: string | null
+          remaining_balance?: number | null
           status?: string | null
           updated_at?: string
         }
@@ -44,7 +52,11 @@ export type Database = {
           date_to_deduct?: string | null
           employee_id?: string
           id?: string
+          monthly_deduction?: number | null
+          months_deducted?: number | null
+          months_to_repay?: number | null
           reason?: string | null
+          remaining_balance?: number | null
           status?: string | null
           updated_at?: string
         }
