@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -12,8 +14,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Plus, Trash2, Save, Send } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
+import { useCompanySettings } from "@/hooks/useCompanySettings";
 
 interface InvoiceLine {
   id: string;
@@ -25,9 +28,43 @@ interface InvoiceLine {
 
 export default function NewInvoice() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const customerId = searchParams.get("customer");
+  const { data: settings } = useCompanySettings();
+  
+  const [selectedCustomer, setSelectedCustomer] = useState(customerId || "");
+  const [invoiceNumber, setInvoiceNumber] = useState(`INV-${Date.now()}`);
+  const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().split("T")[0]);
+  const [dueDate, setDueDate] = useState("");
+  const [notes, setNotes] = useState("");
+  const [terms, setTerms] = useState("");
+  
   const [lines, setLines] = useState<InvoiceLine[]>([
     { id: "1", description: "", quantity: 1, rate: 0, amount: 0 },
   ]);
+
+  const { data: customers } = useQuery({
+    queryKey: ["customers"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("customers")
+        .select("id, name")
+        .order("name");
+      if (error) throw error;
+      return data;
+    },
+  });
+
+  const { data: user } = useQuery({
+    queryKey: ["current-user"],
+    queryFn: async () => {
+      const { data } = await supabase.auth.getUser();
+      return data.user;
+    },
+  });
+
+  const isVatRegistered = settings?.is_vat_registered || false;
+  const vatRate = settings?.vat_rate || 16;
 
   const addLine = () => {
     setLines([
@@ -58,12 +95,61 @@ export default function NewInvoice() {
   };
 
   const subtotal = lines.reduce((sum, line) => sum + line.amount, 0);
-  const vat = subtotal * 0.16; // 16% VAT
-  const total = subtotal + vat;
+  const vatAmount = isVatRegistered ? subtotal * (vatRate / 100) : 0;
+  const total = subtotal + vatAmount;
+
+  const saveMutation = useMutation({
+    mutationFn: async (status: string) => {
+      const { data: invoice, error: invoiceError } = await supabase
+        .from("invoices")
+        .insert({
+          user_id: user?.id,
+          customer_id: selectedCustomer || null,
+          invoice_number: invoiceNumber,
+          invoice_date: invoiceDate,
+          due_date: dueDate || null,
+          subtotal,
+          vat_amount: vatAmount,
+          total,
+          status,
+          notes,
+          terms,
+        })
+        .select()
+        .single();
+
+      if (invoiceError) throw invoiceError;
+
+      const invoiceItems = lines
+        .filter((line) => line.description)
+        .map((line) => ({
+          invoice_id: invoice.id,
+          description: line.description,
+          quantity: line.quantity,
+          unit_price: line.rate,
+          amount: line.amount,
+        }));
+
+      if (invoiceItems.length > 0) {
+        const { error: itemsError } = await supabase
+          .from("invoice_items")
+          .insert(invoiceItems);
+        if (itemsError) throw itemsError;
+      }
+
+      return invoice;
+    },
+    onSuccess: (_, status) => {
+      toast.success(status === "sent" ? "Invoice sent successfully" : "Invoice saved as draft");
+      navigate("/invoices");
+    },
+    onError: (error) => {
+      toast.error("Failed to save invoice: " + error.message);
+    },
+  });
 
   const handleSave = (send: boolean = false) => {
-    toast.success(send ? "Invoice sent successfully" : "Invoice saved as draft");
-    navigate("/invoices");
+    saveMutation.mutate(send ? "sent" : "draft");
   };
 
   return (
@@ -71,17 +157,24 @@ export default function NewInvoice() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight text-foreground">New Invoice</h1>
-          <p className="text-muted-foreground">Create a new invoice for a customer</p>
+          <p className="text-muted-foreground">
+            Create a new invoice for a customer
+            {isVatRegistered && (
+              <span className="ml-2 text-xs bg-primary/10 text-primary px-2 py-0.5 rounded">
+                VAT {vatRate}%
+              </span>
+            )}
+          </p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={() => navigate("/invoices")}>
             Cancel
           </Button>
-          <Button variant="outline" className="gap-2" onClick={() => handleSave(false)}>
+          <Button variant="outline" className="gap-2" onClick={() => handleSave(false)} disabled={saveMutation.isPending}>
             <Save className="h-4 w-4" />
             Save Draft
           </Button>
-          <Button className="gap-2" onClick={() => handleSave(true)}>
+          <Button className="gap-2" onClick={() => handleSave(true)} disabled={saveMutation.isPending}>
             <Send className="h-4 w-4" />
             Save & Send
           </Button>
@@ -98,61 +191,47 @@ export default function NewInvoice() {
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
                   <Label htmlFor="customer">Customer *</Label>
-                  <Select>
+                  <Select value={selectedCustomer} onValueChange={setSelectedCustomer}>
                     <SelectTrigger id="customer">
                       <SelectValue placeholder="Select customer" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="worldvision">World Vision Zambia</SelectItem>
-                      <SelectItem value="unicef">UNICEF</SelectItem>
-                      <SelectItem value="redcross">Red Cross</SelectItem>
-                      <SelectItem value="plan">Plan International</SelectItem>
+                      {customers?.map((customer) => (
+                        <SelectItem key={customer.id} value={customer.id}>
+                          {customer.name}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>
 
                 <div className="space-y-2">
                   <Label htmlFor="invoiceNumber">Invoice Number *</Label>
-                  <Input id="invoiceNumber" placeholder="INV-009" />
+                  <Input
+                    id="invoiceNumber"
+                    value={invoiceNumber}
+                    onChange={(e) => setInvoiceNumber(e.target.value)}
+                  />
                 </div>
 
                 <div className="space-y-2">
                   <Label htmlFor="invoiceDate">Invoice Date *</Label>
-                  <Input id="invoiceDate" type="date" defaultValue="2025-10-30" />
+                  <Input
+                    id="invoiceDate"
+                    type="date"
+                    value={invoiceDate}
+                    onChange={(e) => setInvoiceDate(e.target.value)}
+                  />
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="dueDate">Due Date *</Label>
-                  <Input id="dueDate" type="date" />
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="project">Project/Grant</Label>
-                  <Select>
-                    <SelectTrigger id="project">
-                      <SelectValue placeholder="Select project" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="proj1">Education Program 2025</SelectItem>
-                      <SelectItem value="proj2">Health Initiative</SelectItem>
-                      <SelectItem value="proj3">Water & Sanitation</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="paymentTerms">Payment Terms</Label>
-                  <Select defaultValue="net30">
-                    <SelectTrigger id="paymentTerms">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="due-on-receipt">Due on receipt</SelectItem>
-                      <SelectItem value="net15">Net 15</SelectItem>
-                      <SelectItem value="net30">Net 30</SelectItem>
-                      <SelectItem value="net60">Net 60</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <Label htmlFor="dueDate">Due Date</Label>
+                  <Input
+                    id="dueDate"
+                    type="date"
+                    value={dueDate}
+                    onChange={(e) => setDueDate(e.target.value)}
+                  />
                 </div>
               </div>
             </CardContent>
@@ -164,14 +243,17 @@ export default function NewInvoice() {
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
-                {lines.map((line, index) => (
+                <div className="grid gap-4 md:grid-cols-12 text-sm font-medium text-muted-foreground">
+                  <div className="md:col-span-5">Description</div>
+                  <div className="md:col-span-2">Qty</div>
+                  <div className="md:col-span-2">Rate (ZMW)</div>
+                  <div className="md:col-span-2">Amount</div>
+                  <div className="md:col-span-1"></div>
+                </div>
+                {lines.map((line) => (
                   <div key={line.id} className="grid gap-4 md:grid-cols-12 items-start">
                     <div className="md:col-span-5">
-                      <Label htmlFor={`desc-${line.id}`} className="sr-only">
-                        Description
-                      </Label>
                       <Textarea
-                        id={`desc-${line.id}`}
                         placeholder="Description"
                         value={line.description}
                         onChange={(e) => updateLine(line.id, "description", e.target.value)}
@@ -179,11 +261,7 @@ export default function NewInvoice() {
                       />
                     </div>
                     <div className="md:col-span-2">
-                      <Label htmlFor={`qty-${line.id}`} className="sr-only">
-                        Quantity
-                      </Label>
                       <Input
-                        id={`qty-${line.id}`}
                         type="number"
                         placeholder="Qty"
                         value={line.quantity}
@@ -193,11 +271,7 @@ export default function NewInvoice() {
                       />
                     </div>
                     <div className="md:col-span-2">
-                      <Label htmlFor={`rate-${line.id}`} className="sr-only">
-                        Rate
-                      </Label>
                       <Input
-                        id={`rate-${line.id}`}
                         type="number"
                         placeholder="Rate"
                         value={line.rate}
@@ -245,6 +319,8 @@ export default function NewInvoice() {
                   id="notes"
                   placeholder="Add any notes or special instructions"
                   rows={3}
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
                 />
               </div>
               <div className="space-y-2">
@@ -253,6 +329,8 @@ export default function NewInvoice() {
                   id="terms"
                   placeholder="Payment terms and conditions"
                   rows={3}
+                  value={terms}
+                  onChange={(e) => setTerms(e.target.value)}
                 />
               </div>
             </CardContent>
@@ -269,10 +347,12 @@ export default function NewInvoice() {
                 <span className="text-muted-foreground">Subtotal</span>
                 <span className="font-medium">ZMW {subtotal.toFixed(2)}</span>
               </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">VAT (16%)</span>
-                <span className="font-medium">ZMW {vat.toFixed(2)}</span>
-              </div>
+              {isVatRegistered && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">VAT ({vatRate}%)</span>
+                  <span className="font-medium">ZMW {vatAmount.toFixed(2)}</span>
+                </div>
+              )}
               <div className="border-t pt-3 flex justify-between">
                 <span className="font-semibold">Total</span>
                 <span className="text-xl font-bold text-primary">ZMW {total.toFixed(2)}</span>
@@ -280,30 +360,19 @@ export default function NewInvoice() {
             </CardContent>
           </Card>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Delivery Method</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="deliveryMethod">Send via</Label>
-                <Select defaultValue="email">
-                  <SelectTrigger id="deliveryMethod">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="email">Email</SelectItem>
-                    <SelectItem value="print">Print & Send</SelectItem>
-                    <SelectItem value="both">Email & Print</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="emailTo">Email to</Label>
-                <Input id="emailTo" type="email" placeholder="customer@example.com" />
-              </div>
-            </CardContent>
-          </Card>
+          {!isVatRegistered && (
+            <Card className="bg-muted/50">
+              <CardContent className="pt-4">
+                <p className="text-sm text-muted-foreground">
+                  VAT is not applied. To enable VAT, go to{" "}
+                  <Button variant="link" className="p-0 h-auto" onClick={() => navigate("/settings")}>
+                    Settings
+                  </Button>{" "}
+                  and enable VAT registration.
+                </p>
+              </CardContent>
+            </Card>
+          )}
         </div>
       </div>
     </div>

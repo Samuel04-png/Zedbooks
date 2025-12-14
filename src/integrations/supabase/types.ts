@@ -75,23 +75,77 @@ export type Database = {
           company_name: string
           created_at: string
           id: string
+          is_vat_registered: boolean | null
           logo_url: string | null
           updated_at: string
           user_id: string
+          vat_rate: number | null
         }
         Insert: {
           company_name?: string
           created_at?: string
           id?: string
+          is_vat_registered?: boolean | null
           logo_url?: string | null
           updated_at?: string
           user_id: string
+          vat_rate?: number | null
         }
         Update: {
           company_name?: string
           created_at?: string
           id?: string
+          is_vat_registered?: boolean | null
           logo_url?: string | null
+          updated_at?: string
+          user_id?: string
+          vat_rate?: number | null
+        }
+        Relationships: []
+      }
+      customers: {
+        Row: {
+          address: string | null
+          contact_person: string | null
+          created_at: string
+          email: string | null
+          grant_reference: string | null
+          id: string
+          name: string
+          notes: string | null
+          phone: string | null
+          project_id: string | null
+          tpin: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          address?: string | null
+          contact_person?: string | null
+          created_at?: string
+          email?: string | null
+          grant_reference?: string | null
+          id?: string
+          name: string
+          notes?: string | null
+          phone?: string | null
+          project_id?: string | null
+          tpin?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          address?: string | null
+          contact_person?: string | null
+          created_at?: string
+          email?: string | null
+          grant_reference?: string | null
+          id?: string
+          name?: string
+          notes?: string | null
+          phone?: string | null
+          project_id?: string | null
+          tpin?: string | null
           updated_at?: string
           user_id?: string
         }
@@ -186,6 +240,109 @@ export type Database = {
           user_id?: string
         }
         Relationships: []
+      }
+      invoice_items: {
+        Row: {
+          amount: number
+          created_at: string
+          description: string
+          id: string
+          invoice_id: string
+          quantity: number
+          unit_price: number
+        }
+        Insert: {
+          amount?: number
+          created_at?: string
+          description: string
+          id?: string
+          invoice_id: string
+          quantity?: number
+          unit_price?: number
+        }
+        Update: {
+          amount?: number
+          created_at?: string
+          description?: string
+          id?: string
+          invoice_id?: string
+          quantity?: number
+          unit_price?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "invoice_items_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      invoices: {
+        Row: {
+          created_at: string
+          customer_id: string | null
+          due_date: string | null
+          grant_reference: string | null
+          id: string
+          invoice_date: string
+          invoice_number: string
+          notes: string | null
+          project_reference: string | null
+          status: string | null
+          subtotal: number
+          terms: string | null
+          total: number
+          updated_at: string
+          user_id: string
+          vat_amount: number | null
+        }
+        Insert: {
+          created_at?: string
+          customer_id?: string | null
+          due_date?: string | null
+          grant_reference?: string | null
+          id?: string
+          invoice_date?: string
+          invoice_number: string
+          notes?: string | null
+          project_reference?: string | null
+          status?: string | null
+          subtotal?: number
+          terms?: string | null
+          total?: number
+          updated_at?: string
+          user_id: string
+          vat_amount?: number | null
+        }
+        Update: {
+          created_at?: string
+          customer_id?: string | null
+          due_date?: string | null
+          grant_reference?: string | null
+          id?: string
+          invoice_date?: string
+          invoice_number?: string
+          notes?: string | null
+          project_reference?: string | null
+          status?: string | null
+          subtotal?: number
+          terms?: string | null
+          total?: number
+          updated_at?: string
+          user_id?: string
+          vat_amount?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "invoices_customer_id_fkey"
+            columns: ["customer_id"]
+            isOneToOne: false
+            referencedRelation: "customers"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       payroll_additions: {
         Row: {
@@ -399,6 +556,62 @@ export type Database = {
           updated_at?: string
         }
         Relationships: []
+      }
+      sales_orders: {
+        Row: {
+          created_at: string
+          customer_id: string | null
+          id: string
+          notes: string | null
+          order_date: string
+          order_number: string
+          order_type: string
+          status: string | null
+          subtotal: number
+          total: number
+          updated_at: string
+          user_id: string
+          vat_amount: number | null
+        }
+        Insert: {
+          created_at?: string
+          customer_id?: string | null
+          id?: string
+          notes?: string | null
+          order_date?: string
+          order_number: string
+          order_type?: string
+          status?: string | null
+          subtotal?: number
+          total?: number
+          updated_at?: string
+          user_id: string
+          vat_amount?: number | null
+        }
+        Update: {
+          created_at?: string
+          customer_id?: string | null
+          id?: string
+          notes?: string | null
+          order_date?: string
+          order_number?: string
+          order_type?: string
+          status?: string | null
+          subtotal?: number
+          total?: number
+          updated_at?: string
+          user_id?: string
+          vat_amount?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sales_orders_customer_id_fkey"
+            columns: ["customer_id"]
+            isOneToOne: false
+            referencedRelation: "customers"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       user_roles: {
         Row: {
