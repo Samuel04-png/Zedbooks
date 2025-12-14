@@ -107,25 +107,50 @@ export default function NewPayrollRun() {
       let totalDeductions = 0;
       let totalNet = 0;
 
-      // Get pending advances for each employee
+      // Get pending/partial advances for each employee that are due for deduction
       const { data: advances } = await supabase
         .from("advances")
         .select("*")
-        .eq("status", "pending")
+        .in("status", ["pending", "partial"])
         .lte("date_to_deduct", data.period_end)
         .in("employee_id", employees.map(e => e.id));
 
+      // Track advances to update after payroll
+      const advancesToUpdate: { id: string; deductionAmount: number; newBalance: number; newMonthsDeducted: number; isComplete: boolean }[] = [];
+
       const payrollItems = employees.map((employee) => {
-        // Calculate total advances to deduct for this employee
+        // Calculate total advances to deduct for this employee using monthly_deduction
         const employeeAdvances = advances?.filter(a => a.employee_id === employee.id) || [];
-        const totalAdvances = employeeAdvances.reduce((sum, adv) => sum + Number(adv.amount), 0);
+        let totalAdvanceDeduction = 0;
+
+        employeeAdvances.forEach((adv) => {
+          // Use monthly_deduction if set, otherwise use full amount
+          const deductionAmount = adv.monthly_deduction 
+            ? Math.min(Number(adv.monthly_deduction), Number(adv.remaining_balance || adv.amount))
+            : Number(adv.remaining_balance || adv.amount);
+          
+          const currentBalance = Number(adv.remaining_balance ?? adv.amount);
+          const newBalance = Math.max(0, currentBalance - deductionAmount);
+          const newMonthsDeducted = (adv.months_deducted || 0) + 1;
+          const isComplete = newBalance <= 0;
+
+          totalAdvanceDeduction += deductionAmount;
+
+          advancesToUpdate.push({
+            id: adv.id,
+            deductionAmount,
+            newBalance,
+            newMonthsDeducted,
+            isComplete,
+          });
+        });
 
         const calculation = calculatePayroll(
           Number(employee.basic_salary),
           Number(employee.housing_allowance || 0),
           Number(employee.transport_allowance || 0),
           Number(employee.other_allowances || 0),
-          totalAdvances
+          totalAdvanceDeduction
         );
 
         totalGross += calculation.grossSalary;
@@ -145,7 +170,7 @@ export default function NewPayrollRun() {
           napsa_employer: calculation.napsaEmployer,
           nhima_employee: calculation.nhimaEmployee,
           nhima_employer: calculation.nhimaEmployer,
-          advances_deducted: calculation.advancesDeducted,
+          advances_deducted: totalAdvanceDeduction,
           total_deductions: calculation.totalDeductions,
           net_salary: calculation.netSalary,
         };
@@ -173,12 +198,16 @@ export default function NewPayrollRun() {
         await supabase.from("payroll_additions").insert(additionsData);
       }
 
-      // Mark advances as deducted
-      if (advances && advances.length > 0) {
+      // Update advances with new balances and status
+      for (const adv of advancesToUpdate) {
         await supabase
           .from("advances")
-          .update({ status: "deducted" })
-          .in("id", advances.map(a => a.id));
+          .update({
+            remaining_balance: adv.newBalance,
+            months_deducted: adv.newMonthsDeducted,
+            status: adv.isComplete ? "deducted" : "partial",
+          })
+          .eq("id", adv.id);
       }
 
       // Update payroll run totals
