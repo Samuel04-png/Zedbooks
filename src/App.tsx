@@ -21,6 +21,9 @@ import Advances from "./pages/Advances";
 import PayrollReports from "./pages/PayrollReports";
 import ZRACompliance from "./pages/ZRACompliance";
 import TaxCalculator from "./pages/TaxCalculator";
+import Customers from "./pages/Customers";
+import SalesOrders from "./pages/SalesOrders";
+import CompanySettings from "./pages/CompanySettings";
 import ComingSoon from "./pages/ComingSoon";
 import NotFound from "./pages/NotFound";
 
@@ -40,9 +43,9 @@ const App = () => (
           <Route path="/invoices" element={<AppLayout><Invoices /></AppLayout>} />
           <Route path="/invoices/new" element={<AppLayout><NewInvoice /></AppLayout>} />
           
-          <Route path="/customers" element={<AppLayout><ComingSoon title="Customers" description="Manage your customer contacts and relationships" /></AppLayout>} />
+          <Route path="/customers" element={<AppLayout><Customers /></AppLayout>} />
           <Route path="/estimates" element={<AppLayout><ComingSoon title="Estimates" /></AppLayout>} />
-          <Route path="/sales-orders" element={<AppLayout><ComingSoon title="Sales Orders" /></AppLayout>} />
+          <Route path="/sales-orders" element={<AppLayout><SalesOrders /></AppLayout>} />
           <Route path="/vendors" element={<AppLayout><ComingSoon title="Vendors" /></AppLayout>} />
           <Route path="/bills" element={<AppLayout><ComingSoon title="Bills" /></AppLayout>} />
           <Route path="/purchase-orders" element={<AppLayout><ComingSoon title="Purchase Orders" /></AppLayout>} />
@@ -68,7 +71,7 @@ const App = () => (
           <Route path="/payroll-reports" element={<AppLayout><PayrollReports /></AppLayout>} />
           <Route path="/zra-compliance" element={<AppLayout><ZRACompliance /></AppLayout>} />
           <Route path="/tax-calculator" element={<AppLayout><TaxCalculator /></AppLayout>} />
-          <Route path="/settings" element={<AppLayout><ComingSoon title="Settings" /></AppLayout>} />
+          <Route path="/settings" element={<AppLayout><CompanySettings /></AppLayout>} />
           
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />

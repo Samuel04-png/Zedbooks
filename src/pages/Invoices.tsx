@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -11,37 +13,42 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Plus, Search, FileText, Eye, Edit, Send } from "lucide-react";
+import { Plus, Search, Eye } from "lucide-react";
 import { Link } from "react-router-dom";
+import { format } from "date-fns";
 
 export default function Invoices() {
   const [searchQuery, setSearchQuery] = useState("");
 
-  const invoices = [
-    { id: "INV-001", date: "2025-10-28", customer: "World Vision Zambia", amount: "ZMW 15,000.00", status: "Paid", dueDate: "2025-11-28" },
-    { id: "INV-002", date: "2025-10-25", customer: "UNICEF", amount: "ZMW 32,500.00", status: "Pending", dueDate: "2025-11-25" },
-    { id: "INV-003", date: "2025-10-20", customer: "Red Cross", amount: "ZMW 8,750.00", status: "Overdue", dueDate: "2025-10-30" },
-    { id: "INV-004", date: "2025-10-18", customer: "Plan International", amount: "ZMW 22,400.00", status: "Paid", dueDate: "2025-11-18" },
-    { id: "INV-005", date: "2025-10-15", customer: "Save the Children", amount: "ZMW 18,900.00", status: "Pending", dueDate: "2025-11-15" },
-    { id: "INV-006", date: "2025-10-12", customer: "Oxfam", amount: "ZMW 45,000.00", status: "Paid", dueDate: "2025-11-12" },
-    { id: "INV-007", date: "2025-10-10", customer: "Care International", amount: "ZMW 12,300.00", status: "Draft", dueDate: "2025-11-10" },
-    { id: "INV-008", date: "2025-10-05", customer: "MSF Zambia", amount: "ZMW 67,850.00", status: "Overdue", dueDate: "2025-10-25" },
-  ];
+  const { data: invoices, isLoading } = useQuery({
+    queryKey: ["invoices"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("invoices")
+        .select(`*, customers (name)`)
+        .order("invoice_date", { ascending: false });
+      if (error) throw error;
+      return data;
+    },
+  });
 
   const getStatusVariant = (status: string) => {
     switch (status) {
-      case "Paid":
-        return "default";
-      case "Pending":
-        return "secondary";
-      case "Overdue":
-        return "destructive";
-      case "Draft":
-        return "outline";
-      default:
-        return "secondary";
+      case "paid": return "default";
+      case "sent": return "secondary";
+      case "overdue": return "destructive";
+      case "draft": return "outline";
+      default: return "secondary";
     }
   };
+
+  const filteredInvoices = invoices?.filter(
+    (inv) =>
+      inv.invoice_number.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (inv.customers as any)?.name?.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  if (isLoading) return <div>Loading...</div>;
 
   return (
     <div className="space-y-6">
@@ -62,16 +69,14 @@ export default function Invoices() {
         <CardHeader>
           <div className="flex items-center justify-between">
             <CardTitle>All Invoices</CardTitle>
-            <div className="flex items-center gap-2">
-              <div className="relative w-64">
-                <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Search invoices..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-8"
-                />
-              </div>
+            <div className="relative w-64">
+              <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Search invoices..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-8"
+              />
             </div>
           </div>
         </CardHeader>
@@ -83,39 +88,28 @@ export default function Invoices() {
                 <TableHead>Date</TableHead>
                 <TableHead>Customer</TableHead>
                 <TableHead>Due Date</TableHead>
-                <TableHead>Amount</TableHead>
+                <TableHead className="text-right">Amount</TableHead>
                 <TableHead>Status</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {invoices.map((invoice) => (
+              {filteredInvoices?.map((invoice) => (
                 <TableRow key={invoice.id}>
-                  <TableCell className="font-medium">{invoice.id}</TableCell>
-                  <TableCell>{invoice.date}</TableCell>
-                  <TableCell>{invoice.customer}</TableCell>
-                  <TableCell>{invoice.dueDate}</TableCell>
-                  <TableCell className="font-medium">{invoice.amount}</TableCell>
+                  <TableCell className="font-medium">{invoice.invoice_number}</TableCell>
+                  <TableCell>{format(new Date(invoice.invoice_date), "dd MMM yyyy")}</TableCell>
+                  <TableCell>{(invoice.customers as any)?.name || "-"}</TableCell>
+                  <TableCell>{invoice.due_date ? format(new Date(invoice.due_date), "dd MMM yyyy") : "-"}</TableCell>
+                  <TableCell className="text-right font-medium">ZMW {Number(invoice.total).toFixed(2)}</TableCell>
                   <TableCell>
-                    <Badge variant={getStatusVariant(invoice.status)}>
-                      {invoice.status}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <div className="flex justify-end gap-2">
-                      <Button variant="ghost" size="icon">
-                        <Eye className="h-4 w-4" />
-                      </Button>
-                      <Button variant="ghost" size="icon">
-                        <Edit className="h-4 w-4" />
-                      </Button>
-                      <Button variant="ghost" size="icon">
-                        <Send className="h-4 w-4" />
-                      </Button>
-                    </div>
+                    <Badge variant={getStatusVariant(invoice.status || "draft")}>{invoice.status}</Badge>
                   </TableCell>
                 </TableRow>
               ))}
+              {filteredInvoices?.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={6} className="text-center text-muted-foreground">No invoices found</TableCell>
+                </TableRow>
+              )}
             </TableBody>
           </Table>
         </CardContent>
