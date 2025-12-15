@@ -29,10 +29,11 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Search, FileText } from "lucide-react";
+import { Plus, Search, FileText, ClipboardList } from "lucide-react";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { useNavigate } from "react-router-dom";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useCompanySettings } from "@/hooks/useCompanySettings";
 
 export default function SalesOrders() {
@@ -148,15 +149,20 @@ export default function SalesOrders() {
             )}
           </p>
         </div>
-        <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-          <DialogTrigger asChild>
-            <Button>
-              <Plus className="mr-2 h-4 w-4" />
-              New Order
-            </Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => navigate("/quotations/new")}>
+            <ClipboardList className="mr-2 h-4 w-4" />
+            New Quotation
+          </Button>
+          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+            <DialogTrigger asChild>
+              <Button>
+                <Plus className="mr-2 h-4 w-4" />
+                New Order
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
               <DialogTitle>Create Sales Order</DialogTitle>
             </DialogHeader>
             <form
@@ -227,6 +233,7 @@ export default function SalesOrders() {
             </form>
           </DialogContent>
         </Dialog>
+        </div>
       </div>
 
       <Card>

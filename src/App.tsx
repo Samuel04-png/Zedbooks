@@ -23,6 +23,7 @@ import ZRACompliance from "./pages/ZRACompliance";
 import TaxCalculator from "./pages/TaxCalculator";
 import Customers from "./pages/Customers";
 import SalesOrders from "./pages/SalesOrders";
+import NewQuotation from "./pages/NewQuotation";
 import CompanySettings from "./pages/CompanySettings";
 import ComingSoon from "./pages/ComingSoon";
 import NotFound from "./pages/NotFound";
@@ -44,7 +45,7 @@ const App = () => (
           <Route path="/invoices/new" element={<AppLayout><NewInvoice /></AppLayout>} />
           
           <Route path="/customers" element={<AppLayout><Customers /></AppLayout>} />
-          <Route path="/estimates" element={<AppLayout><ComingSoon title="Estimates" /></AppLayout>} />
+          <Route path="/quotations/new" element={<AppLayout><NewQuotation /></AppLayout>} />
           <Route path="/sales-orders" element={<AppLayout><SalesOrders /></AppLayout>} />
           <Route path="/vendors" element={<AppLayout><ComingSoon title="Vendors" /></AppLayout>} />
           <Route path="/bills" element={<AppLayout><ComingSoon title="Bills" /></AppLayout>} />
