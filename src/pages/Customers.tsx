@@ -21,7 +21,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
-import { Plus, Search, Pencil, Trash2, FileText } from "lucide-react";
+import { Plus, Search, Pencil, Trash2, FileText, ClipboardList } from "lucide-react";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
 
@@ -351,6 +351,14 @@ export default function Customers() {
                   <TableCell>{customer.tpin || "-"}</TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-2">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => navigate(`/quotations/new?customer=${customer.id}`)}
+                        title="Create Quotation"
+                      >
+                        <ClipboardList className="h-4 w-4" />
+                      </Button>
                       <Button
                         variant="ghost"
                         size="icon"
