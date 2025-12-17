@@ -34,6 +34,25 @@ import { toast } from "sonner";
 import { format } from "date-fns";
 import { useCompanySettings } from "@/hooks/useCompanySettings";
 
+interface Bill {
+  id: string;
+  bill_number: string;
+  bill_date: string;
+  due_date: string | null;
+  subtotal: number;
+  vat_amount: number | null;
+  total: number;
+  status: string | null;
+  description: string | null;
+  vendor_id: string | null;
+  vendors: { name: string } | null;
+}
+
+interface Vendor {
+  id: string;
+  name: string;
+}
+
 export default function Bills() {
   const queryClient = useQueryClient();
   const [searchQuery, setSearchQuery] = useState("");
@@ -60,7 +79,7 @@ export default function Bills() {
         `)
         .order("bill_date", { ascending: false });
       if (error) throw error;
-      return data;
+      return data as unknown as Bill[];
     },
   });
 
@@ -72,7 +91,7 @@ export default function Bills() {
         .select("id, name")
         .order("name");
       if (error) throw error;
-      return data;
+      return data as unknown as Vendor[];
     },
   });
 
@@ -99,7 +118,7 @@ export default function Bills() {
         vat_amount: vatAmount,
         total,
         user_id: user?.id,
-      });
+      } as any);
       if (error) throw error;
     },
     onSuccess: () => {
@@ -124,7 +143,7 @@ export default function Bills() {
     mutationFn: async (id: string) => {
       const { error } = await supabase
         .from("bills")
-        .update({ status: "paid", paid_date: new Date().toISOString() })
+        .update({ status: "paid", paid_date: new Date().toISOString() } as any)
         .eq("id", id);
       if (error) throw error;
     },
@@ -174,7 +193,7 @@ export default function Bills() {
   const filteredBills = bills?.filter(
     (bill) =>
       bill.bill_number.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (bill.vendors as any)?.name?.toLowerCase().includes(searchQuery.toLowerCase())
+      bill.vendors?.name?.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   if (isLoading) {
@@ -354,7 +373,7 @@ export default function Bills() {
                   <TableCell>
                     {format(new Date(bill.bill_date), "dd MMM yyyy")}
                   </TableCell>
-                  <TableCell>{(bill.vendors as any)?.name || "-"}</TableCell>
+                  <TableCell>{bill.vendors?.name || "-"}</TableCell>
                   <TableCell>
                     {bill.due_date
                       ? format(new Date(bill.due_date), "dd MMM yyyy")

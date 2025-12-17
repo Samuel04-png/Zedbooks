@@ -35,6 +35,25 @@ import { format } from "date-fns";
 import { useNavigate } from "react-router-dom";
 import { useCompanySettings } from "@/hooks/useCompanySettings";
 
+interface PurchaseOrder {
+  id: string;
+  order_number: string;
+  order_date: string;
+  expected_date: string | null;
+  subtotal: number;
+  vat_amount: number | null;
+  total: number;
+  status: string | null;
+  description: string | null;
+  vendor_id: string | null;
+  vendors: { name: string } | null;
+}
+
+interface Vendor {
+  id: string;
+  name: string;
+}
+
 export default function PurchaseOrders() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -62,7 +81,7 @@ export default function PurchaseOrders() {
         `)
         .order("order_date", { ascending: false });
       if (error) throw error;
-      return data;
+      return data as unknown as PurchaseOrder[];
     },
   });
 
@@ -74,7 +93,7 @@ export default function PurchaseOrders() {
         .select("id, name")
         .order("name");
       if (error) throw error;
-      return data;
+      return data as unknown as Vendor[];
     },
   });
 
@@ -101,7 +120,7 @@ export default function PurchaseOrders() {
         vat_amount: vatAmount,
         total,
         user_id: user?.id,
-      });
+      } as any);
       if (error) throw error;
     },
     onSuccess: () => {
@@ -159,7 +178,7 @@ export default function PurchaseOrders() {
   const filteredOrders = orders?.filter(
     (order) =>
       order.order_number.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (order.vendors as any)?.name?.toLowerCase().includes(searchQuery.toLowerCase())
+      order.vendors?.name?.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   if (isLoading) {
@@ -339,7 +358,7 @@ export default function PurchaseOrders() {
                   <TableCell>
                     {format(new Date(order.order_date), "dd MMM yyyy")}
                   </TableCell>
-                  <TableCell>{(order.vendors as any)?.name || "-"}</TableCell>
+                  <TableCell>{order.vendors?.name || "-"}</TableCell>
                   <TableCell>
                     {order.expected_date
                       ? format(new Date(order.expected_date), "dd MMM yyyy")
@@ -358,7 +377,7 @@ export default function PurchaseOrders() {
                       <Button
                         variant="ghost"
                         size="icon"
-                        onClick={() => navigate(`/bills/new?vendor=${order.vendor_id}`)}
+                        onClick={() => navigate(`/bills`)}
                         title="Convert to Bill"
                       >
                         <FileText className="h-4 w-4" />
