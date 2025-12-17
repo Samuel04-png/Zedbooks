@@ -24,6 +24,11 @@ import TaxCalculator from "./pages/TaxCalculator";
 import Customers from "./pages/Customers";
 import SalesOrders from "./pages/SalesOrders";
 import NewQuotation from "./pages/NewQuotation";
+import Estimates from "./pages/Estimates";
+import Vendors from "./pages/Vendors";
+import Bills from "./pages/Bills";
+import PurchaseOrders from "./pages/PurchaseOrders";
+import Expenses from "./pages/Expenses";
 import CompanySettings from "./pages/CompanySettings";
 import ComingSoon from "./pages/ComingSoon";
 import NotFound from "./pages/NotFound";
@@ -45,12 +50,13 @@ const App = () => (
           <Route path="/invoices/new" element={<AppLayout><NewInvoice /></AppLayout>} />
           
           <Route path="/customers" element={<AppLayout><Customers /></AppLayout>} />
+          <Route path="/estimates" element={<AppLayout><Estimates /></AppLayout>} />
           <Route path="/quotations/new" element={<AppLayout><NewQuotation /></AppLayout>} />
           <Route path="/sales-orders" element={<AppLayout><SalesOrders /></AppLayout>} />
-          <Route path="/vendors" element={<AppLayout><ComingSoon title="Vendors" /></AppLayout>} />
-          <Route path="/bills" element={<AppLayout><ComingSoon title="Bills" /></AppLayout>} />
-          <Route path="/purchase-orders" element={<AppLayout><ComingSoon title="Purchase Orders" /></AppLayout>} />
-          <Route path="/expenses" element={<AppLayout><ComingSoon title="Expenses" /></AppLayout>} />
+          <Route path="/vendors" element={<AppLayout><Vendors /></AppLayout>} />
+          <Route path="/bills" element={<AppLayout><Bills /></AppLayout>} />
+          <Route path="/purchase-orders" element={<AppLayout><PurchaseOrders /></AppLayout>} />
+          <Route path="/expenses" element={<AppLayout><Expenses /></AppLayout>} />
           <Route path="/products" element={<AppLayout><ComingSoon title="Products & Services" /></AppLayout>} />
           <Route path="/inventory" element={<AppLayout><ComingSoon title="Inventory" /></AppLayout>} />
           <Route path="/bank-accounts" element={<AppLayout><ComingSoon title="Bank Accounts" /></AppLayout>} />

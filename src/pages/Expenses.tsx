@@ -33,6 +33,18 @@ import { Plus, Search, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { format } from "date-fns";
 
+interface Expense {
+  id: string;
+  description: string;
+  category: string | null;
+  amount: number;
+  expense_date: string;
+  vendor_name: string | null;
+  payment_method: string | null;
+  reference_number: string | null;
+  notes: string | null;
+}
+
 const expenseCategories = [
   "Office Supplies",
   "Travel",
@@ -53,7 +65,7 @@ export default function Expenses() {
   const queryClient = useQueryClient();
   const [searchQuery, setSearchQuery] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
-  const [editingExpense, setEditingExpense] = useState<any>(null);
+  const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
 
   const [formData, setFormData] = useState({
     description: "",
@@ -74,7 +86,7 @@ export default function Expenses() {
         .select("*")
         .order("expense_date", { ascending: false });
       if (error) throw error;
-      return data;
+      return data as unknown as Expense[];
     },
   });
 
@@ -91,7 +103,7 @@ export default function Expenses() {
       const { error } = await supabase.from("expenses").insert({
         ...data,
         user_id: user?.id,
-      });
+      } as any);
       if (error) throw error;
     },
     onSuccess: () => {
@@ -108,7 +120,7 @@ export default function Expenses() {
     mutationFn: async ({ id, data }: { id: string; data: typeof formData }) => {
       const { error } = await supabase
         .from("expenses")
-        .update(data)
+        .update(data as any)
         .eq("id", id);
       if (error) throw error;
     },
@@ -151,7 +163,7 @@ export default function Expenses() {
     setIsDialogOpen(false);
   };
 
-  const handleEdit = (expense: any) => {
+  const handleEdit = (expense: Expense) => {
     setEditingExpense(expense);
     setFormData({
       description: expense.description || "",
@@ -182,7 +194,7 @@ export default function Expenses() {
     }).format(amount);
   };
 
-  const getCategoryVariant = (category: string) => {
+  const getCategoryVariant = (category: string): "default" | "secondary" | "outline" => {
     const variants: Record<string, "default" | "secondary" | "outline"> = {
       "Office Supplies": "default",
       Travel: "secondary",

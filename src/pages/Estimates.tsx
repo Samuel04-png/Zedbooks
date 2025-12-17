@@ -19,6 +19,19 @@ import { format } from "date-fns";
 import { useNavigate } from "react-router-dom";
 import { useCompanySettings } from "@/hooks/useCompanySettings";
 
+interface Estimate {
+  id: string;
+  order_number: string;
+  order_date: string;
+  order_type: string;
+  subtotal: number;
+  vat_amount: number | null;
+  total: number;
+  status: string | null;
+  customer_id: string | null;
+  customers: { name: string } | null;
+}
+
 export default function Estimates() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -37,7 +50,7 @@ export default function Estimates() {
         .in("order_type", ["quote", "estimate"])
         .order("order_date", { ascending: false });
       if (error) throw error;
-      return data;
+      return data as unknown as Estimate[];
     },
   });
 
@@ -80,7 +93,7 @@ export default function Estimates() {
   const filteredEstimates = estimates?.filter(
     (estimate) =>
       estimate.order_number.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (estimate.customers as any)?.name?.toLowerCase().includes(searchQuery.toLowerCase())
+      estimate.customers?.name?.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   if (isLoading) {
@@ -141,7 +154,7 @@ export default function Estimates() {
                   <TableCell>
                     {format(new Date(estimate.order_date), "dd MMM yyyy")}
                   </TableCell>
-                  <TableCell>{(estimate.customers as any)?.name || "-"}</TableCell>
+                  <TableCell>{estimate.customers?.name || "-"}</TableCell>
                   <TableCell className="text-right">
                     {formatCurrency(Number(estimate.subtotal))}
                   </TableCell>

@@ -21,7 +21,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
-import { Plus, Search, Pencil, Trash2, FileText } from "lucide-react";
+import { Plus, Search, Pencil, Trash2, FileText, ClipboardList } from "lucide-react";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
 
@@ -66,7 +66,7 @@ export default function Vendors() {
         .select("*")
         .order("name");
       if (error) throw error;
-      return data as Vendor[];
+      return data as unknown as Vendor[];
     },
   });
 
@@ -83,7 +83,7 @@ export default function Vendors() {
       const { error } = await supabase.from("vendors").insert({
         ...data,
         user_id: user?.id,
-      });
+      } as any);
       if (error) throw error;
     },
     onSuccess: () => {
@@ -100,7 +100,7 @@ export default function Vendors() {
     mutationFn: async ({ id, data }: { id: string; data: typeof formData }) => {
       const { error } = await supabase
         .from("vendors")
-        .update(data)
+        .update(data as any)
         .eq("id", id);
       if (error) throw error;
     },
@@ -367,7 +367,15 @@ export default function Vendors() {
                       <Button
                         variant="ghost"
                         size="icon"
-                        onClick={() => navigate(`/bills/new?vendor=${vendor.id}`)}
+                        onClick={() => navigate(`/purchase-orders`)}
+                        title="Create Purchase Order"
+                      >
+                        <ClipboardList className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => navigate(`/bills`)}
                         title="Create Bill"
                       >
                         <FileText className="h-4 w-4" />
