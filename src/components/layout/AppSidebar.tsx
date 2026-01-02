@@ -86,10 +86,16 @@ const navigation = [
   {
     title: "Reports",
     items: [
-      { title: "Reports", icon: BarChart3, href: "/reports" },
+      { title: "Financial Reports", icon: BarChart3, href: "/reports" },
       { title: "Payroll Reports", icon: FileText, href: "/payroll-reports" },
       { title: "ZRA Compliance", icon: FileText, href: "/zra-compliance" },
       { title: "Tax Calculator", icon: Calculator, href: "/tax-calculator" },
+    ],
+  },
+  {
+    title: "Administration",
+    items: [
+      { title: "Users & Roles", icon: Users, href: "/users" },
     ],
   },
 ];
