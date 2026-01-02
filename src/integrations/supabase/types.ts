@@ -1345,6 +1345,10 @@ export type Database = {
         | "project_manager"
         | "auditor"
         | "read_only"
+        | "super_admin"
+        | "accountant"
+        | "bookkeeper"
+        | "inventory_manager"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -1479,6 +1483,10 @@ export const Constants = {
         "project_manager",
         "auditor",
         "read_only",
+        "super_admin",
+        "accountant",
+        "bookkeeper",
+        "inventory_manager",
       ],
     },
   },

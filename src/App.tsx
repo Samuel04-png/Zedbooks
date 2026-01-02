@@ -32,6 +32,12 @@ import Expenses from "./pages/Expenses";
 import CompanySettings from "./pages/CompanySettings";
 import ComingSoon from "./pages/ComingSoon";
 import NotFound from "./pages/NotFound";
+import Inventory from "./pages/Inventory";
+import BankAccounts from "./pages/BankAccounts";
+import Reconciliation from "./pages/Reconciliation";
+import TimeTracking from "./pages/TimeTracking";
+import FinancialReports from "./pages/FinancialReports";
+import UserManagement from "./pages/UserManagement";
 
 const queryClient = new QueryClient();
 
@@ -58,9 +64,9 @@ const App = () => (
           <Route path="/purchase-orders" element={<AppLayout><PurchaseOrders /></AppLayout>} />
           <Route path="/expenses" element={<AppLayout><Expenses /></AppLayout>} />
           <Route path="/products" element={<AppLayout><ComingSoon title="Products & Services" /></AppLayout>} />
-          <Route path="/inventory" element={<AppLayout><ComingSoon title="Inventory" /></AppLayout>} />
-          <Route path="/bank-accounts" element={<AppLayout><ComingSoon title="Bank Accounts" /></AppLayout>} />
-          <Route path="/reconciliation" element={<AppLayout><ComingSoon title="Reconciliation" /></AppLayout>} />
+          <Route path="/inventory" element={<AppLayout><Inventory /></AppLayout>} />
+          <Route path="/bank-accounts" element={<AppLayout><BankAccounts /></AppLayout>} />
+          <Route path="/reconciliation" element={<AppLayout><Reconciliation /></AppLayout>} />
           <Route path="/employees" element={<AppLayout><Employees /></AppLayout>} />
           <Route path="/employees/new" element={<AppLayout><NewEmployee /></AppLayout>} />
           <Route path="/employees/:id/edit" element={<AppLayout><EditEmployee /></AppLayout>} />
@@ -71,14 +77,15 @@ const App = () => (
           <Route path="/payroll/:id/approve" element={<AppLayout><PayrollApproval /></AppLayout>} />
           <Route path="/payroll/:runId/payslip/:employeeId" element={<AppLayout><Payslip /></AppLayout>} />
           <Route path="/advances" element={<AppLayout><Advances /></AppLayout>} />
-          <Route path="/time-tracking" element={<AppLayout><ComingSoon title="Time & Contractors" /></AppLayout>} />
+          <Route path="/time-tracking" element={<AppLayout><TimeTracking /></AppLayout>} />
           <Route path="/projects" element={<AppLayout><ComingSoon title="Projects" /></AppLayout>} />
           <Route path="/donors" element={<AppLayout><ComingSoon title="Donors & Grants" /></AppLayout>} />
-          <Route path="/reports" element={<AppLayout><ComingSoon title="Reports" /></AppLayout>} />
+          <Route path="/reports" element={<AppLayout><FinancialReports /></AppLayout>} />
           <Route path="/payroll-reports" element={<AppLayout><PayrollReports /></AppLayout>} />
           <Route path="/zra-compliance" element={<AppLayout><ZRACompliance /></AppLayout>} />
           <Route path="/tax-calculator" element={<AppLayout><TaxCalculator /></AppLayout>} />
           <Route path="/settings" element={<AppLayout><CompanySettings /></AppLayout>} />
+          <Route path="/users" element={<AppLayout><UserManagement /></AppLayout>} />
           
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />
