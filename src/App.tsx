@@ -4,6 +4,8 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AppLayout } from "./components/layout/AppLayout";
+import { ProtectedRoute } from "./components/layout/ProtectedRoute";
+import { RoleProtectedRoute } from "./components/layout/RoleProtectedRoute";
 import Auth from "./pages/Auth";
 import Dashboard from "./pages/Dashboard";
 import Invoices from "./pages/Invoices";
@@ -38,6 +40,8 @@ import Reconciliation from "./pages/Reconciliation";
 import TimeTracking from "./pages/TimeTracking";
 import FinancialReports from "./pages/FinancialReports";
 import UserManagement from "./pages/UserManagement";
+import Projects from "./pages/Projects";
+import AuditLogs from "./pages/AuditLogs";
 
 const queryClient = new QueryClient();
 
@@ -51,41 +55,42 @@ const App = () => (
           <Route path="/" element={<Navigate to="/auth" replace />} />
           <Route path="/auth" element={<Auth />} />
           
-          <Route path="/dashboard" element={<AppLayout><Dashboard /></AppLayout>} />
-          <Route path="/invoices" element={<AppLayout><Invoices /></AppLayout>} />
-          <Route path="/invoices/new" element={<AppLayout><NewInvoice /></AppLayout>} />
+          <Route path="/dashboard" element={<ProtectedRoute><AppLayout><Dashboard /></AppLayout></ProtectedRoute>} />
+          <Route path="/invoices" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><Invoices /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+          <Route path="/invoices/new" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><NewInvoice /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
           
-          <Route path="/customers" element={<AppLayout><Customers /></AppLayout>} />
-          <Route path="/estimates" element={<AppLayout><Estimates /></AppLayout>} />
-          <Route path="/quotations/new" element={<AppLayout><NewQuotation /></AppLayout>} />
-          <Route path="/sales-orders" element={<AppLayout><SalesOrders /></AppLayout>} />
-          <Route path="/vendors" element={<AppLayout><Vendors /></AppLayout>} />
-          <Route path="/bills" element={<AppLayout><Bills /></AppLayout>} />
-          <Route path="/purchase-orders" element={<AppLayout><PurchaseOrders /></AppLayout>} />
-          <Route path="/expenses" element={<AppLayout><Expenses /></AppLayout>} />
-          <Route path="/products" element={<AppLayout><ComingSoon title="Products & Services" /></AppLayout>} />
-          <Route path="/inventory" element={<AppLayout><Inventory /></AppLayout>} />
-          <Route path="/bank-accounts" element={<AppLayout><BankAccounts /></AppLayout>} />
-          <Route path="/reconciliation" element={<AppLayout><Reconciliation /></AppLayout>} />
-          <Route path="/employees" element={<AppLayout><Employees /></AppLayout>} />
-          <Route path="/employees/new" element={<AppLayout><NewEmployee /></AppLayout>} />
-          <Route path="/employees/:id/edit" element={<AppLayout><EditEmployee /></AppLayout>} />
-          <Route path="/employees/bulk-upload" element={<AppLayout><BulkUploadEmployees /></AppLayout>} />
-          <Route path="/payroll" element={<AppLayout><Payroll /></AppLayout>} />
-          <Route path="/payroll/new" element={<AppLayout><NewPayrollRun /></AppLayout>} />
-          <Route path="/payroll/:id" element={<AppLayout><PayrollDetail /></AppLayout>} />
-          <Route path="/payroll/:id/approve" element={<AppLayout><PayrollApproval /></AppLayout>} />
-          <Route path="/payroll/:runId/payslip/:employeeId" element={<AppLayout><Payslip /></AppLayout>} />
-          <Route path="/advances" element={<AppLayout><Advances /></AppLayout>} />
-          <Route path="/time-tracking" element={<AppLayout><TimeTracking /></AppLayout>} />
-          <Route path="/projects" element={<AppLayout><ComingSoon title="Projects" /></AppLayout>} />
-          <Route path="/donors" element={<AppLayout><ComingSoon title="Donors & Grants" /></AppLayout>} />
-          <Route path="/reports" element={<AppLayout><FinancialReports /></AppLayout>} />
-          <Route path="/payroll-reports" element={<AppLayout><PayrollReports /></AppLayout>} />
-          <Route path="/zra-compliance" element={<AppLayout><ZRACompliance /></AppLayout>} />
-          <Route path="/tax-calculator" element={<AppLayout><TaxCalculator /></AppLayout>} />
-          <Route path="/settings" element={<AppLayout><CompanySettings /></AppLayout>} />
-          <Route path="/users" element={<AppLayout><UserManagement /></AppLayout>} />
+          <Route path="/customers" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><Customers /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+          <Route path="/estimates" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><Estimates /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+          <Route path="/quotations/new" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><NewQuotation /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+          <Route path="/sales-orders" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><SalesOrders /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+          <Route path="/vendors" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><Vendors /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+          <Route path="/bills" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><Bills /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+          <Route path="/purchase-orders" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><PurchaseOrders /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+          <Route path="/expenses" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><Expenses /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+          <Route path="/products" element={<ProtectedRoute><AppLayout><ComingSoon title="Products & Services" /></AppLayout></ProtectedRoute>} />
+          <Route path="/inventory" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><Inventory /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+          <Route path="/bank-accounts" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><BankAccounts /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+          <Route path="/reconciliation" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><Reconciliation /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+          <Route path="/employees" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><Employees /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+          <Route path="/employees/new" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><NewEmployee /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+          <Route path="/employees/:id/edit" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><EditEmployee /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+          <Route path="/employees/bulk-upload" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><BulkUploadEmployees /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+          <Route path="/payroll" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><Payroll /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+          <Route path="/payroll/new" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><NewPayrollRun /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+          <Route path="/payroll/:id" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><PayrollDetail /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+          <Route path="/payroll/:id/approve" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><PayrollApproval /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+          <Route path="/payroll/:runId/payslip/:employeeId" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><Payslip /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+          <Route path="/advances" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><Advances /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+          <Route path="/time-tracking" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><TimeTracking /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+          <Route path="/projects" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><Projects /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+          <Route path="/donors" element={<ProtectedRoute><AppLayout><ComingSoon title="Donors & Grants" /></AppLayout></ProtectedRoute>} />
+          <Route path="/reports" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><FinancialReports /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+          <Route path="/payroll-reports" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><PayrollReports /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+          <Route path="/zra-compliance" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><ZRACompliance /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+          <Route path="/tax-calculator" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><TaxCalculator /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+          <Route path="/settings" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><CompanySettings /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+          <Route path="/users" element={<ProtectedRoute><AppLayout><RoleProtectedRoute allowedRoles={["super_admin", "admin"]}><UserManagement /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+          <Route path="/audit-logs" element={<ProtectedRoute><AppLayout><RoleProtectedRoute allowedRoles={["super_admin", "admin", "auditor"]}><AuditLogs /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
           
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />

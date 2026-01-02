@@ -1,42 +1,17 @@
+import { useUserRole } from "@/hooks/useUserRole";
+import { SuperAdminDashboard } from "@/components/dashboard/SuperAdminDashboard";
+import { AccountantDashboard } from "@/components/dashboard/AccountantDashboard";
+import { HRDashboard } from "@/components/dashboard/HRDashboard";
+import { InventoryDashboard } from "@/components/dashboard/InventoryDashboard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DollarSign, TrendingUp, TrendingDown, Users, FileText, AlertCircle } from "lucide-react";
 
-export default function Dashboard() {
+function DefaultDashboard() {
   const metrics = [
-    {
-      title: "Total Revenue",
-      value: "ZMW 245,890",
-      change: "+12.5%",
-      trend: "up",
-      icon: DollarSign,
-    },
-    {
-      title: "Outstanding Invoices",
-      value: "ZMW 58,240",
-      change: "23 invoices",
-      trend: "neutral",
-      icon: FileText,
-    },
-    {
-      title: "Total Expenses",
-      value: "ZMW 142,560",
-      change: "+8.2%",
-      trend: "down",
-      icon: TrendingDown,
-    },
-    {
-      title: "Active Donors",
-      value: "47",
-      change: "+3 this month",
-      trend: "up",
-      icon: Users,
-    },
-  ];
-
-  const recentInvoices = [
-    { id: "INV-001", customer: "World Vision Zambia", amount: "ZMW 15,000", status: "Paid", date: "2025-10-28" },
-    { id: "INV-002", customer: "UNICEF", amount: "ZMW 32,500", status: "Pending", date: "2025-10-25" },
-    { id: "INV-003", customer: "Red Cross", amount: "ZMW 8,750", status: "Overdue", date: "2025-10-20" },
+    { title: "Total Revenue", value: "ZMW 245,890", change: "+12.5%", trend: "up", icon: DollarSign },
+    { title: "Outstanding Invoices", value: "ZMW 58,240", change: "23 invoices", trend: "neutral", icon: FileText },
+    { title: "Total Expenses", value: "ZMW 142,560", change: "+8.2%", trend: "down", icon: TrendingDown },
+    { title: "Active Donors", value: "47", change: "+3 this month", trend: "up", icon: Users },
   ];
 
   return (
@@ -67,66 +42,44 @@ export default function Dashboard() {
         ))}
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>Recent Invoices</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              {recentInvoices.map((invoice) => (
-                <div key={invoice.id} className="flex items-center justify-between border-b border-border pb-3 last:border-0 last:pb-0">
-                  <div>
-                    <p className="font-medium">{invoice.id}</p>
-                    <p className="text-sm text-muted-foreground">{invoice.customer}</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="font-medium">{invoice.amount}</p>
-                    <p className={`text-xs ${
-                      invoice.status === "Paid" ? "text-success" :
-                      invoice.status === "Overdue" ? "text-destructive" :
-                      "text-warning"
-                    }`}>
-                      {invoice.status}
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Pending Actions</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-3">
-              <div className="flex items-start gap-3">
-                <AlertCircle className="h-5 w-5 text-warning mt-0.5" />
-                <div>
-                  <p className="font-medium">Reconcile October Bank Statement</p>
-                  <p className="text-sm text-muted-foreground">Last reconciled: Oct 15, 2025</p>
-                </div>
-              </div>
-              <div className="flex items-start gap-3">
-                <AlertCircle className="h-5 w-5 text-destructive mt-0.5" />
-                <div>
-                  <p className="font-medium">3 Overdue Invoices</p>
-                  <p className="text-sm text-muted-foreground">Total: ZMW 24,850</p>
-                </div>
-              </div>
-              <div className="flex items-start gap-3">
-                <AlertCircle className="h-5 w-5 text-accent mt-0.5" />
-                <div>
-                  <p className="font-medium">Run October Payroll</p>
-                  <p className="text-sm text-muted-foreground">Due: Nov 1, 2025</p>
-                </div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Welcome</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-muted-foreground">
+            Select a module from the sidebar to get started.
+          </p>
+        </CardContent>
+      </Card>
     </div>
   );
+}
+
+export default function Dashboard() {
+  const { data: userRole, isLoading } = useUserRole();
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+      </div>
+    );
+  }
+
+  switch (userRole) {
+    case "super_admin":
+    case "admin":
+      return <SuperAdminDashboard />;
+    case "accountant":
+    case "bookkeeper":
+    case "finance_officer":
+      return <AccountantDashboard />;
+    case "hr_manager":
+      return <HRDashboard />;
+    case "inventory_manager":
+      return <InventoryDashboard />;
+    default:
+      return <DefaultDashboard />;
+  }
 }
