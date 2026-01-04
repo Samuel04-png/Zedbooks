@@ -30,7 +30,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, FolderOpen, DollarSign, Calendar, Download, Pencil, Trash2 } from "lucide-react";
+import { Plus, FolderOpen, DollarSign, Calendar, Download, Pencil, Trash2, Receipt } from "lucide-react";
+import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { format } from "date-fns";
 
@@ -485,6 +486,11 @@ export default function Projects() {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-2">
+                        <Link to={`/projects/${project.id}/expenses`}>
+                          <Button variant="ghost" size="icon" title="View Expenses">
+                            <Receipt className="h-4 w-4" />
+                          </Button>
+                        </Link>
                         <Button variant="ghost" size="icon" onClick={() => handleEdit(project)}>
                           <Pencil className="h-4 w-4" />
                         </Button>

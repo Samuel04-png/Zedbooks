@@ -64,7 +64,7 @@ export default function Auth() {
     // Check if user is already logged in
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session && authView !== "reset-password") {
-        navigate("/dashboard");
+        checkCompanySetupAndRedirect(session.user.id);
       }
     });
 
@@ -73,12 +73,30 @@ export default function Auth() {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, session) => {
       if (session && authView !== "reset-password") {
-        navigate("/dashboard");
+        // Defer the redirect to avoid deadlock
+        setTimeout(() => {
+          checkCompanySetupAndRedirect(session.user.id);
+        }, 0);
       }
     });
 
     return () => subscription.unsubscribe();
   }, [navigate, authView]);
+
+  const checkCompanySetupAndRedirect = async (userId: string) => {
+    // Check if company settings exist
+    const { data: settings } = await supabase
+      .from("company_settings")
+      .select("id, company_name")
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (!settings || !settings.company_name) {
+      navigate("/setup");
+    } else {
+      navigate("/dashboard");
+    }
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -96,7 +114,7 @@ export default function Auth() {
         toast.error(error.message);
       } else if (data.session) {
         toast.success("Logged in successfully");
-        navigate("/dashboard");
+        // Auth state change handler will redirect
       }
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -120,7 +138,7 @@ export default function Auth() {
         email: validated.email,
         password: validated.password,
         options: {
-          emailRedirectTo: `${window.location.origin}/dashboard`,
+          emailRedirectTo: `${window.location.origin}/setup`,
           data: {
             organization_name: validated.organizationName,
           },
@@ -131,7 +149,8 @@ export default function Auth() {
         toast.error(error.message);
       } else if (data.user) {
         toast.success("Account created successfully!");
-        navigate("/dashboard");
+        // Redirect to setup page for new users
+        navigate("/setup");
       }
     } catch (error) {
       if (error instanceof z.ZodError) {
