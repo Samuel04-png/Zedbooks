@@ -23,7 +23,8 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Mail } from "lucide-react";
+import { useCompanySettings } from "@/hooks/useCompanySettings";
 
 const employeeSchema = z.object({
   full_name: z.string().min(1, "Full name is required"),
@@ -49,18 +50,21 @@ const employeeSchema = z.object({
   bank_name: z.string().optional(),
   bank_branch: z.string().optional(),
   bank_account_number: z.string().optional(),
+  send_invite: z.boolean().default(false),
 });
 
 type EmployeeFormData = z.infer<typeof employeeSchema>;
 
 export default function NewEmployee() {
   const navigate = useNavigate();
+  const { data: companySettings } = useCompanySettings();
 
   const form = useForm<EmployeeFormData>({
     resolver: zodResolver(employeeSchema),
     defaultValues: {
       employment_status: "active",
       has_gratuity: false,
+      send_invite: false,
     },
   });
 
@@ -72,6 +76,15 @@ export default function NewEmployee() {
       form.setValue("housing_allowance", housingAllowance);
     }
   }, [basicSalary, form]);
+
+  const generateTemporaryPassword = () => {
+    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
+    let password = "";
+    for (let i = 0; i < 12; i++) {
+      password += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return password;
+  };
 
   const onSubmit = async (data: EmployeeFormData) => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -112,7 +125,34 @@ export default function NewEmployee() {
       return;
     }
 
-    toast.success("Employee created successfully");
+    // Send invite email if option is checked and email is provided
+    if (data.send_invite && data.email) {
+      const tempPassword = generateTemporaryPassword();
+      try {
+        const { error: inviteError } = await supabase.functions.invoke("send-employee-invite", {
+          body: {
+            employeeName: data.full_name,
+            employeeEmail: data.email,
+            companyName: companySettings?.company_name || "ZedBooks",
+            temporaryPassword: tempPassword,
+            loginUrl: `${window.location.origin}/auth`,
+          },
+        });
+
+        if (inviteError) {
+          console.error("Failed to send invite:", inviteError);
+          toast.warning("Employee created but invite email failed to send");
+        } else {
+          toast.success("Employee created and invite email sent!");
+        }
+      } catch (err) {
+        console.error("Error sending invite:", err);
+        toast.warning("Employee created but invite email failed to send");
+      }
+    } else {
+      toast.success("Employee created successfully");
+    }
+
     navigate("/employees");
   };
 
@@ -505,6 +545,35 @@ export default function NewEmployee() {
               />
             </div>
           </div>
+
+          {/* Send Invite Option */}
+          {form.watch("email") && (
+            <div className="border rounded-lg p-6 space-y-6">
+              <FormField
+                control={form.control}
+                name="send_invite"
+                render={({ field }) => (
+                  <FormItem className="flex flex-row items-center justify-between rounded-lg border p-4">
+                    <div className="space-y-0.5">
+                      <FormLabel className="text-base flex items-center gap-2">
+                        <Mail className="h-4 w-4" />
+                        Send Invitation Email
+                      </FormLabel>
+                      <div className="text-sm text-muted-foreground">
+                        Send an email with login credentials to the employee
+                      </div>
+                    </div>
+                    <FormControl>
+                      <Switch
+                        checked={field.value}
+                        onCheckedChange={field.onChange}
+                      />
+                    </FormControl>
+                  </FormItem>
+                )}
+              />
+            </div>
+          )}
 
           <div className="flex justify-end gap-4">
             <Button type="button" variant="outline" onClick={() => navigate("/employees")}>

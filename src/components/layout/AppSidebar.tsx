@@ -96,6 +96,8 @@ const navigation = [
     title: "Administration",
     items: [
       { title: "Users & Roles", icon: Users, href: "/users" },
+      { title: "Audit Logs", icon: FileText, href: "/audit-logs" },
+      { title: "Company Settings", icon: Settings, href: "/company-settings" },
     ],
   },
 ];

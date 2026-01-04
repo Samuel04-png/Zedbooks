@@ -1,1 +1,7 @@
 project_id = "bivejpgxhbvyovrkxbem"
+
+[functions.send-payslip-email]
+verify_jwt = true
+
+[functions.send-employee-invite]
+verify_jwt = true
