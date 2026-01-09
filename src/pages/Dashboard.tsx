@@ -4,6 +4,7 @@ import { AccountantDashboard } from "@/components/dashboard/AccountantDashboard"
 import { BookkeeperDashboard } from "@/components/dashboard/BookkeeperDashboard";
 import { HRDashboard } from "@/components/dashboard/HRDashboard";
 import { InventoryDashboard } from "@/components/dashboard/InventoryDashboard";
+import { ProjectManagerDashboard } from "@/components/dashboard/ProjectManagerDashboard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DollarSign, TrendingUp, TrendingDown, Users, FileText } from "lucide-react";
 
@@ -81,6 +82,8 @@ export default function Dashboard() {
       return <HRDashboard />;
     case "inventory_manager":
       return <InventoryDashboard />;
+    case "project_manager":
+      return <ProjectManagerDashboard />;
     default:
       return <DefaultDashboard />;
   }
