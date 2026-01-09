@@ -15,6 +15,7 @@ import {
   Calculator,
 } from "lucide-react";
 import { UserMenu } from "./UserMenu";
+import { useUserRole, canAccessRoute, AppRole } from "@/hooks/useUserRole";
 import {
   Sidebar,
   SidebarContent,
@@ -28,7 +29,18 @@ import {
   SidebarFooter,
 } from "@/components/ui/sidebar";
 
-const navigation = [
+interface NavItem {
+  title: string;
+  icon: React.ComponentType<{ className?: string }>;
+  href: string;
+}
+
+interface NavSection {
+  title: string;
+  items: NavItem[];
+}
+
+const navigation: NavSection[] = [
   {
     title: "Overview",
     items: [
@@ -102,8 +114,50 @@ const navigation = [
   },
 ];
 
+function filterNavigationByRole(navSections: NavSection[], role: AppRole | null): NavSection[] {
+  if (!role) return [];
+  
+  // Super admin and admin see everything
+  if (role === "super_admin" || role === "admin") {
+    return navSections;
+  }
+
+  return navSections
+    .map((section) => ({
+      ...section,
+      items: section.items.filter((item) => canAccessRoute(role, item.href)),
+    }))
+    .filter((section) => section.items.length > 0);
+}
+
 export function AppSidebar() {
   const location = useLocation();
+  const { data: userRole, isLoading } = useUserRole();
+
+  const filteredNavigation = filterNavigationByRole(navigation, userRole || null);
+
+  if (isLoading) {
+    return (
+      <Sidebar>
+        <SidebarHeader className="border-b border-sidebar-border p-4">
+          <div className="flex items-center gap-2">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-sidebar-primary">
+              <Heart className="h-5 w-5 text-sidebar-primary-foreground" />
+            </div>
+            <div className="flex flex-col">
+              <span className="text-sm font-semibold text-sidebar-foreground">ZedBooks</span>
+              <span className="text-xs text-sidebar-foreground/70">Loading...</span>
+            </div>
+          </div>
+        </SidebarHeader>
+        <SidebarContent>
+          <div className="flex items-center justify-center p-8">
+            <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary"></div>
+          </div>
+        </SidebarContent>
+      </Sidebar>
+    );
+  }
 
   return (
     <Sidebar>
@@ -120,7 +174,7 @@ export function AppSidebar() {
       </SidebarHeader>
       
       <SidebarContent>
-        {navigation.map((section) => (
+        {filteredNavigation.map((section) => (
           <SidebarGroup key={section.title}>
             <SidebarGroupLabel>{section.title}</SidebarGroupLabel>
             <SidebarGroupContent>

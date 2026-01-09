@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Download, FileText, BarChart3, PieChart, TrendingUp } from "lucide-react";
+import { Download, FileText, BarChart3, PieChart, TrendingUp, Wallet, Receipt } from "lucide-react";
 
 const FinancialReports = () => {
   const [startDate, setStartDate] = useState(() => {
@@ -101,6 +101,22 @@ const FinancialReports = () => {
     enabled: !!user,
   });
 
+  // Fetch bank transactions for cashbook
+  const { data: bankTransactions = [] } = useQuery({
+    queryKey: ["bank-transactions-report", startDate, endDate],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("bank_transactions")
+        .select("*, bank_accounts(account_name)")
+        .gte("transaction_date", startDate)
+        .lte("transaction_date", endDate)
+        .order("transaction_date", { ascending: false });
+      if (error) throw error;
+      return data;
+    },
+    enabled: !!user,
+  });
+
   // Fetch inventory
   const { data: inventory = [] } = useQuery({
     queryKey: ["inventory-report"],
@@ -139,6 +155,16 @@ const FinancialReports = () => {
     acc[category] = (acc[category] || 0) + (exp.amount || 0);
     return acc;
   }, {});
+
+  // Petty cash expenses (cash payment method)
+  const pettyCashExpenses = expenses.filter(e => e.payment_method === 'cash');
+  const totalPettyCash = pettyCashExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+
+  // Cashbook calculations (all bank transactions)
+  const cashbookReceipts = bankTransactions.filter((t: any) => t.transaction_type === 'deposit' || t.transaction_type === 'receipt');
+  const cashbookPayments = bankTransactions.filter((t: any) => t.transaction_type === 'withdrawal' || t.transaction_type === 'payment');
+  const totalReceipts = cashbookReceipts.reduce((sum: number, t: any) => sum + (t.amount || 0), 0);
+  const totalPayments = cashbookPayments.reduce((sum: number, t: any) => sum + (t.amount || 0), 0);
 
   const downloadCSV = (data: any[], filename: string) => {
     if (data.length === 0) return;
@@ -191,7 +217,7 @@ const FinancialReports = () => {
       </Card>
 
       <Tabs defaultValue="income-statement">
-        <TabsList className="grid w-full grid-cols-4">
+        <TabsList className="grid w-full grid-cols-6">
           <TabsTrigger value="income-statement">
             <TrendingUp className="h-4 w-4 mr-2" />
             Income Statement
@@ -207,6 +233,14 @@ const FinancialReports = () => {
           <TabsTrigger value="trial-balance">
             <FileText className="h-4 w-4 mr-2" />
             Trial Balance
+          </TabsTrigger>
+          <TabsTrigger value="petty-cash">
+            <Receipt className="h-4 w-4 mr-2" />
+            Petty Cash
+          </TabsTrigger>
+          <TabsTrigger value="cashbook">
+            <Wallet className="h-4 w-4 mr-2" />
+            Cashbook
           </TabsTrigger>
         </TabsList>
 
@@ -532,6 +566,209 @@ const FinancialReports = () => {
                       {formatCurrency(totalRevenue + bills.filter(b => b.status !== "paid").reduce((s, b) => s + (b.total || 0), 0))}
                     </TableCell>
                   </TableRow>
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="petty-cash">
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <CardTitle>Petty Cash Report</CardTitle>
+              <Button variant="outline" size="sm" onClick={() => downloadCSV(
+                pettyCashExpenses.map(e => ({
+                  Date: e.expense_date,
+                  Description: e.description,
+                  Category: e.category || 'Uncategorized',
+                  Reference: e.reference_number || '-',
+                  Amount: e.amount,
+                })), "petty-cash-report"
+              )}>
+                <Download className="h-4 w-4 mr-2" />
+                Export CSV
+              </Button>
+            </CardHeader>
+            <CardContent>
+              <div className="mb-6 grid gap-4 md:grid-cols-3">
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-medium">Total Petty Cash Spent</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="text-2xl font-bold text-destructive">{formatCurrency(totalPettyCash)}</div>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-medium">Number of Transactions</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="text-2xl font-bold">{pettyCashExpenses.length}</div>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-medium">Average Transaction</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="text-2xl font-bold">
+                      {formatCurrency(pettyCashExpenses.length > 0 ? totalPettyCash / pettyCashExpenses.length : 0)}
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Date</TableHead>
+                    <TableHead>Description</TableHead>
+                    <TableHead>Category</TableHead>
+                    <TableHead>Reference</TableHead>
+                    <TableHead className="text-right">Amount</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {pettyCashExpenses.length > 0 ? (
+                    pettyCashExpenses.map((expense) => (
+                      <TableRow key={expense.id}>
+                        <TableCell>{expense.expense_date}</TableCell>
+                        <TableCell>{expense.description}</TableCell>
+                        <TableCell>{expense.category || 'Uncategorized'}</TableCell>
+                        <TableCell>{expense.reference_number || '-'}</TableCell>
+                        <TableCell className="text-right">{formatCurrency(expense.amount || 0)}</TableCell>
+                      </TableRow>
+                    ))
+                  ) : (
+                    <TableRow>
+                      <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
+                        No petty cash transactions in this period
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  {pettyCashExpenses.length > 0 && (
+                    <TableRow className="font-bold bg-muted/30">
+                      <TableCell colSpan={4}>TOTAL</TableCell>
+                      <TableCell className="text-right">{formatCurrency(totalPettyCash)}</TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="cashbook">
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <CardTitle>Cashbook Report</CardTitle>
+              <Button variant="outline" size="sm" onClick={() => downloadCSV(
+                bankTransactions.map((t: any) => ({
+                  Date: t.transaction_date,
+                  Account: t.bank_accounts?.account_name || '-',
+                  Description: t.description || '-',
+                  Reference: t.reference_number || '-',
+                  Type: t.transaction_type,
+                  Receipt: ['deposit', 'receipt'].includes(t.transaction_type) ? t.amount : '',
+                  Payment: ['withdrawal', 'payment'].includes(t.transaction_type) ? t.amount : '',
+                })), "cashbook-report"
+              )}>
+                <Download className="h-4 w-4 mr-2" />
+                Export CSV
+              </Button>
+            </CardHeader>
+            <CardContent>
+              <div className="mb-6 grid gap-4 md:grid-cols-4">
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-medium">Opening Balance</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="text-2xl font-bold">{formatCurrency(totalCashBalance - totalReceipts + totalPayments)}</div>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-medium">Total Receipts</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="text-2xl font-bold text-green-600">{formatCurrency(totalReceipts)}</div>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-medium">Total Payments</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="text-2xl font-bold text-destructive">{formatCurrency(totalPayments)}</div>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-medium">Closing Balance</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="text-2xl font-bold">{formatCurrency(totalCashBalance)}</div>
+                  </CardContent>
+                </Card>
+              </div>
+
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Date</TableHead>
+                    <TableHead>Account</TableHead>
+                    <TableHead>Description</TableHead>
+                    <TableHead>Reference</TableHead>
+                    <TableHead className="text-right text-green-600">Receipt</TableHead>
+                    <TableHead className="text-right text-destructive">Payment</TableHead>
+                    <TableHead className="text-right">Balance</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {bankTransactions.length > 0 ? (
+                    (() => {
+                      let runningBalance = totalCashBalance - totalReceipts + totalPayments;
+                      return [...bankTransactions].reverse().map((transaction: any) => {
+                        const isReceipt = ['deposit', 'receipt'].includes(transaction.transaction_type);
+                        if (isReceipt) {
+                          runningBalance += transaction.amount || 0;
+                        } else {
+                          runningBalance -= transaction.amount || 0;
+                        }
+                        return (
+                          <TableRow key={transaction.id}>
+                            <TableCell>{transaction.transaction_date}</TableCell>
+                            <TableCell>{transaction.bank_accounts?.account_name || '-'}</TableCell>
+                            <TableCell>{transaction.description || '-'}</TableCell>
+                            <TableCell>{transaction.reference_number || '-'}</TableCell>
+                            <TableCell className="text-right text-green-600">
+                              {isReceipt ? formatCurrency(transaction.amount || 0) : '-'}
+                            </TableCell>
+                            <TableCell className="text-right text-destructive">
+                              {!isReceipt ? formatCurrency(transaction.amount || 0) : '-'}
+                            </TableCell>
+                            <TableCell className="text-right font-medium">{formatCurrency(runningBalance)}</TableCell>
+                          </TableRow>
+                        );
+                      }).reverse();
+                    })()
+                  ) : (
+                    <TableRow>
+                      <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
+                        No bank transactions in this period
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  {bankTransactions.length > 0 && (
+                    <TableRow className="font-bold bg-muted/30">
+                      <TableCell colSpan={4}>TOTALS</TableCell>
+                      <TableCell className="text-right text-green-600">{formatCurrency(totalReceipts)}</TableCell>
+                      <TableCell className="text-right text-destructive">{formatCurrency(totalPayments)}</TableCell>
+                      <TableCell className="text-right">{formatCurrency(totalCashBalance)}</TableCell>
+                    </TableRow>
+                  )}
                 </TableBody>
               </Table>
             </CardContent>
