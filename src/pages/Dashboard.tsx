@@ -1,10 +1,11 @@
 import { useUserRole } from "@/hooks/useUserRole";
 import { SuperAdminDashboard } from "@/components/dashboard/SuperAdminDashboard";
 import { AccountantDashboard } from "@/components/dashboard/AccountantDashboard";
+import { BookkeeperDashboard } from "@/components/dashboard/BookkeeperDashboard";
 import { HRDashboard } from "@/components/dashboard/HRDashboard";
 import { InventoryDashboard } from "@/components/dashboard/InventoryDashboard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { DollarSign, TrendingUp, TrendingDown, Users, FileText, AlertCircle } from "lucide-react";
+import { DollarSign, TrendingUp, TrendingDown, Users, FileText } from "lucide-react";
 
 function DefaultDashboard() {
   const metrics = [
@@ -72,9 +73,10 @@ export default function Dashboard() {
     case "admin":
       return <SuperAdminDashboard />;
     case "accountant":
-    case "bookkeeper":
     case "finance_officer":
       return <AccountantDashboard />;
+    case "bookkeeper":
+      return <BookkeeperDashboard />;
     case "hr_manager":
       return <HRDashboard />;
     case "inventory_manager":
