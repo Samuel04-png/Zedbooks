@@ -29,9 +29,12 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Search, Pencil, Trash2 } from "lucide-react";
+import { Plus, Search, Pencil, Trash2, Upload, Download } from "lucide-react";
 import { toast } from "sonner";
 import { format } from "date-fns";
+import { ImportDialog } from "@/components/shared/ImportDialog";
+import { ImportColumn, transformers } from "@/utils/importFromExcel";
+import { exportToCSV, ExportColumn, formatCurrencyForExport, formatDateForExport } from "@/utils/exportToExcel";
 
 interface Expense {
   id: string;
@@ -61,10 +64,33 @@ const expenseCategories = [
   "Other",
 ];
 
+const expenseImportColumns: ImportColumn[] = [
+  { header: "Description", key: "description", required: true, transform: transformers.trim },
+  { header: "Category", key: "category", transform: transformers.trim },
+  { header: "Amount", key: "amount", required: true, transform: transformers.toNumber },
+  { header: "Date", key: "expense_date", required: true, transform: transformers.toDate },
+  { header: "Vendor", key: "vendor_name", transform: transformers.trim },
+  { header: "Payment Method", key: "payment_method", transform: transformers.trim },
+  { header: "Reference", key: "reference_number", transform: transformers.trim },
+  { header: "Notes", key: "notes", transform: transformers.trim },
+];
+
+const expenseExportColumns: ExportColumn[] = [
+  { header: "Date", key: "expense_date", formatter: formatDateForExport },
+  { header: "Description", key: "description" },
+  { header: "Category", key: "category" },
+  { header: "Vendor", key: "vendor_name" },
+  { header: "Amount", key: "amount", formatter: formatCurrencyForExport },
+  { header: "Payment Method", key: "payment_method" },
+  { header: "Reference", key: "reference_number" },
+  { header: "Notes", key: "notes" },
+];
+
 export default function Expenses() {
   const queryClient = useQueryClient();
   const [searchQuery, setSearchQuery] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [isImportOpen, setIsImportOpen] = useState(false);
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
 
   const [formData, setFormData] = useState({
@@ -218,6 +244,26 @@ export default function Expenses() {
     0
   ) || 0;
 
+  const handleImport = async (data: Record<string, unknown>[]) => {
+    for (const item of data) {
+      await supabase.from("expenses").insert({
+        ...item,
+        user_id: user?.id,
+      } as any);
+    }
+    queryClient.invalidateQueries({ queryKey: ["expenses"] });
+    toast.success(`Imported ${data.length} expenses`);
+  };
+
+  const handleExport = () => {
+    if (!expenses || expenses.length === 0) {
+      toast.error("No expenses to export");
+      return;
+    }
+    exportToCSV(expenses as any, expenseExportColumns, "expenses-export");
+    toast.success("Expenses exported");
+  };
+
   if (isLoading) {
     return <div className="flex items-center justify-center h-64">Loading...</div>;
   }
@@ -231,16 +277,25 @@ export default function Expenses() {
             Track and manage business expenses
           </p>
         </div>
-        <Dialog open={isDialogOpen} onOpenChange={(open) => {
-          setIsDialogOpen(open);
-          if (!open) resetForm();
-        }}>
-          <DialogTrigger asChild>
-            <Button>
-              <Plus className="mr-2 h-4 w-4" />
-              Add Expense
-            </Button>
-          </DialogTrigger>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => setIsImportOpen(true)}>
+            <Upload className="mr-2 h-4 w-4" />
+            Import
+          </Button>
+          <Button variant="outline" onClick={handleExport}>
+            <Download className="mr-2 h-4 w-4" />
+            Export
+          </Button>
+          <Dialog open={isDialogOpen} onOpenChange={(open) => {
+            setIsDialogOpen(open);
+            if (!open) resetForm();
+          }}>
+            <DialogTrigger asChild>
+              <Button>
+                <Plus className="mr-2 h-4 w-4" />
+                Add Expense
+              </Button>
+            </DialogTrigger>
           <DialogContent className="max-w-lg">
             <DialogHeader>
               <DialogTitle>
@@ -370,7 +425,17 @@ export default function Expenses() {
             </form>
           </DialogContent>
         </Dialog>
+        </div>
       </div>
+
+      <ImportDialog
+        open={isImportOpen}
+        onOpenChange={setIsImportOpen}
+        title="Import Expenses"
+        description="Upload a CSV file to import expenses in bulk"
+        columns={expenseImportColumns}
+        onImport={handleImport}
+      />
 
       <div className="grid gap-4 md:grid-cols-3">
         <Card>

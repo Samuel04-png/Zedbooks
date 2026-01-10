@@ -21,9 +21,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
-import { Plus, Search, Pencil, Trash2, FileText, ClipboardList } from "lucide-react";
+import { Plus, Search, Pencil, Trash2, FileText, ClipboardList, Upload, Download } from "lucide-react";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
+import { ImportDialog } from "@/components/shared/ImportDialog";
+import { ImportColumn, transformers } from "@/utils/importFromExcel";
+import { exportToCSV, ExportColumn } from "@/utils/exportToExcel";
 
 interface Customer {
   id: string;
@@ -38,11 +41,34 @@ interface Customer {
   grant_reference: string | null;
 }
 
+const customerImportColumns: ImportColumn[] = [
+  { header: "Name", key: "name", required: true, transform: transformers.trim },
+  { header: "Email", key: "email", transform: transformers.trim },
+  { header: "Phone", key: "phone", transform: transformers.trim },
+  { header: "Address", key: "address", transform: transformers.trim },
+  { header: "TPIN", key: "tpin", transform: transformers.trim },
+  { header: "Contact Person", key: "contact_person", transform: transformers.trim },
+  { header: "Notes", key: "notes", transform: transformers.trim },
+  { header: "Grant Reference", key: "grant_reference", transform: transformers.trim },
+];
+
+const customerExportColumns: ExportColumn[] = [
+  { header: "Name", key: "name" },
+  { header: "Email", key: "email" },
+  { header: "Phone", key: "phone" },
+  { header: "TPIN", key: "tpin" },
+  { header: "Contact Person", key: "contact_person" },
+  { header: "Address", key: "address" },
+  { header: "Grant Reference", key: "grant_reference" },
+  { header: "Notes", key: "notes" },
+];
+
 export default function Customers() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [searchQuery, setSearchQuery] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [isImportOpen, setIsImportOpen] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
   const [formData, setFormData] = useState({
     name: "",
@@ -174,6 +200,34 @@ export default function Customers() {
       customer.phone?.includes(searchQuery)
   );
 
+  const handleImport = async (data: Record<string, unknown>[]) => {
+    for (const item of data) {
+      const insertData = {
+        name: item.name as string,
+        email: item.email as string || null,
+        phone: item.phone as string || null,
+        address: item.address as string || null,
+        tpin: item.tpin as string || null,
+        contact_person: item.contact_person as string || null,
+        notes: item.notes as string || null,
+        grant_reference: item.grant_reference as string || null,
+        user_id: user?.id as string,
+      };
+      await supabase.from("customers").insert(insertData);
+    }
+    queryClient.invalidateQueries({ queryKey: ["customers"] });
+    toast.success(`Imported ${data.length} customers`);
+  };
+
+  const handleExport = () => {
+    if (!customers || customers.length === 0) {
+      toast.error("No customers to export");
+      return;
+    }
+    exportToCSV(customers as any, customerExportColumns, "customers-export");
+    toast.success("Customers exported");
+  };
+
   if (isLoading) {
     return <div>Loading...</div>;
   }
@@ -187,16 +241,25 @@ export default function Customers() {
             Manage your customers and their information
           </p>
         </div>
-        <Dialog open={isDialogOpen} onOpenChange={(open) => {
-          setIsDialogOpen(open);
-          if (!open) resetForm();
-        }}>
-          <DialogTrigger asChild>
-            <Button>
-              <Plus className="mr-2 h-4 w-4" />
-              Add Customer
-            </Button>
-          </DialogTrigger>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => setIsImportOpen(true)}>
+            <Upload className="mr-2 h-4 w-4" />
+            Import
+          </Button>
+          <Button variant="outline" onClick={handleExport}>
+            <Download className="mr-2 h-4 w-4" />
+            Export
+          </Button>
+          <Dialog open={isDialogOpen} onOpenChange={(open) => {
+            setIsDialogOpen(open);
+            if (!open) resetForm();
+          }}>
+            <DialogTrigger asChild>
+              <Button>
+                <Plus className="mr-2 h-4 w-4" />
+                Add Customer
+              </Button>
+            </DialogTrigger>
           <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>
@@ -313,7 +376,17 @@ export default function Customers() {
             </form>
           </DialogContent>
         </Dialog>
+        </div>
       </div>
+
+      <ImportDialog
+        open={isImportOpen}
+        onOpenChange={setIsImportOpen}
+        title="Import Customers"
+        description="Upload a CSV file to import customers in bulk"
+        columns={customerImportColumns}
+        onImport={handleImport}
+      />
 
       <Card>
         <CardHeader>
