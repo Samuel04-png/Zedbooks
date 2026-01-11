@@ -44,6 +44,10 @@ import Projects from "./pages/Projects";
 import ProjectExpenses from "./pages/ProjectExpenses";
 import AuditLogs from "./pages/AuditLogs";
 import CompanySetup from "./pages/CompanySetup";
+import Landing from "./pages/Landing";
+import Donors from "./pages/Donors";
+import AccountsPayable from "./pages/AccountsPayable";
+import AccountsReceivable from "./pages/AccountsReceivable";
 
 const queryClient = new QueryClient();
 
@@ -54,7 +58,7 @@ const App = () => (
       <Sonner />
       <BrowserRouter>
         <Routes>
-          <Route path="/" element={<Navigate to="/auth" replace />} />
+          <Route path="/" element={<Landing />} />
           <Route path="/auth" element={<Auth />} />
           <Route path="/setup" element={<ProtectedRoute><CompanySetup /></ProtectedRoute>} />
           
@@ -87,7 +91,9 @@ const App = () => (
           <Route path="/time-tracking" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><TimeTracking /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
           <Route path="/projects" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><Projects /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
           <Route path="/projects/:projectId/expenses" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><ProjectExpenses /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
-          <Route path="/donors" element={<ProtectedRoute><AppLayout><ComingSoon title="Donors & Grants" /></AppLayout></ProtectedRoute>} />
+          <Route path="/donors" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><Donors /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+          <Route path="/accounts-payable" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><AccountsPayable /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+          <Route path="/accounts-receivable" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><AccountsReceivable /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
           <Route path="/company-settings" element={<ProtectedRoute><AppLayout><RoleProtectedRoute allowedRoles={["super_admin", "admin"]}><CompanySettings /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
           <Route path="/reports" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><FinancialReports /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
           <Route path="/payroll-reports" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><PayrollReports /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />

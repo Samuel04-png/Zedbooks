@@ -21,9 +21,11 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
-import { Plus, Search, Pencil, Trash2, FileText, ClipboardList } from "lucide-react";
+import { Plus, Search, Pencil, Trash2, FileText, ClipboardList, Download, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
+import { exportToCSV } from "@/utils/exportToExcel";
+import { ImportDialog } from "@/components/shared/ImportDialog";
 
 interface Vendor {
   id: string;
@@ -44,6 +46,7 @@ export default function Vendors() {
   const queryClient = useQueryClient();
   const [searchQuery, setSearchQuery] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [showImportDialog, setShowImportDialog] = useState(false);
   const [editingVendor, setEditingVendor] = useState<Vendor | null>(null);
   const [formData, setFormData] = useState({
     name: "",
@@ -178,6 +181,53 @@ export default function Vendors() {
       vendor.phone?.includes(searchQuery)
   );
 
+  const vendorImportColumns = [
+    { key: "name", header: "Vendor Name", required: true },
+    { key: "email", header: "Email", required: false },
+    { key: "phone", header: "Phone", required: false },
+    { key: "address", header: "Address", required: false },
+    { key: "tpin", header: "TPIN", required: false },
+    { key: "contact_person", header: "Contact Person", required: false },
+    { key: "bank_name", header: "Bank Name", required: false },
+    { key: "bank_account_number", header: "Bank Account", required: false },
+    { key: "payment_terms", header: "Payment Terms", required: false }
+  ];
+
+  const handleVendorImport = async (data: any[]) => {
+    for (const row of data) {
+      const { error } = await supabase.from("vendors").insert({
+        name: row.name,
+        email: row.email || null,
+        phone: row.phone || null,
+        address: row.address || null,
+        tpin: row.tpin || null,
+        contact_person: row.contact_person || null,
+        bank_name: row.bank_name || null,
+        bank_account_number: row.bank_account_number || null,
+        payment_terms: row.payment_terms || null,
+        user_id: user?.id,
+      });
+      if (error) throw error;
+    }
+    queryClient.invalidateQueries({ queryKey: ["vendors"] });
+  };
+
+  const exportVendors = () => {
+    if (!filteredVendors?.length) return;
+    const columns = [
+      { header: "Vendor Name", key: "name" },
+      { header: "Contact Person", key: "contact_person" },
+      { header: "Email", key: "email" },
+      { header: "Phone", key: "phone" },
+      { header: "Address", key: "address" },
+      { header: "TPIN", key: "tpin" },
+      { header: "Bank Name", key: "bank_name" },
+      { header: "Bank Account", key: "bank_account_number" },
+      { header: "Payment Terms", key: "payment_terms" }
+    ];
+    exportToCSV(filteredVendors as any, columns, "vendors-export");
+  };
+
   if (isLoading) {
     return <div className="flex items-center justify-center h-64">Loading...</div>;
   }
@@ -191,16 +241,25 @@ export default function Vendors() {
             Manage your suppliers and vendors
           </p>
         </div>
-        <Dialog open={isDialogOpen} onOpenChange={(open) => {
-          setIsDialogOpen(open);
-          if (!open) resetForm();
-        }}>
-          <DialogTrigger asChild>
-            <Button>
-              <Plus className="mr-2 h-4 w-4" />
-              Add Vendor
-            </Button>
-          </DialogTrigger>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => setShowImportDialog(true)}>
+            <Upload className="mr-2 h-4 w-4" />
+            Import
+          </Button>
+          <Button variant="outline" onClick={exportVendors}>
+            <Download className="mr-2 h-4 w-4" />
+            Export
+          </Button>
+          <Dialog open={isDialogOpen} onOpenChange={(open) => {
+            setIsDialogOpen(open);
+            if (!open) resetForm();
+          }}>
+            <DialogTrigger asChild>
+              <Button>
+                <Plus className="mr-2 h-4 w-4" />
+                Add Vendor
+              </Button>
+            </DialogTrigger>
           <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>
@@ -409,6 +468,15 @@ export default function Vendors() {
           </Table>
         </CardContent>
       </Card>
+
+      <ImportDialog
+        open={showImportDialog}
+        onOpenChange={setShowImportDialog}
+        onImport={handleVendorImport}
+        columns={vendorImportColumns}
+        title="Import Vendors"
+      />
+    </div>
     </div>
   );
 }
