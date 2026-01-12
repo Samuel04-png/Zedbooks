@@ -33,6 +33,7 @@ const ROLE_DESCRIPTIONS: Record<AppRole, { label: string; description: string; c
   hr_manager: { label: "HR Manager", description: "Can manage employees and payroll", color: "bg-purple-500" },
   project_manager: { label: "Project Manager", description: "Can manage projects and grants", color: "bg-indigo-500" },
   auditor: { label: "Auditor", description: "Read-only access to all financial records for auditing", color: "bg-yellow-500" },
+  staff: { label: "Staff", description: "Basic access for regular employees", color: "bg-slate-500" },
   read_only: { label: "Read Only", description: "Can only view data, no editing permissions", color: "bg-gray-500" },
 };
 
@@ -46,6 +47,7 @@ const ROLE_ORDER: AppRole[] = [
   "hr_manager",
   "project_manager",
   "auditor",
+  "staff",
   "read_only",
 ];
 
