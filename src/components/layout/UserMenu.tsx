@@ -8,31 +8,16 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { supabase } from "@/integrations/supabase/client";
 import { useNavigate } from "react-router-dom";
-import { toast } from "sonner";
-import { useEffect, useState } from "react";
+import { useAuth } from "@/contexts/AuthContext";
 
 export function UserMenu() {
   const navigate = useNavigate();
-  const [userEmail, setUserEmail] = useState<string>("");
-
-  useEffect(() => {
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      if (user?.email) {
-        setUserEmail(user.email);
-      }
-    });
-  }, []);
+  const { user, signOut } = useAuth();
 
   const handleLogout = async () => {
-    const { error } = await supabase.auth.signOut();
-    if (error) {
-      toast.error("Failed to log out");
-    } else {
-      toast.success("Logged out successfully");
-      navigate("/auth");
-    }
+    await signOut();
+    navigate("/auth");
   };
 
   return (
@@ -47,7 +32,7 @@ export function UserMenu() {
           <div className="flex flex-col">
             <span className="text-sm">My Account</span>
             <span className="text-xs font-normal text-muted-foreground">
-              {userEmail}
+              {user?.email || ""}
             </span>
           </div>
         </DropdownMenuLabel>

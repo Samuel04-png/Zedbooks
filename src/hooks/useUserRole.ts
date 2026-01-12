@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/contexts/AuthContext";
 
 export type AppRole = 
   | "admin"
@@ -11,7 +12,8 @@ export type AppRole =
   | "super_admin"
   | "accountant"
   | "bookkeeper"
-  | "inventory_manager";
+  | "inventory_manager"
+  | "staff";
 
 export interface UserRole {
   role: AppRole;
@@ -19,10 +21,11 @@ export interface UserRole {
 }
 
 export function useUserRole() {
+  const { user, isAuthenticated } = useAuth();
+  
   return useQuery({
-    queryKey: ["user-role"],
+    queryKey: ["user-role", user?.id],
     queryFn: async () => {
-      const { data: { user } } = await supabase.auth.getUser();
       if (!user) return null;
 
       const { data, error } = await supabase
@@ -38,6 +41,8 @@ export function useUserRole() {
 
       return data?.role as AppRole | null;
     },
+    enabled: isAuthenticated && !!user,
+    staleTime: 1000 * 60 * 5, // Cache for 5 minutes
   });
 }
 
@@ -88,6 +93,9 @@ export const rolePermissions: Record<AppRole, string[]> = {
   ],
   read_only: [
     "dashboard"
+  ],
+  staff: [
+    "dashboard", "time-tracking"
   ],
 };
 
