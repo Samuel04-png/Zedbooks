@@ -5,3 +5,12 @@ verify_jwt = true
 
 [functions.send-employee-invite]
 verify_jwt = true
+
+[functions.process-approval]
+verify_jwt = true
+
+[functions.validate-transaction-date]
+verify_jwt = true
+
+[functions.create-approval-request]
+verify_jwt = true
