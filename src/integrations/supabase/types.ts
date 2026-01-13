@@ -80,6 +80,115 @@ export type Database = {
           },
         ]
       }
+      approval_requests: {
+        Row: {
+          amount: number | null
+          approved_at: string | null
+          approved_by: string | null
+          company_id: string | null
+          created_at: string
+          current_approver_role: Database["public"]["Enums"]["app_role"]
+          id: string
+          notes: string | null
+          record_id: string
+          record_table: string
+          rejection_reason: string | null
+          requested_by: string
+          status: string
+          updated_at: string
+          workflow_type: string
+        }
+        Insert: {
+          amount?: number | null
+          approved_at?: string | null
+          approved_by?: string | null
+          company_id?: string | null
+          created_at?: string
+          current_approver_role: Database["public"]["Enums"]["app_role"]
+          id?: string
+          notes?: string | null
+          record_id: string
+          record_table: string
+          rejection_reason?: string | null
+          requested_by: string
+          status?: string
+          updated_at?: string
+          workflow_type: string
+        }
+        Update: {
+          amount?: number | null
+          approved_at?: string | null
+          approved_by?: string | null
+          company_id?: string | null
+          created_at?: string
+          current_approver_role?: Database["public"]["Enums"]["app_role"]
+          id?: string
+          notes?: string | null
+          record_id?: string
+          record_table?: string
+          rejection_reason?: string | null
+          requested_by?: string
+          status?: string
+          updated_at?: string
+          workflow_type?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "approval_requests_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      approval_workflows: {
+        Row: {
+          approval_order: number
+          company_id: string | null
+          created_at: string
+          id: string
+          is_active: boolean
+          max_amount: number | null
+          min_amount: number | null
+          required_role: Database["public"]["Enums"]["app_role"]
+          updated_at: string
+          workflow_type: string
+        }
+        Insert: {
+          approval_order?: number
+          company_id?: string | null
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          max_amount?: number | null
+          min_amount?: number | null
+          required_role: Database["public"]["Enums"]["app_role"]
+          updated_at?: string
+          workflow_type: string
+        }
+        Update: {
+          approval_order?: number
+          company_id?: string | null
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          max_amount?: number | null
+          min_amount?: number | null
+          required_role?: Database["public"]["Enums"]["app_role"]
+          updated_at?: string
+          workflow_type?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "approval_workflows_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       audit_logs: {
         Row: {
           action: string
@@ -194,8 +303,11 @@ export type Database = {
           amount: number
           bank_account_id: string
           created_at: string
+          deleted_at: string | null
+          deleted_by: string | null
           description: string | null
           id: string
+          is_deleted: boolean
           is_reconciled: boolean | null
           reconciled_date: string | null
           reference_number: string | null
@@ -207,8 +319,11 @@ export type Database = {
           amount: number
           bank_account_id: string
           created_at?: string
+          deleted_at?: string | null
+          deleted_by?: string | null
           description?: string | null
           id?: string
+          is_deleted?: boolean
           is_reconciled?: boolean | null
           reconciled_date?: string | null
           reference_number?: string | null
@@ -220,8 +335,11 @@ export type Database = {
           amount?: number
           bank_account_id?: string
           created_at?: string
+          deleted_at?: string | null
+          deleted_by?: string | null
           description?: string | null
           id?: string
+          is_deleted?: boolean
           is_reconciled?: boolean | null
           reconciled_date?: string | null
           reference_number?: string | null
@@ -241,13 +359,18 @@ export type Database = {
       }
       bills: {
         Row: {
+          approval_status: string | null
           bill_date: string
           bill_number: string
           company_id: string | null
           created_at: string
+          deleted_at: string | null
+          deleted_by: string | null
           description: string | null
           due_date: string | null
           id: string
+          is_deleted: boolean
+          is_locked: boolean
           paid_date: string | null
           status: string | null
           subtotal: number
@@ -258,13 +381,18 @@ export type Database = {
           vendor_id: string | null
         }
         Insert: {
+          approval_status?: string | null
           bill_date?: string
           bill_number: string
           company_id?: string | null
           created_at?: string
+          deleted_at?: string | null
+          deleted_by?: string | null
           description?: string | null
           due_date?: string | null
           id?: string
+          is_deleted?: boolean
+          is_locked?: boolean
           paid_date?: string | null
           status?: string | null
           subtotal?: number
@@ -275,13 +403,18 @@ export type Database = {
           vendor_id?: string | null
         }
         Update: {
+          approval_status?: string | null
           bill_date?: string
           bill_number?: string
           company_id?: string | null
           created_at?: string
+          deleted_at?: string | null
+          deleted_by?: string | null
           description?: string | null
           due_date?: string | null
           id?: string
+          is_deleted?: boolean
+          is_locked?: boolean
           paid_date?: string | null
           status?: string | null
           subtotal?: number
@@ -304,6 +437,74 @@ export type Database = {
             columns: ["vendor_id"]
             isOneToOne: false
             referencedRelation: "vendors"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      cash_reconciliations: {
+        Row: {
+          approved_at: string | null
+          approved_by: string | null
+          cash_paid: number
+          cash_received: number
+          closing_balance: number
+          company_id: string | null
+          created_at: string
+          id: string
+          notes: string | null
+          opening_balance: number
+          physical_count: number
+          prepared_by: string
+          reconciliation_date: string
+          status: string
+          updated_at: string
+          variance: number
+          variance_reason: string | null
+        }
+        Insert: {
+          approved_at?: string | null
+          approved_by?: string | null
+          cash_paid?: number
+          cash_received?: number
+          closing_balance?: number
+          company_id?: string | null
+          created_at?: string
+          id?: string
+          notes?: string | null
+          opening_balance?: number
+          physical_count?: number
+          prepared_by: string
+          reconciliation_date: string
+          status?: string
+          updated_at?: string
+          variance?: number
+          variance_reason?: string | null
+        }
+        Update: {
+          approved_at?: string | null
+          approved_by?: string | null
+          cash_paid?: number
+          cash_received?: number
+          closing_balance?: number
+          company_id?: string | null
+          created_at?: string
+          id?: string
+          notes?: string | null
+          opening_balance?: number
+          physical_count?: number
+          prepared_by?: string
+          reconciliation_date?: string
+          status?: string
+          updated_at?: string
+          variance?: number
+          variance_reason?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cash_reconciliations_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
             referencedColumns: ["id"]
           },
         ]
@@ -564,6 +765,50 @@ export type Database = {
           },
         ]
       }
+      deleted_records: {
+        Row: {
+          can_restore: boolean
+          company_id: string | null
+          deleted_at: string
+          deleted_by: string
+          deletion_reason: string | null
+          id: string
+          original_id: string
+          original_table: string
+          record_data: Json
+        }
+        Insert: {
+          can_restore?: boolean
+          company_id?: string | null
+          deleted_at?: string
+          deleted_by: string
+          deletion_reason?: string | null
+          id?: string
+          original_id: string
+          original_table: string
+          record_data: Json
+        }
+        Update: {
+          can_restore?: boolean
+          company_id?: string | null
+          deleted_at?: string
+          deleted_by?: string
+          deletion_reason?: string | null
+          id?: string
+          original_id?: string
+          original_table?: string
+          record_data?: Json
+        }
+        Relationships: [
+          {
+            foreignKeyName: "deleted_records_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       employees: {
         Row: {
           bank_account_number: string | null
@@ -668,12 +913,17 @@ export type Database = {
       expenses: {
         Row: {
           amount: number
+          approval_status: string | null
           category: string | null
           company_id: string | null
           created_at: string
+          deleted_at: string | null
+          deleted_by: string | null
           description: string
           expense_date: string
           id: string
+          is_deleted: boolean
+          is_locked: boolean
           notes: string | null
           payment_method: string | null
           reference_number: string | null
@@ -683,12 +933,17 @@ export type Database = {
         }
         Insert: {
           amount?: number
+          approval_status?: string | null
           category?: string | null
           company_id?: string | null
           created_at?: string
+          deleted_at?: string | null
+          deleted_by?: string | null
           description: string
           expense_date?: string
           id?: string
+          is_deleted?: boolean
+          is_locked?: boolean
           notes?: string | null
           payment_method?: string | null
           reference_number?: string | null
@@ -698,12 +953,17 @@ export type Database = {
         }
         Update: {
           amount?: number
+          approval_status?: string | null
           category?: string | null
           company_id?: string | null
           created_at?: string
+          deleted_at?: string | null
+          deleted_by?: string | null
           description?: string
           expense_date?: string
           id?: string
+          is_deleted?: boolean
+          is_locked?: boolean
           notes?: string | null
           payment_method?: string | null
           reference_number?: string | null
@@ -820,14 +1080,20 @@ export type Database = {
       }
       invoices: {
         Row: {
+          approval_status: string | null
           company_id: string | null
           created_at: string
           customer_id: string | null
+          deleted_at: string | null
+          deleted_by: string | null
           due_date: string | null
           grant_reference: string | null
           id: string
           invoice_date: string
           invoice_number: string
+          is_deleted: boolean
+          is_locked: boolean
+          locked_at: string | null
           notes: string | null
           project_reference: string | null
           status: string | null
@@ -839,14 +1105,20 @@ export type Database = {
           vat_amount: number | null
         }
         Insert: {
+          approval_status?: string | null
           company_id?: string | null
           created_at?: string
           customer_id?: string | null
+          deleted_at?: string | null
+          deleted_by?: string | null
           due_date?: string | null
           grant_reference?: string | null
           id?: string
           invoice_date?: string
           invoice_number: string
+          is_deleted?: boolean
+          is_locked?: boolean
+          locked_at?: string | null
           notes?: string | null
           project_reference?: string | null
           status?: string | null
@@ -858,14 +1130,20 @@ export type Database = {
           vat_amount?: number | null
         }
         Update: {
+          approval_status?: string | null
           company_id?: string | null
           created_at?: string
           customer_id?: string | null
+          deleted_at?: string | null
+          deleted_by?: string | null
           due_date?: string | null
           grant_reference?: string | null
           id?: string
           invoice_date?: string
           invoice_number?: string
+          is_deleted?: boolean
+          is_locked?: boolean
+          locked_at?: string | null
           notes?: string | null
           project_reference?: string | null
           status?: string | null
@@ -895,33 +1173,48 @@ export type Database = {
       }
       journal_entries: {
         Row: {
+          approval_status: string | null
           company_id: string | null
           created_at: string
+          deleted_at: string | null
+          deleted_by: string | null
           description: string | null
           entry_date: string
           id: string
+          is_deleted: boolean
+          is_locked: boolean
           is_posted: boolean | null
           reference_number: string | null
           updated_at: string
           user_id: string
         }
         Insert: {
+          approval_status?: string | null
           company_id?: string | null
           created_at?: string
+          deleted_at?: string | null
+          deleted_by?: string | null
           description?: string | null
           entry_date?: string
           id?: string
+          is_deleted?: boolean
+          is_locked?: boolean
           is_posted?: boolean | null
           reference_number?: string | null
           updated_at?: string
           user_id: string
         }
         Update: {
+          approval_status?: string | null
           company_id?: string | null
           created_at?: string
+          deleted_at?: string | null
+          deleted_by?: string | null
           description?: string | null
           entry_date?: string
           id?: string
+          is_deleted?: boolean
+          is_locked?: boolean
           is_posted?: boolean | null
           reference_number?: string | null
           updated_at?: string
@@ -978,6 +1271,53 @@ export type Database = {
             columns: ["journal_entry_id"]
             isOneToOne: false
             referencedRelation: "journal_entries"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      notifications: {
+        Row: {
+          company_id: string | null
+          created_at: string
+          id: string
+          is_read: boolean
+          message: string
+          related_id: string | null
+          related_table: string | null
+          title: string
+          type: string
+          user_id: string
+        }
+        Insert: {
+          company_id?: string | null
+          created_at?: string
+          id?: string
+          is_read?: boolean
+          message: string
+          related_id?: string | null
+          related_table?: string | null
+          title: string
+          type?: string
+          user_id: string
+        }
+        Update: {
+          company_id?: string | null
+          created_at?: string
+          id?: string
+          is_read?: boolean
+          message?: string
+          related_id?: string | null
+          related_table?: string | null
+          title?: string
+          type?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "notifications_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
             referencedColumns: ["id"]
           },
         ]
@@ -1123,7 +1463,11 @@ export type Database = {
           approved_by: string | null
           company_id: string | null
           created_at: string
+          deleted_at: string | null
+          deleted_by: string | null
           id: string
+          is_deleted: boolean
+          is_locked: boolean
           notes: string | null
           period_end: string
           period_start: string
@@ -1140,7 +1484,11 @@ export type Database = {
           approved_by?: string | null
           company_id?: string | null
           created_at?: string
+          deleted_at?: string | null
+          deleted_by?: string | null
           id?: string
+          is_deleted?: boolean
+          is_locked?: boolean
           notes?: string | null
           period_end: string
           period_start: string
@@ -1157,7 +1505,11 @@ export type Database = {
           approved_by?: string | null
           company_id?: string | null
           created_at?: string
+          deleted_at?: string | null
+          deleted_by?: string | null
           id?: string
+          is_deleted?: boolean
+          is_locked?: boolean
           notes?: string | null
           period_end?: string
           period_start?: string
@@ -1172,6 +1524,53 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "payroll_runs_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      period_locks: {
+        Row: {
+          company_id: string | null
+          created_at: string
+          id: string
+          is_active: boolean
+          lock_reason: string | null
+          locked_at: string
+          locked_by: string
+          period_end: string
+          period_start: string
+          period_type: string
+        }
+        Insert: {
+          company_id?: string | null
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          lock_reason?: string | null
+          locked_at?: string
+          locked_by: string
+          period_end: string
+          period_start: string
+          period_type?: string
+        }
+        Update: {
+          company_id?: string | null
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          lock_reason?: string | null
+          locked_at?: string
+          locked_by?: string
+          period_end?: string
+          period_start?: string
+          period_type?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "period_locks_company_id_fkey"
             columns: ["company_id"]
             isOneToOne: false
             referencedRelation: "companies"
@@ -1494,8 +1893,11 @@ export type Database = {
       stock_movements: {
         Row: {
           created_at: string
+          deleted_at: string | null
+          deleted_by: string | null
           id: string
           inventory_item_id: string
+          is_deleted: boolean
           movement_date: string
           movement_type: string
           notes: string | null
@@ -1505,8 +1907,11 @@ export type Database = {
         }
         Insert: {
           created_at?: string
+          deleted_at?: string | null
+          deleted_by?: string | null
           id?: string
           inventory_item_id: string
+          is_deleted?: boolean
           movement_date?: string
           movement_type: string
           notes?: string | null
@@ -1516,8 +1921,11 @@ export type Database = {
         }
         Update: {
           created_at?: string
+          deleted_at?: string | null
+          deleted_by?: string | null
           id?: string
           inventory_item_id?: string
+          is_deleted?: boolean
           movement_date?: string
           movement_type?: string
           notes?: string | null
@@ -1531,6 +1939,116 @@ export type Database = {
             columns: ["inventory_item_id"]
             isOneToOne: false
             referencedRelation: "inventory_items"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      stock_reconciliation_items: {
+        Row: {
+          created_at: string
+          id: string
+          inventory_item_id: string | null
+          physical_quantity: number
+          reconciliation_id: string | null
+          system_quantity: number
+          unit_cost: number
+          variance: number | null
+          variance_reason: string | null
+          variance_value: number | null
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          inventory_item_id?: string | null
+          physical_quantity: number
+          reconciliation_id?: string | null
+          system_quantity: number
+          unit_cost?: number
+          variance?: number | null
+          variance_reason?: string | null
+          variance_value?: number | null
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          inventory_item_id?: string | null
+          physical_quantity?: number
+          reconciliation_id?: string | null
+          system_quantity?: number
+          unit_cost?: number
+          variance?: number | null
+          variance_reason?: string | null
+          variance_value?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "stock_reconciliation_items_inventory_item_id_fkey"
+            columns: ["inventory_item_id"]
+            isOneToOne: false
+            referencedRelation: "inventory_items"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "stock_reconciliation_items_reconciliation_id_fkey"
+            columns: ["reconciliation_id"]
+            isOneToOne: false
+            referencedRelation: "stock_reconciliations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      stock_reconciliations: {
+        Row: {
+          approved_at: string | null
+          approved_by: string | null
+          company_id: string | null
+          created_at: string
+          id: string
+          notes: string | null
+          prepared_by: string
+          reconciliation_date: string
+          status: string
+          total_items_counted: number
+          total_variances: number
+          updated_at: string
+          variance_value: number
+        }
+        Insert: {
+          approved_at?: string | null
+          approved_by?: string | null
+          company_id?: string | null
+          created_at?: string
+          id?: string
+          notes?: string | null
+          prepared_by: string
+          reconciliation_date: string
+          status?: string
+          total_items_counted?: number
+          total_variances?: number
+          updated_at?: string
+          variance_value?: number
+        }
+        Update: {
+          approved_at?: string | null
+          approved_by?: string | null
+          company_id?: string | null
+          created_at?: string
+          id?: string
+          notes?: string | null
+          prepared_by?: string
+          reconciliation_date?: string
+          status?: string
+          total_items_counted?: number
+          total_variances?: number
+          updated_at?: string
+          variance_value?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "stock_reconciliations_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
             referencedColumns: ["id"]
           },
         ]
@@ -1696,12 +2214,27 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      create_notification: {
+        Args: {
+          p_message: string
+          p_related_id?: string
+          p_related_table?: string
+          p_title: string
+          p_type?: string
+          p_user_id: string
+        }
+        Returns: string
+      }
       get_user_company_id: { Args: { _user_id: string }; Returns: string }
       has_role: {
         Args: {
           _role: Database["public"]["Enums"]["app_role"]
           _user_id: string
         }
+        Returns: boolean
+      }
+      is_period_locked: {
+        Args: { check_company_id: string; check_date: string }
         Returns: boolean
       }
       log_audit:
@@ -1725,6 +2258,14 @@ export type Database = {
             }
             Returns: undefined
           }
+      soft_delete_record: {
+        Args: {
+          p_deletion_reason?: string
+          p_record_id: string
+          p_table_name: string
+        }
+        Returns: boolean
+      }
       user_in_company: {
         Args: { _company_id: string; _user_id: string }
         Returns: boolean
@@ -1743,6 +2284,9 @@ export type Database = {
         | "bookkeeper"
         | "inventory_manager"
         | "staff"
+        | "financial_manager"
+        | "assistant_accountant"
+        | "cashier"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -1882,6 +2426,9 @@ export const Constants = {
         "bookkeeper",
         "inventory_manager",
         "staff",
+        "financial_manager",
+        "assistant_accountant",
+        "cashier",
       ],
     },
   },
