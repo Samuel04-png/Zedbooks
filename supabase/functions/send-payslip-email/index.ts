@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { Resend } from "https://esm.sh/resend@2.0.0";
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 const resend = new Resend(Deno.env.get("RESEND_API_KEY"));
 
@@ -45,9 +46,93 @@ const handler = async (req: Request): Promise<Response> => {
   }
 
   try {
+    // Verify authorization header
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return new Response(
+        JSON.stringify({ error: 'No authorization header' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Create Supabase client with service role for verification
+    const supabase = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
+      { global: { headers: { Authorization: authHeader } } }
+    );
+
+    // Verify user identity using getClaims
+    const token = authHeader.replace('Bearer ', '');
+    const { data: claimsData, error: claimsError } = await supabase.auth.getClaims(token);
+    
+    if (claimsError || !claimsData?.claims) {
+      console.error("Auth error:", claimsError);
+      return new Response(
+        JSON.stringify({ error: 'Unauthorized' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    const userId = claimsData.claims.sub as string;
+
+    // Check user role - only HR, Admin, Accountant, Financial Manager, or Super Admin can send payslips
+    const { data: roleData, error: roleError } = await supabase
+      .from('user_roles')
+      .select('role')
+      .eq('user_id', userId);
+
+    if (roleError) {
+      console.error("Role check error:", roleError);
+      return new Response(
+        JSON.stringify({ error: 'Failed to verify permissions' }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    const allowedRoles = ['admin', 'hr_manager', 'accountant', 'financial_manager', 'super_admin'];
+    const hasAllowedRole = roleData?.some(r => allowedRoles.includes(r.role));
+    
+    if (!hasAllowedRole) {
+      return new Response(
+        JSON.stringify({ error: 'Insufficient permissions. Only HR, Admin, Accountant, Financial Manager, or Super Admin can send payslips.' }),
+        { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Get user's company for validation
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .select('company_id')
+      .eq('id', userId)
+      .single();
+
+    if (profileError || !profile?.company_id) {
+      console.error("Profile error:", profileError);
+      return new Response(
+        JSON.stringify({ error: 'User company not found' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     const { employeeName, employeeEmail, period, companyName, companyLogoUrl, payslipData, password }: SendPayslipRequest = await req.json();
 
-    console.log("Sending payslip email to:", employeeEmail);
+    // Validate employee exists in user's company
+    const { data: employee, error: employeeError } = await supabase
+      .from('employees')
+      .select('id, email, company_id')
+      .eq('email', employeeEmail)
+      .eq('company_id', profile.company_id)
+      .single();
+
+    if (employeeError || !employee) {
+      return new Response(
+        JSON.stringify({ error: 'Employee not found in your company' }),
+        { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    console.log("Sending payslip email to:", employeeEmail, "for company:", profile.company_id);
 
     const htmlContent = `
       <!DOCTYPE html>
