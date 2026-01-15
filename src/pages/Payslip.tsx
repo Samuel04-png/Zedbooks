@@ -88,10 +88,14 @@ export default function Payslip() {
     toast.success("Print dialog opened");
   };
 
-  const generatePassword = () => {
-    const accountNumber = employee?.bank_account_number || "";
-    const last4 = accountNumber.slice(-4).padStart(4, "0");
-    return last4;
+  const generateSecurePassword = (): string => {
+    const length = 12;
+    const charset = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#$%';
+    const values = new Uint8Array(length);
+    crypto.getRandomValues(values);
+    return Array.from(values)
+      .map(x => charset[x % charset.length])
+      .join('');
   };
 
   const sendPayslipEmail = async () => {
@@ -104,7 +108,7 @@ export default function Payslip() {
 
     try {
       const period = payrollRun ? format(new Date(payrollRun.period_start), "MMMM yyyy") : "";
-      const password = generatePassword();
+      const password = generateSecurePassword();
 
       const additionalEarnings = additions?.filter(a => a.type !== "advance").reduce((sum, a) => sum + Number(a.amount), 0) || 0;
       const advanceDeductions = additions?.filter(a => a.type === "advance").reduce((sum, a) => sum + Number(a.amount), 0) || 0;
