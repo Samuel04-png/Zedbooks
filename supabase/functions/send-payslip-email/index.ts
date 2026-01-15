@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { Resend } from "https://esm.sh/resend@2.0.0";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { z } from 'https://deno.land/x/zod@v3.22.4/mod.ts';
 
 const resend = new Resend(Deno.env.get("RESEND_API_KEY"));
 
@@ -9,36 +10,41 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-interface SendPayslipRequest {
-  employeeName: string;
-  employeeEmail: string;
-  period: string;
-  companyName: string;
-  companyLogoUrl?: string;
-  payslipData: {
-    basicSalary: number;
-    housingAllowance: number;
-    transportAllowance: number;
-    otherAllowances: number;
-    additionalEarnings: number;
-    grossSalary: number;
-    napsa: number;
-    nhima: number;
-    paye: number;
-    advancesDeducted: number;
-    totalDeductions: number;
-    netSalary: number;
-    employeeNo: string;
-    position: string;
-    department: string;
-    tpin: string;
-    napsaNo: string;
-    nhimaNo: string;
-    bankName: string;
-    accountNumber: string;
-  };
-  password: string;
-}
+// Zod schema for payslip data validation
+const PayslipDataSchema = z.object({
+  basicSalary: z.number().nonnegative('Basic salary must be non-negative'),
+  housingAllowance: z.number().nonnegative().default(0),
+  transportAllowance: z.number().nonnegative().default(0),
+  otherAllowances: z.number().nonnegative().default(0),
+  additionalEarnings: z.number().nonnegative().default(0),
+  grossSalary: z.number().nonnegative('Gross salary must be non-negative'),
+  napsa: z.number().nonnegative().default(0),
+  nhima: z.number().nonnegative().default(0),
+  paye: z.number().nonnegative().default(0),
+  advancesDeducted: z.number().nonnegative().default(0),
+  totalDeductions: z.number().nonnegative().default(0),
+  netSalary: z.number().nonnegative('Net salary must be non-negative'),
+  employeeNo: z.string().max(50).default(''),
+  position: z.string().max(200).default(''),
+  department: z.string().max(200).default(''),
+  tpin: z.string().max(50).optional().default(''),
+  napsaNo: z.string().max(50).optional().default(''),
+  nhimaNo: z.string().max(50).optional().default(''),
+  bankName: z.string().max(100).default(''),
+  accountNumber: z.string().max(50).default(''),
+});
+
+const PayslipRequestSchema = z.object({
+  employeeName: z.string().min(1, 'Employee name is required').max(200).trim(),
+  employeeEmail: z.string().email('Invalid email format').max(255),
+  period: z.string().min(1, 'Period is required').max(100),
+  companyName: z.string().min(1, 'Company name is required').max(200).trim(),
+  companyLogoUrl: z.string().url().optional().nullable(),
+  password: z.string().min(4, 'Password must be at least 4 characters').max(50),
+  payslipData: PayslipDataSchema,
+});
+
+type SendPayslipRequest = z.infer<typeof PayslipRequestSchema>;
 
 const handler = async (req: Request): Promise<Response> => {
   if (req.method === "OPTIONS") {
@@ -115,7 +121,25 @@ const handler = async (req: Request): Promise<Response> => {
       );
     }
 
-    const { employeeName, employeeEmail, period, companyName, companyLogoUrl, payslipData, password }: SendPayslipRequest = await req.json();
+    // Parse and validate input using Zod
+    let validatedInput: SendPayslipRequest;
+    try {
+      const body = await req.json();
+      validatedInput = PayslipRequestSchema.parse(body);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return new Response(
+          JSON.stringify({ 
+            error: 'Invalid input', 
+            details: error.errors.map(e => `${e.path.join('.')}: ${e.message}`)
+          }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+      throw error;
+    }
+
+    const { employeeName, employeeEmail, period, companyName, companyLogoUrl, payslipData, password } = validatedInput;
 
     // Validate employee exists in user's company
     const { data: employee, error: employeeError } = await supabase
