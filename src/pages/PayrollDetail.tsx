@@ -115,11 +115,21 @@ export default function PayrollDetail() {
     navigate(`/payroll/${id}/payslip/${employeeId}`);
   };
 
+  const generateSecurePassword = (): string => {
+    const length = 12;
+    const charset = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#$%';
+    const values = new Uint8Array(length);
+    crypto.getRandomValues(values);
+    return Array.from(values)
+      .map(x => charset[x % charset.length])
+      .join('');
+  };
+
   const sendPayslipEmails = async () => {
     if (!payrollItems || !payrollRun) return;
     
     const confirmSend = window.confirm(
-      `Send payslips to ${payrollItems.length} employees via email?\n\nEach employee will receive a password-protected payslip.`
+      `Send payslips to ${payrollItems.length} employees via email?\n\nEach employee will receive a password-protected payslip with a secure random password.`
     );
     
     if (!confirmSend) return;
@@ -130,10 +140,8 @@ export default function PayrollDetail() {
           const employee = item.employees;
           if (!employee.email) continue;
 
-          // Generate password: first 4 letters of last name + last 4 of TPIN
-          const lastName = employee.full_name.split(' ').pop() || '';
-          const password = lastName.toLowerCase().substring(0, 4) + 
-                          (employee.tpin?.slice(-4) || '0000');
+          // Generate cryptographically secure random password
+          const password = generateSecurePassword();
 
           await supabase.functions.invoke('send-payslip-email', {
             body: {
