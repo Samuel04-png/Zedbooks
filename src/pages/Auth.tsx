@@ -4,7 +4,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Heart, ArrowLeft } from "lucide-react";
+import { Heart, ArrowLeft, Chrome } from "lucide-react";
+import { Separator } from "@/components/ui/separator";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
@@ -38,6 +39,7 @@ type AuthView = "login" | "forgot-password" | "reset-password";
 export default function Auth() {
   const navigate = useNavigate();
   const [isLoading, setIsLoading] = useState(false);
+  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [authView, setAuthView] = useState<AuthView>("login");
   const [loginForm, setLoginForm] = useState({ email: "", password: "" });
   const [signupForm, setSignupForm] = useState({
@@ -50,6 +52,26 @@ export default function Auth() {
     password: "",
     confirmPassword: "",
   });
+
+  const handleGoogleSignIn = async () => {
+    setIsGoogleLoading(true);
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo: `${window.location.origin}/auth`,
+        },
+      });
+
+      if (error) {
+        toast.error(error.message);
+      }
+    } catch (error) {
+      toast.error("Failed to sign in with Google");
+    } finally {
+      setIsGoogleLoading(false);
+    }
+  };
 
   useEffect(() => {
     // Check URL for password recovery token
@@ -357,92 +379,140 @@ export default function Auth() {
               </TabsList>
               
               <TabsContent value="login">
-                <form onSubmit={handleLogin} className="space-y-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="login-email">Email</Label>
-                    <Input
-                      id="login-email"
-                      type="email"
-                      placeholder="your.email@example.com"
-                      value={loginForm.email}
-                      onChange={(e) =>
-                        setLoginForm({ ...loginForm, email: e.target.value })
-                      }
-                      required
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="login-password">Password</Label>
-                    <Input
-                      id="login-password"
-                      type="password"
-                      value={loginForm.password}
-                      onChange={(e) =>
-                        setLoginForm({ ...loginForm, password: e.target.value })
-                      }
-                      required
-                    />
-                  </div>
-                  <Button type="submit" className="w-full" disabled={isLoading}>
-                    {isLoading ? "Signing in..." : "Sign In"}
-                  </Button>
+                <div className="space-y-4">
                   <Button
                     type="button"
-                    variant="link"
-                    className="w-full text-sm"
-                    onClick={() => setAuthView("forgot-password")}
+                    variant="outline"
+                    className="w-full"
+                    onClick={handleGoogleSignIn}
+                    disabled={isGoogleLoading}
                   >
-                    Forgot password?
+                    <Chrome className="h-4 w-4 mr-2" />
+                    {isGoogleLoading ? "Signing in..." : "Continue with Google"}
                   </Button>
-                </form>
+                  
+                  <div className="relative">
+                    <div className="absolute inset-0 flex items-center">
+                      <Separator className="w-full" />
+                    </div>
+                    <div className="relative flex justify-center text-xs uppercase">
+                      <span className="bg-card px-2 text-muted-foreground">
+                        Or continue with email
+                      </span>
+                    </div>
+                  </div>
+
+                  <form onSubmit={handleLogin} className="space-y-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="login-email">Email</Label>
+                      <Input
+                        id="login-email"
+                        type="email"
+                        placeholder="your.email@example.com"
+                        value={loginForm.email}
+                        onChange={(e) =>
+                          setLoginForm({ ...loginForm, email: e.target.value })
+                        }
+                        required
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="login-password">Password</Label>
+                      <Input
+                        id="login-password"
+                        type="password"
+                        value={loginForm.password}
+                        onChange={(e) =>
+                          setLoginForm({ ...loginForm, password: e.target.value })
+                        }
+                        required
+                      />
+                    </div>
+                    <Button type="submit" className="w-full" disabled={isLoading}>
+                      {isLoading ? "Signing in..." : "Sign In"}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="link"
+                      className="w-full text-sm"
+                      onClick={() => setAuthView("forgot-password")}
+                    >
+                      Forgot password?
+                    </Button>
+                  </form>
+                </div>
               </TabsContent>
 
               <TabsContent value="signup">
-                <form onSubmit={handleSignup} className="space-y-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="signup-name">Organization Name</Label>
-                    <Input
-                      id="signup-name"
-                      placeholder="Your NGO Name"
-                      value={signupForm.organizationName}
-                      onChange={(e) =>
-                        setSignupForm({
-                          ...signupForm,
-                          organizationName: e.target.value,
-                        })
-                      }
-                      required
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="signup-email">Email</Label>
-                    <Input
-                      id="signup-email"
-                      type="email"
-                      placeholder="your.email@example.com"
-                      value={signupForm.email}
-                      onChange={(e) =>
-                        setSignupForm({ ...signupForm, email: e.target.value })
-                      }
-                      required
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="signup-password">Password</Label>
-                    <Input
-                      id="signup-password"
-                      type="password"
-                      value={signupForm.password}
-                      onChange={(e) =>
-                        setSignupForm({ ...signupForm, password: e.target.value })
-                      }
-                      required
-                    />
-                  </div>
-                  <Button type="submit" className="w-full" disabled={isLoading}>
-                    {isLoading ? "Creating account..." : "Create Account"}
+                <div className="space-y-4">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full"
+                    onClick={handleGoogleSignIn}
+                    disabled={isGoogleLoading}
+                  >
+                    <Chrome className="h-4 w-4 mr-2" />
+                    {isGoogleLoading ? "Signing up..." : "Continue with Google"}
                   </Button>
-                </form>
+                  
+                  <div className="relative">
+                    <div className="absolute inset-0 flex items-center">
+                      <Separator className="w-full" />
+                    </div>
+                    <div className="relative flex justify-center text-xs uppercase">
+                      <span className="bg-card px-2 text-muted-foreground">
+                        Or continue with email
+                      </span>
+                    </div>
+                  </div>
+
+                  <form onSubmit={handleSignup} className="space-y-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="signup-name">Organization Name</Label>
+                      <Input
+                        id="signup-name"
+                        placeholder="Your NGO Name"
+                        value={signupForm.organizationName}
+                        onChange={(e) =>
+                          setSignupForm({
+                            ...signupForm,
+                            organizationName: e.target.value,
+                          })
+                        }
+                        required
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="signup-email">Email</Label>
+                      <Input
+                        id="signup-email"
+                        type="email"
+                        placeholder="your.email@example.com"
+                        value={signupForm.email}
+                        onChange={(e) =>
+                          setSignupForm({ ...signupForm, email: e.target.value })
+                        }
+                        required
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="signup-password">Password</Label>
+                      <Input
+                        id="signup-password"
+                        type="password"
+                        value={signupForm.password}
+                        onChange={(e) =>
+                          setSignupForm({ ...signupForm, password: e.target.value })
+                        }
+                        required
+                      />
+                    </div>
+                    <Button type="submit" className="w-full" disabled={isLoading}>
+                      {isLoading ? "Creating account..." : "Create Account"}
+                    </Button>
+                  </form>
+                </div>
               </TabsContent>
             </Tabs>
           </CardContent>
