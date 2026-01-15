@@ -1,17 +1,21 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { z } from 'https://deno.land/x/zod@v3.22.4/mod.ts';
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-interface InviteRequest {
-  employeeName: string;
-  employeeEmail: string;
-  companyName: string;
-  temporaryPassword: string;
-  loginUrl: string;
-}
+// Zod schema for input validation
+const InviteRequestSchema = z.object({
+  employeeName: z.string().min(1, 'Employee name is required').max(200).trim(),
+  employeeEmail: z.string().email('Invalid email format').max(255),
+  companyName: z.string().min(1, 'Company name is required').max(200).trim(),
+  temporaryPassword: z.string().min(8, 'Password must be at least 8 characters').max(100),
+  loginUrl: z.string().url('Invalid URL format'),
+});
+
+type InviteRequest = z.infer<typeof InviteRequestSchema>;
 
 Deno.serve(async (req: Request): Promise<Response> => {
   // Handle CORS preflight
@@ -94,7 +98,25 @@ Deno.serve(async (req: Request): Promise<Response> => {
       throw new Error("RESEND_API_KEY is not configured");
     }
 
-    const { employeeName, employeeEmail, companyName, temporaryPassword, loginUrl }: InviteRequest = await req.json();
+    // Parse and validate input using Zod
+    let validatedInput: InviteRequest;
+    try {
+      const body = await req.json();
+      validatedInput = InviteRequestSchema.parse(body);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return new Response(
+          JSON.stringify({ 
+            error: 'Invalid input', 
+            details: error.errors.map(e => `${e.path.join('.')}: ${e.message}`)
+          }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+      throw error;
+    }
+
+    const { employeeName, employeeEmail, companyName, temporaryPassword, loginUrl } = validatedInput;
 
     // Validate employee exists in user's company
     const { data: employee, error: employeeError } = await supabase
