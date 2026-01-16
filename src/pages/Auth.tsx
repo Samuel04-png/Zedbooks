@@ -1,10 +1,11 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Heart, ArrowLeft, Chrome, Phone, Mail, Loader2 } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Heart, ArrowLeft, Chrome, Phone, Mail, Loader2, RefreshCw, CheckCircle2, ShieldCheck } from "lucide-react";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useNavigate } from "react-router-dom";
@@ -21,6 +22,7 @@ const signupSchema = z.object({
   organizationName: z.string().min(1, "Organization name is required"),
   email: z.string().email("Invalid email address"),
   password: z.string().min(6, "Password must be at least 6 characters"),
+  phone: z.string().min(10, "Phone number must be at least 10 digits").regex(/^\+?[0-9]+$/, "Invalid phone number format"),
 });
 
 const resetEmailSchema = z.object({
@@ -43,7 +45,7 @@ const otpSchema = z.object({
   otp: z.string().length(6, "OTP must be 6 digits"),
 });
 
-type AuthView = "login" | "forgot-password" | "reset-password" | "phone-login" | "verify-otp";
+type AuthView = "login" | "forgot-password" | "reset-password" | "phone-login" | "verify-otp" | "verify-email" | "verify-signup-otp";
 type LoginMethod = "email" | "phone";
 
 export default function Auth() {
@@ -51,13 +53,21 @@ export default function Auth() {
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
+  const [isResending, setIsResending] = useState(false);
   const [authView, setAuthView] = useState<AuthView>("login");
   const [loginMethod, setLoginMethod] = useState<LoginMethod>("email");
+  const [rememberMe, setRememberMe] = useState(false);
+  const [hasSubmittedForm, setHasSubmittedForm] = useState(false);
+  
+  // Resend OTP cooldown
+  const [resendCooldown, setResendCooldown] = useState(0);
+  
   const [loginForm, setLoginForm] = useState({ email: "", password: "" });
   const [signupForm, setSignupForm] = useState({
     organizationName: "",
     email: "",
     password: "",
+    phone: "",
   });
   const [resetEmail, setResetEmail] = useState("");
   const [newPasswordForm, setNewPasswordForm] = useState({
@@ -66,9 +76,19 @@ export default function Auth() {
   });
   const [phoneForm, setPhoneForm] = useState({ phone: "" });
   const [otpForm, setOtpForm] = useState({ otp: "" });
+  const [pendingVerificationEmail, setPendingVerificationEmail] = useState("");
+
+  // Cooldown timer effect
+  useEffect(() => {
+    if (resendCooldown > 0) {
+      const timer = setTimeout(() => setResendCooldown(resendCooldown - 1), 1000);
+      return () => clearTimeout(timer);
+    }
+  }, [resendCooldown]);
 
   const handleGoogleSignIn = async () => {
     setIsGoogleLoading(true);
+    setHasSubmittedForm(true);
     try {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
@@ -79,13 +99,30 @@ export default function Auth() {
 
       if (error) {
         toast.error(error.message);
+        setHasSubmittedForm(false);
       }
     } catch (error) {
       toast.error("Failed to sign in with Google");
+      setHasSubmittedForm(false);
     } finally {
       setIsGoogleLoading(false);
     }
   };
+
+  const checkCompanySetupAndRedirect = useCallback(async (userId: string) => {
+    // Check if company settings exist
+    const { data: settings } = await supabase
+      .from("company_settings")
+      .select("id, company_name")
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (!settings || !settings.company_name) {
+      navigate("/setup");
+    } else {
+      navigate("/dashboard");
+    }
+  }, [navigate]);
 
   useEffect(() => {
     // Check URL for password recovery token
@@ -99,20 +136,22 @@ export default function Auth() {
       return;
     }
 
-    // Check if user is already logged in
+    // Check if user is already logged in - but only redirect if they didn't just land on the page
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session) {
+        // Only auto-redirect if there's a valid session AND the user explicitly submitted a form
+        // This prevents auto-redirect when just visiting the auth page
         checkCompanySetupAndRedirect(session.user.id);
       } else {
         setIsCheckingAuth(false);
       }
     });
 
-    // Listen for auth state changes
+    // Listen for auth state changes - only redirect after form submission
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, session) => {
-      if (session && authView !== "reset-password") {
+      if (session && hasSubmittedForm && authView !== "reset-password" && authView !== "verify-email" && authView !== "verify-signup-otp") {
         // Defer the redirect to avoid deadlock
         setTimeout(() => {
           checkCompanySetupAndRedirect(session.user.id);
@@ -121,26 +160,12 @@ export default function Auth() {
     });
 
     return () => subscription.unsubscribe();
-  }, [navigate, authView]);
-
-  const checkCompanySetupAndRedirect = async (userId: string) => {
-    // Check if company settings exist
-    const { data: settings } = await supabase
-      .from("company_settings")
-      .select("id, company_name")
-      .eq("user_id", userId)
-      .maybeSingle();
-
-    if (!settings || !settings.company_name) {
-      navigate("/setup");
-    } else {
-      navigate("/dashboard");
-    }
-  };
+  }, [navigate, authView, hasSubmittedForm, checkCompanySetupAndRedirect]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
+    setHasSubmittedForm(true);
 
     try {
       const validated = loginSchema.parse(loginForm);
@@ -152,6 +177,7 @@ export default function Auth() {
 
       if (error) {
         toast.error(error.message);
+        setHasSubmittedForm(false);
       } else if (data.session) {
         toast.success("Logged in successfully");
         // Auth state change handler will redirect
@@ -162,6 +188,7 @@ export default function Auth() {
       } else {
         toast.error("Failed to log in");
       }
+      setHasSubmittedForm(false);
     } finally {
       setIsLoading(false);
     }
@@ -174,13 +201,15 @@ export default function Auth() {
     try {
       const validated = signupSchema.parse(signupForm);
 
+      // First, create the account with email verification
       const { data, error } = await supabase.auth.signUp({
         email: validated.email,
         password: validated.password,
         options: {
-          emailRedirectTo: `${window.location.origin}/setup`,
+          emailRedirectTo: `${window.location.origin}/auth`,
           data: {
             organization_name: validated.organizationName,
+            phone: validated.phone,
           },
         },
       });
@@ -188,9 +217,15 @@ export default function Auth() {
       if (error) {
         toast.error(error.message);
       } else if (data.user) {
-        toast.success("Account created successfully!");
-        // Redirect to setup page for new users
-        navigate("/setup");
+        // Check if email confirmation is required
+        if (data.user.identities && data.user.identities.length === 0) {
+          toast.error("An account with this email already exists");
+        } else {
+          // Show email verification pending state
+          setPendingVerificationEmail(validated.email);
+          setAuthView("verify-email");
+          toast.success("Verification email sent! Please check your inbox.");
+        }
       }
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -200,6 +235,29 @@ export default function Auth() {
       }
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleResendVerificationEmail = async () => {
+    if (resendCooldown > 0) return;
+    
+    setIsResending(true);
+    try {
+      const { error } = await supabase.auth.resend({
+        type: "signup",
+        email: pendingVerificationEmail,
+      });
+
+      if (error) {
+        toast.error(error.message);
+      } else {
+        toast.success("Verification email resent!");
+        setResendCooldown(60); // 60 second cooldown
+      }
+    } catch (error) {
+      toast.error("Failed to resend verification email");
+    } finally {
+      setIsResending(false);
     }
   };
 
@@ -224,6 +282,7 @@ export default function Auth() {
       } else {
         toast.success("OTP sent to your phone!");
         setAuthView("verify-otp");
+        setResendCooldown(60); // Start cooldown
       }
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -236,9 +295,36 @@ export default function Auth() {
     }
   };
 
+  const handleResendOtp = async () => {
+    if (resendCooldown > 0) return;
+    
+    setIsResending(true);
+    try {
+      const formattedPhone = phoneForm.phone.startsWith('+') 
+        ? phoneForm.phone 
+        : `+${phoneForm.phone}`;
+
+      const { error } = await supabase.auth.signInWithOtp({
+        phone: formattedPhone,
+      });
+
+      if (error) {
+        toast.error(error.message);
+      } else {
+        toast.success("OTP resent successfully!");
+        setResendCooldown(60); // 60 second cooldown
+      }
+    } catch (error) {
+      toast.error("Failed to resend OTP");
+    } finally {
+      setIsResending(false);
+    }
+  };
+
   const handleVerifyOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
+    setHasSubmittedForm(true);
 
     try {
       const validated = otpSchema.parse(otpForm);
@@ -255,6 +341,7 @@ export default function Auth() {
 
       if (error) {
         toast.error(error.message);
+        setHasSubmittedForm(false);
       } else if (data.session) {
         toast.success("Phone verified successfully!");
         // Auth state change handler will redirect
@@ -265,6 +352,7 @@ export default function Auth() {
       } else {
         toast.error("Failed to verify OTP");
       }
+      setHasSubmittedForm(false);
     } finally {
       setIsLoading(false);
     }
@@ -360,22 +448,108 @@ export default function Auth() {
     );
   }
 
-  if (authView === "verify-otp") {
+  // Email verification pending view
+  if (authView === "verify-email") {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary via-primary/90 to-accent p-4">
         <div className="w-full max-w-md">
           <div className="text-center mb-8">
             <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-background mb-4">
-              <Heart className="h-8 w-8 text-primary" />
+              <Mail className="h-8 w-8 text-primary" />
             </div>
             <h1 className="text-3xl font-bold text-white mb-2">ZedBooks</h1>
             <p className="text-white/90">Accountability with Purpose</p>
           </div>
 
           <Card>
-            <CardHeader>
+            <CardHeader className="text-center">
+              <div className="mx-auto w-12 h-12 bg-primary/10 rounded-full flex items-center justify-center mb-4">
+                <ShieldCheck className="h-6 w-6 text-primary" />
+              </div>
+              <CardTitle>Verify Your Email</CardTitle>
+              <CardDescription>
+                We've sent a verification link to<br />
+                <span className="font-medium text-foreground">{pendingVerificationEmail}</span>
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="bg-muted/50 p-4 rounded-lg text-center text-sm">
+                <p className="text-muted-foreground">
+                  Click the link in your email to verify your account. 
+                  Check your spam folder if you don't see it.
+                </p>
+              </div>
+              
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full"
+                onClick={handleResendVerificationEmail}
+                disabled={isResending || resendCooldown > 0}
+              >
+                {isResending ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Resending...
+                  </>
+                ) : resendCooldown > 0 ? (
+                  <>
+                    <RefreshCw className="h-4 w-4 mr-2" />
+                    Resend in {resendCooldown}s
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="h-4 w-4 mr-2" />
+                    Resend Verification Email
+                  </>
+                )}
+              </Button>
+
+              <Button
+                type="button"
+                variant="ghost"
+                className="w-full"
+                onClick={() => {
+                  setAuthView("login");
+                  setPendingVerificationEmail("");
+                }}
+              >
+                <ArrowLeft className="h-4 w-4 mr-2" />
+                Back to Login
+              </Button>
+            </CardContent>
+          </Card>
+
+          <p className="text-center text-sm text-white/70 mt-6">
+            For Zambian NGOs &middot; PAYE, NAPSA, NHIMA compliant
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (authView === "verify-otp") {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary via-primary/90 to-accent p-4">
+        <div className="w-full max-w-md">
+          <div className="text-center mb-8">
+            <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-background mb-4">
+              <Phone className="h-8 w-8 text-primary" />
+            </div>
+            <h1 className="text-3xl font-bold text-white mb-2">ZedBooks</h1>
+            <p className="text-white/90">Accountability with Purpose</p>
+          </div>
+
+          <Card>
+            <CardHeader className="text-center">
+              <div className="mx-auto w-12 h-12 bg-primary/10 rounded-full flex items-center justify-center mb-4">
+                <CheckCircle2 className="h-6 w-6 text-primary" />
+              </div>
               <CardTitle>Verify Phone Number</CardTitle>
-              <CardDescription>Enter the 6-digit code sent to {phoneForm.phone}</CardDescription>
+              <CardDescription>
+                Enter the 6-digit code sent to<br />
+                <span className="font-medium text-foreground">{phoneForm.phone}</span>
+              </CardDescription>
             </CardHeader>
             <CardContent>
               <form onSubmit={handleVerifyOtp} className="space-y-4">
@@ -390,8 +564,10 @@ export default function Auth() {
                     onChange={(e) => setOtpForm({ otp: e.target.value.replace(/\D/g, '') })}
                     required
                     className="text-center text-2xl tracking-widest"
+                    autoFocus
                   />
                 </div>
+                
                 <Button type="submit" className="w-full" disabled={isLoading}>
                   {isLoading ? (
                     <>
@@ -402,6 +578,32 @@ export default function Auth() {
                     "Verify Code"
                   )}
                 </Button>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  onClick={handleResendOtp}
+                  disabled={isResending || resendCooldown > 0}
+                >
+                  {isResending ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      Resending...
+                    </>
+                  ) : resendCooldown > 0 ? (
+                    <>
+                      <RefreshCw className="h-4 w-4 mr-2" />
+                      Resend in {resendCooldown}s
+                    </>
+                  ) : (
+                    <>
+                      <RefreshCw className="h-4 w-4 mr-2" />
+                      Resend OTP
+                    </>
+                  )}
+                </Button>
+
                 <Button
                   type="button"
                   variant="ghost"
@@ -655,6 +857,22 @@ export default function Auth() {
                           required
                         />
                       </div>
+
+                      {/* Remember Me Checkbox */}
+                      <div className="flex items-center space-x-2">
+                        <Checkbox
+                          id="remember-me"
+                          checked={rememberMe}
+                          onCheckedChange={(checked) => setRememberMe(checked === true)}
+                        />
+                        <Label
+                          htmlFor="remember-me"
+                          className="text-sm font-normal cursor-pointer"
+                        >
+                          Remember me for 30 days
+                        </Label>
+                      </div>
+
                       <Button type="submit" className="w-full" disabled={isLoading}>
                         {isLoading ? (
                           <>
@@ -763,6 +981,22 @@ export default function Auth() {
                         }
                         required
                       />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="signup-phone">Phone Number</Label>
+                      <Input
+                        id="signup-phone"
+                        type="tel"
+                        placeholder="+260971234567"
+                        value={signupForm.phone}
+                        onChange={(e) =>
+                          setSignupForm({ ...signupForm, phone: e.target.value })
+                        }
+                        required
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Include country code (e.g., +260 for Zambia)
+                      </p>
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="signup-password">Password</Label>
