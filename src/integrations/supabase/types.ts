@@ -189,6 +189,146 @@ export type Database = {
           },
         ]
       }
+      asset_categories: {
+        Row: {
+          accumulated_depreciation_account_id: string | null
+          asset_account_id: string | null
+          company_id: string | null
+          created_at: string
+          depreciation_account_id: string | null
+          depreciation_method:
+            | Database["public"]["Enums"]["depreciation_method"]
+            | null
+          depreciation_rate: number | null
+          description: string | null
+          id: string
+          name: string
+          updated_at: string
+          useful_life_years: number | null
+        }
+        Insert: {
+          accumulated_depreciation_account_id?: string | null
+          asset_account_id?: string | null
+          company_id?: string | null
+          created_at?: string
+          depreciation_account_id?: string | null
+          depreciation_method?:
+            | Database["public"]["Enums"]["depreciation_method"]
+            | null
+          depreciation_rate?: number | null
+          description?: string | null
+          id?: string
+          name: string
+          updated_at?: string
+          useful_life_years?: number | null
+        }
+        Update: {
+          accumulated_depreciation_account_id?: string | null
+          asset_account_id?: string | null
+          company_id?: string | null
+          created_at?: string
+          depreciation_account_id?: string | null
+          depreciation_method?:
+            | Database["public"]["Enums"]["depreciation_method"]
+            | null
+          depreciation_rate?: number | null
+          description?: string | null
+          id?: string
+          name?: string
+          updated_at?: string
+          useful_life_years?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "asset_categories_accumulated_depreciation_account_id_fkey"
+            columns: ["accumulated_depreciation_account_id"]
+            isOneToOne: false
+            referencedRelation: "chart_of_accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "asset_categories_asset_account_id_fkey"
+            columns: ["asset_account_id"]
+            isOneToOne: false
+            referencedRelation: "chart_of_accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "asset_categories_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "asset_categories_depreciation_account_id_fkey"
+            columns: ["depreciation_account_id"]
+            isOneToOne: false
+            referencedRelation: "chart_of_accounts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      asset_depreciation: {
+        Row: {
+          accumulated_depreciation: number
+          asset_id: string | null
+          created_at: string
+          depreciation_amount: number
+          id: string
+          is_posted: boolean | null
+          journal_entry_id: string | null
+          net_book_value: number
+          period_end: string
+          period_start: string
+          posted_at: string | null
+          posted_by: string | null
+        }
+        Insert: {
+          accumulated_depreciation: number
+          asset_id?: string | null
+          created_at?: string
+          depreciation_amount: number
+          id?: string
+          is_posted?: boolean | null
+          journal_entry_id?: string | null
+          net_book_value: number
+          period_end: string
+          period_start: string
+          posted_at?: string | null
+          posted_by?: string | null
+        }
+        Update: {
+          accumulated_depreciation?: number
+          asset_id?: string | null
+          created_at?: string
+          depreciation_amount?: number
+          id?: string
+          is_posted?: boolean | null
+          journal_entry_id?: string | null
+          net_book_value?: number
+          period_end?: string
+          period_start?: string
+          posted_at?: string | null
+          posted_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "asset_depreciation_asset_id_fkey"
+            columns: ["asset_id"]
+            isOneToOne: false
+            referencedRelation: "fixed_assets"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "asset_depreciation_journal_entry_id_fkey"
+            columns: ["journal_entry_id"]
+            isOneToOne: false
+            referencedRelation: "journal_entries"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       audit_logs: {
         Row: {
           action: string
@@ -360,14 +500,17 @@ export type Database = {
       bills: {
         Row: {
           approval_status: string | null
+          base_currency_total: number | null
           bill_date: string
           bill_number: string
           company_id: string | null
           created_at: string
+          currency: string | null
           deleted_at: string | null
           deleted_by: string | null
           description: string | null
           due_date: string | null
+          exchange_rate: number | null
           id: string
           is_deleted: boolean
           is_locked: boolean
@@ -382,14 +525,17 @@ export type Database = {
         }
         Insert: {
           approval_status?: string | null
+          base_currency_total?: number | null
           bill_date?: string
           bill_number: string
           company_id?: string | null
           created_at?: string
+          currency?: string | null
           deleted_at?: string | null
           deleted_by?: string | null
           description?: string | null
           due_date?: string | null
+          exchange_rate?: number | null
           id?: string
           is_deleted?: boolean
           is_locked?: boolean
@@ -404,14 +550,17 @@ export type Database = {
         }
         Update: {
           approval_status?: string | null
+          base_currency_total?: number | null
           bill_date?: string
           bill_number?: string
           company_id?: string | null
           created_at?: string
+          currency?: string | null
           deleted_at?: string | null
           deleted_by?: string | null
           description?: string | null
           due_date?: string | null
+          exchange_rate?: number | null
           id?: string
           is_deleted?: boolean
           is_locked?: boolean
@@ -569,45 +718,69 @@ export type Database = {
       companies: {
         Row: {
           address: string | null
+          base_currency: string | null
+          business_type: Database["public"]["Enums"]["business_type"] | null
           created_at: string
           email: string | null
+          fiscal_year_start: number | null
           id: string
+          industry_type: string | null
           is_active: boolean | null
           logo_url: string | null
           name: string
           phone: string | null
+          registration_number: string | null
           settings: Json | null
           slug: string | null
+          tax_type: Database["public"]["Enums"]["tax_type"] | null
           tpin: string | null
+          turnover_tax_number: string | null
           updated_at: string
+          vat_number: string | null
         }
         Insert: {
           address?: string | null
+          base_currency?: string | null
+          business_type?: Database["public"]["Enums"]["business_type"] | null
           created_at?: string
           email?: string | null
+          fiscal_year_start?: number | null
           id?: string
+          industry_type?: string | null
           is_active?: boolean | null
           logo_url?: string | null
           name: string
           phone?: string | null
+          registration_number?: string | null
           settings?: Json | null
           slug?: string | null
+          tax_type?: Database["public"]["Enums"]["tax_type"] | null
           tpin?: string | null
+          turnover_tax_number?: string | null
           updated_at?: string
+          vat_number?: string | null
         }
         Update: {
           address?: string | null
+          base_currency?: string | null
+          business_type?: Database["public"]["Enums"]["business_type"] | null
           created_at?: string
           email?: string | null
+          fiscal_year_start?: number | null
           id?: string
+          industry_type?: string | null
           is_active?: boolean | null
           logo_url?: string | null
           name?: string
           phone?: string | null
+          registration_number?: string | null
           settings?: Json | null
           slug?: string | null
+          tax_type?: Database["public"]["Enums"]["tax_type"] | null
           tpin?: string | null
+          turnover_tax_number?: string | null
           updated_at?: string
+          vat_number?: string | null
         }
         Relationships: []
       }
@@ -705,6 +878,36 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      currencies: {
+        Row: {
+          code: string
+          created_at: string
+          decimal_places: number | null
+          id: string
+          is_active: boolean | null
+          name: string
+          symbol: string | null
+        }
+        Insert: {
+          code: string
+          created_at?: string
+          decimal_places?: number | null
+          id?: string
+          is_active?: boolean | null
+          name: string
+          symbol?: string | null
+        }
+        Update: {
+          code?: string
+          created_at?: string
+          decimal_places?: number | null
+          id?: string
+          is_active?: boolean | null
+          name?: string
+          symbol?: string | null
+        }
+        Relationships: []
       }
       customers: {
         Row: {
@@ -910,6 +1113,50 @@ export type Database = {
           },
         ]
       }
+      exchange_rates: {
+        Row: {
+          company_id: string | null
+          created_at: string
+          created_by: string | null
+          effective_date: string
+          from_currency: string
+          id: string
+          rate: number
+          source: string | null
+          to_currency: string
+        }
+        Insert: {
+          company_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          effective_date: string
+          from_currency: string
+          id?: string
+          rate: number
+          source?: string | null
+          to_currency: string
+        }
+        Update: {
+          company_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          effective_date?: string
+          from_currency?: string
+          id?: string
+          rate?: number
+          source?: string | null
+          to_currency?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "exchange_rates_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       expenses: {
         Row: {
           amount: number
@@ -977,6 +1224,246 @@ export type Database = {
             columns: ["company_id"]
             isOneToOne: false
             referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      financial_periods: {
+        Row: {
+          closed_at: string | null
+          closed_by: string | null
+          company_id: string | null
+          created_at: string
+          end_date: string
+          financial_year_id: string | null
+          id: string
+          is_adjusting_period: boolean | null
+          period_name: string
+          period_number: number
+          start_date: string
+          status: string | null
+          updated_at: string
+        }
+        Insert: {
+          closed_at?: string | null
+          closed_by?: string | null
+          company_id?: string | null
+          created_at?: string
+          end_date: string
+          financial_year_id?: string | null
+          id?: string
+          is_adjusting_period?: boolean | null
+          period_name: string
+          period_number: number
+          start_date: string
+          status?: string | null
+          updated_at?: string
+        }
+        Update: {
+          closed_at?: string | null
+          closed_by?: string | null
+          company_id?: string | null
+          created_at?: string
+          end_date?: string
+          financial_year_id?: string | null
+          id?: string
+          is_adjusting_period?: boolean | null
+          period_name?: string
+          period_number?: number
+          start_date?: string
+          status?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "financial_periods_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "financial_periods_financial_year_id_fkey"
+            columns: ["financial_year_id"]
+            isOneToOne: false
+            referencedRelation: "financial_years"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      financial_years: {
+        Row: {
+          closed_at: string | null
+          closed_by: string | null
+          company_id: string | null
+          created_at: string
+          end_date: string
+          id: string
+          is_adjusting_period: boolean | null
+          start_date: string
+          status: string | null
+          updated_at: string
+          year_name: string
+        }
+        Insert: {
+          closed_at?: string | null
+          closed_by?: string | null
+          company_id?: string | null
+          created_at?: string
+          end_date: string
+          id?: string
+          is_adjusting_period?: boolean | null
+          start_date: string
+          status?: string | null
+          updated_at?: string
+          year_name: string
+        }
+        Update: {
+          closed_at?: string | null
+          closed_by?: string | null
+          company_id?: string | null
+          created_at?: string
+          end_date?: string
+          id?: string
+          is_adjusting_period?: boolean | null
+          start_date?: string
+          status?: string | null
+          updated_at?: string
+          year_name?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "financial_years_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      fixed_assets: {
+        Row: {
+          accumulated_depreciation: number | null
+          asset_number: string
+          category_id: string | null
+          company_id: string | null
+          created_at: string
+          deleted_at: string | null
+          deleted_by: string | null
+          depreciation_method:
+            | Database["public"]["Enums"]["depreciation_method"]
+            | null
+          depreciation_rate: number | null
+          description: string | null
+          disposal_amount: number | null
+          disposal_date: string | null
+          disposal_method: string | null
+          id: string
+          invoice_reference: string | null
+          is_deleted: boolean | null
+          last_depreciation_date: string | null
+          location: string | null
+          name: string
+          net_book_value: number | null
+          notes: string | null
+          purchase_cost: number
+          purchase_date: string
+          residual_value: number | null
+          serial_number: string | null
+          status: Database["public"]["Enums"]["asset_status"] | null
+          updated_at: string
+          useful_life_months: number
+          user_id: string
+          vendor_id: string | null
+        }
+        Insert: {
+          accumulated_depreciation?: number | null
+          asset_number: string
+          category_id?: string | null
+          company_id?: string | null
+          created_at?: string
+          deleted_at?: string | null
+          deleted_by?: string | null
+          depreciation_method?:
+            | Database["public"]["Enums"]["depreciation_method"]
+            | null
+          depreciation_rate?: number | null
+          description?: string | null
+          disposal_amount?: number | null
+          disposal_date?: string | null
+          disposal_method?: string | null
+          id?: string
+          invoice_reference?: string | null
+          is_deleted?: boolean | null
+          last_depreciation_date?: string | null
+          location?: string | null
+          name: string
+          net_book_value?: number | null
+          notes?: string | null
+          purchase_cost: number
+          purchase_date: string
+          residual_value?: number | null
+          serial_number?: string | null
+          status?: Database["public"]["Enums"]["asset_status"] | null
+          updated_at?: string
+          useful_life_months: number
+          user_id: string
+          vendor_id?: string | null
+        }
+        Update: {
+          accumulated_depreciation?: number | null
+          asset_number?: string
+          category_id?: string | null
+          company_id?: string | null
+          created_at?: string
+          deleted_at?: string | null
+          deleted_by?: string | null
+          depreciation_method?:
+            | Database["public"]["Enums"]["depreciation_method"]
+            | null
+          depreciation_rate?: number | null
+          description?: string | null
+          disposal_amount?: number | null
+          disposal_date?: string | null
+          disposal_method?: string | null
+          id?: string
+          invoice_reference?: string | null
+          is_deleted?: boolean | null
+          last_depreciation_date?: string | null
+          location?: string | null
+          name?: string
+          net_book_value?: number | null
+          notes?: string | null
+          purchase_cost?: number
+          purchase_date?: string
+          residual_value?: number | null
+          serial_number?: string | null
+          status?: Database["public"]["Enums"]["asset_status"] | null
+          updated_at?: string
+          useful_life_months?: number
+          user_id?: string
+          vendor_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fixed_assets_category_id_fkey"
+            columns: ["category_id"]
+            isOneToOne: false
+            referencedRelation: "asset_categories"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fixed_assets_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fixed_assets_vendor_id_fkey"
+            columns: ["vendor_id"]
+            isOneToOne: false
+            referencedRelation: "vendors"
             referencedColumns: ["id"]
           },
         ]
@@ -1081,12 +1568,15 @@ export type Database = {
       invoices: {
         Row: {
           approval_status: string | null
+          base_currency_total: number | null
           company_id: string | null
           created_at: string
+          currency: string | null
           customer_id: string | null
           deleted_at: string | null
           deleted_by: string | null
           due_date: string | null
+          exchange_rate: number | null
           grant_reference: string | null
           id: string
           invoice_date: string
@@ -1103,15 +1593,22 @@ export type Database = {
           updated_at: string
           user_id: string
           vat_amount: number | null
+          zra_invoice_number: string | null
+          zra_qr_code: string | null
+          zra_submission_status: string | null
+          zra_submitted_at: string | null
         }
         Insert: {
           approval_status?: string | null
+          base_currency_total?: number | null
           company_id?: string | null
           created_at?: string
+          currency?: string | null
           customer_id?: string | null
           deleted_at?: string | null
           deleted_by?: string | null
           due_date?: string | null
+          exchange_rate?: number | null
           grant_reference?: string | null
           id?: string
           invoice_date?: string
@@ -1128,15 +1625,22 @@ export type Database = {
           updated_at?: string
           user_id: string
           vat_amount?: number | null
+          zra_invoice_number?: string | null
+          zra_qr_code?: string | null
+          zra_submission_status?: string | null
+          zra_submitted_at?: string | null
         }
         Update: {
           approval_status?: string | null
+          base_currency_total?: number | null
           company_id?: string | null
           created_at?: string
+          currency?: string | null
           customer_id?: string | null
           deleted_at?: string | null
           deleted_by?: string | null
           due_date?: string | null
+          exchange_rate?: number | null
           grant_reference?: string | null
           id?: string
           invoice_date?: string
@@ -1153,6 +1657,10 @@ export type Database = {
           updated_at?: string
           user_id?: string
           vat_amount?: number | null
+          zra_invoice_number?: string | null
+          zra_qr_code?: string | null
+          zra_submission_status?: string | null
+          zra_submitted_at?: string | null
         }
         Relationships: [
           {
@@ -1457,6 +1965,48 @@ export type Database = {
           },
         ]
       }
+      payroll_journals: {
+        Row: {
+          created_at: string
+          description: string | null
+          id: string
+          journal_entry_id: string | null
+          journal_type: string
+          payroll_run_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          description?: string | null
+          id?: string
+          journal_entry_id?: string | null
+          journal_type: string
+          payroll_run_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          description?: string | null
+          id?: string
+          journal_entry_id?: string | null
+          journal_type?: string
+          payroll_run_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "payroll_journals_journal_entry_id_fkey"
+            columns: ["journal_entry_id"]
+            isOneToOne: false
+            referencedRelation: "journal_entries"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "payroll_journals_payroll_run_id_fkey"
+            columns: ["payroll_run_id"]
+            isOneToOne: false
+            referencedRelation: "payroll_runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       payroll_runs: {
         Row: {
           approved_at: string | null
@@ -1465,17 +2015,28 @@ export type Database = {
           created_at: string
           deleted_at: string | null
           deleted_by: string | null
+          finalized_at: string | null
+          finalized_by: string | null
+          gl_journal_id: string | null
+          gl_posted: boolean | null
           id: string
           is_deleted: boolean
           is_locked: boolean
           notes: string | null
+          payroll_number: string | null
+          payroll_status: Database["public"]["Enums"]["payroll_status"] | null
           period_end: string
           period_start: string
+          reversal_reason: string | null
+          reversed_at: string | null
+          reversed_by: string | null
           run_date: string
           status: string | null
           total_deductions: number | null
           total_gross: number | null
           total_net: number | null
+          trial_run_at: string | null
+          trial_run_by: string | null
           updated_at: string
           user_id: string
         }
@@ -1486,17 +2047,28 @@ export type Database = {
           created_at?: string
           deleted_at?: string | null
           deleted_by?: string | null
+          finalized_at?: string | null
+          finalized_by?: string | null
+          gl_journal_id?: string | null
+          gl_posted?: boolean | null
           id?: string
           is_deleted?: boolean
           is_locked?: boolean
           notes?: string | null
+          payroll_number?: string | null
+          payroll_status?: Database["public"]["Enums"]["payroll_status"] | null
           period_end: string
           period_start: string
+          reversal_reason?: string | null
+          reversed_at?: string | null
+          reversed_by?: string | null
           run_date: string
           status?: string | null
           total_deductions?: number | null
           total_gross?: number | null
           total_net?: number | null
+          trial_run_at?: string | null
+          trial_run_by?: string | null
           updated_at?: string
           user_id: string
         }
@@ -1507,17 +2079,28 @@ export type Database = {
           created_at?: string
           deleted_at?: string | null
           deleted_by?: string | null
+          finalized_at?: string | null
+          finalized_by?: string | null
+          gl_journal_id?: string | null
+          gl_posted?: boolean | null
           id?: string
           is_deleted?: boolean
           is_locked?: boolean
           notes?: string | null
+          payroll_number?: string | null
+          payroll_status?: Database["public"]["Enums"]["payroll_status"] | null
           period_end?: string
           period_start?: string
+          reversal_reason?: string | null
+          reversed_at?: string | null
+          reversed_by?: string | null
           run_date?: string
           status?: string | null
           total_deductions?: number | null
           total_gross?: number | null
           total_net?: number | null
+          trial_run_at?: string | null
+          trial_run_by?: string | null
           updated_at?: string
           user_id?: string
         }
@@ -1527,6 +2110,13 @@ export type Database = {
             columns: ["company_id"]
             isOneToOne: false
             referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "payroll_runs_gl_journal_id_fkey"
+            columns: ["gl_journal_id"]
+            isOneToOne: false
+            referencedRelation: "journal_entries"
             referencedColumns: ["id"]
           },
         ]
@@ -2209,11 +2799,94 @@ export type Database = {
           },
         ]
       }
+      zra_submissions: {
+        Row: {
+          company_id: string | null
+          created_at: string
+          id: string
+          invoice_id: string | null
+          last_retry_at: string | null
+          qr_code: string | null
+          raw_request: Json | null
+          raw_response: Json | null
+          response_code: string | null
+          response_message: string | null
+          retry_count: number | null
+          submission_date: string | null
+          submission_status: string | null
+          submission_type: string
+          updated_at: string
+          zra_invoice_number: string | null
+        }
+        Insert: {
+          company_id?: string | null
+          created_at?: string
+          id?: string
+          invoice_id?: string | null
+          last_retry_at?: string | null
+          qr_code?: string | null
+          raw_request?: Json | null
+          raw_response?: Json | null
+          response_code?: string | null
+          response_message?: string | null
+          retry_count?: number | null
+          submission_date?: string | null
+          submission_status?: string | null
+          submission_type?: string
+          updated_at?: string
+          zra_invoice_number?: string | null
+        }
+        Update: {
+          company_id?: string | null
+          created_at?: string
+          id?: string
+          invoice_id?: string | null
+          last_retry_at?: string | null
+          qr_code?: string | null
+          raw_request?: Json | null
+          raw_response?: Json | null
+          response_code?: string | null
+          response_message?: string | null
+          retry_count?: number | null
+          submission_date?: string | null
+          submission_status?: string | null
+          submission_type?: string
+          updated_at?: string
+          zra_invoice_number?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "zra_submissions_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "zra_submissions_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
+      calculate_monthly_depreciation: {
+        Args: {
+          p_current_nbv?: number
+          p_depreciation_method: Database["public"]["Enums"]["depreciation_method"]
+          p_depreciation_rate?: number
+          p_purchase_cost: number
+          p_residual_value: number
+          p_useful_life_months: number
+        }
+        Returns: number
+      }
       create_notification: {
         Args: {
           p_message: string
@@ -2223,6 +2896,10 @@ export type Database = {
           p_type?: string
           p_user_id: string
         }
+        Returns: string
+      }
+      generate_payroll_number: {
+        Args: { p_company_id: string }
         Returns: string
       }
       get_user_company_id: { Args: { _user_id: string }; Returns: string }
@@ -2270,6 +2947,13 @@ export type Database = {
         Args: { _company_id: string; _user_id: string }
         Returns: boolean
       }
+      validate_payroll_transition: {
+        Args: {
+          p_current_status: Database["public"]["Enums"]["payroll_status"]
+          p_new_status: Database["public"]["Enums"]["payroll_status"]
+        }
+        Returns: boolean
+      }
     }
     Enums: {
       app_role:
@@ -2287,6 +2971,24 @@ export type Database = {
         | "financial_manager"
         | "assistant_accountant"
         | "cashier"
+      asset_status:
+        | "active"
+        | "disposed"
+        | "fully_depreciated"
+        | "under_maintenance"
+      business_type:
+        | "sme"
+        | "ngo"
+        | "school"
+        | "corporate"
+        | "government"
+        | "other"
+      depreciation_method:
+        | "straight_line"
+        | "reducing_balance"
+        | "units_of_production"
+      payroll_status: "draft" | "trial" | "final" | "reversed"
+      tax_type: "vat_registered" | "turnover_tax" | "non_vat" | "tax_exempt"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -2430,6 +3132,27 @@ export const Constants = {
         "assistant_accountant",
         "cashier",
       ],
+      asset_status: [
+        "active",
+        "disposed",
+        "fully_depreciated",
+        "under_maintenance",
+      ],
+      business_type: [
+        "sme",
+        "ngo",
+        "school",
+        "corporate",
+        "government",
+        "other",
+      ],
+      depreciation_method: [
+        "straight_line",
+        "reducing_balance",
+        "units_of_production",
+      ],
+      payroll_status: ["draft", "trial", "final", "reversed"],
+      tax_type: ["vat_registered", "turnover_tax", "non_vat", "tax_exempt"],
     },
   },
 } as const
