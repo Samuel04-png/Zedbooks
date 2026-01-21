@@ -66,10 +66,12 @@ const navigation: NavSection[] = [
     ],
   },
   {
-    title: "Inventory & Products",
+    title: "Inventory & Assets",
     items: [
       { title: "Products & Services", icon: Package, href: "/products" },
       { title: "Inventory", icon: Package, href: "/inventory" },
+      { title: "Fixed Assets", icon: Package, href: "/fixed-assets" },
+      { title: "Depreciation", icon: Calculator, href: "/asset-depreciation" },
     ],
   },
   {
@@ -93,6 +95,13 @@ const navigation: NavSection[] = [
     items: [
       { title: "Projects", icon: BriefcaseIcon, href: "/projects" },
       { title: "Donors & Grants", icon: Heart, href: "/donors" },
+    ],
+  },
+  {
+    title: "Accounting",
+    items: [
+      { title: "Journal Entries", icon: FileText, href: "/journal-entries" },
+      { title: "Financial Periods", icon: Clock, href: "/financial-periods" },
     ],
   },
   {

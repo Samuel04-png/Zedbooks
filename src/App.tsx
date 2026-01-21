@@ -50,6 +50,10 @@ import Landing from "./pages/Landing";
 import Donors from "./pages/Donors";
 import AccountsPayable from "./pages/AccountsPayable";
 import AccountsReceivable from "./pages/AccountsReceivable";
+import FixedAssets from "./pages/FixedAssets";
+import AssetDepreciation from "./pages/AssetDepreciation";
+import FinancialPeriods from "./pages/FinancialPeriods";
+import JournalEntries from "./pages/JournalEntries";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -117,6 +121,10 @@ const App = () => (
               <Route path="/settings" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><CompanySettings /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/users" element={<ProtectedRoute><AppLayout><RoleProtectedRoute allowedRoles={["super_admin", "admin"]}><UserManagement /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/audit-logs" element={<ProtectedRoute><AppLayout><RoleProtectedRoute allowedRoles={["super_admin", "admin", "auditor"]}><AuditLogs /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+              <Route path="/fixed-assets" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><FixedAssets /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+              <Route path="/asset-depreciation" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><AssetDepreciation /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+              <Route path="/financial-periods" element={<ProtectedRoute><AppLayout><RoleProtectedRoute allowedRoles={["super_admin", "admin", "accountant"]}><FinancialPeriods /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+              <Route path="/journal-entries" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><JournalEntries /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               
               {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
               <Route path="*" element={<NotFound />} />
