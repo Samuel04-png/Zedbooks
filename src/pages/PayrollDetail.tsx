@@ -1,7 +1,9 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Download, FileText } from "lucide-react";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { ArrowLeft, Download, FileText, Play, CheckCircle, RotateCcw, AlertTriangle, BookOpen, Loader2 } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   Table,
@@ -11,13 +13,27 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { formatZMW } from "@/utils/zambianTaxCalculations";
 import { format } from "date-fns";
 import { toast } from "sonner";
 
+type PayrollStatus = "draft" | "trial" | "final";
+
 export default function PayrollDetail() {
   const navigate = useNavigate();
   const { id } = useParams();
+  const queryClient = useQueryClient();
 
   const { data: payrollRun, isLoading } = useQuery({
     queryKey: ["payrollRun", id],
@@ -57,6 +73,140 @@ export default function PayrollDetail() {
 
       if (error) throw error;
       return data;
+    },
+  });
+
+  const { data: glJournals } = useQuery({
+    queryKey: ["payroll-journals", id],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("payroll_journals")
+        .select(`
+          *,
+          journal_entries (
+            id,
+            reference_number,
+            entry_date,
+            description,
+            is_posted
+          )
+        `)
+        .eq("payroll_run_id", id);
+
+      if (error) throw error;
+      return data;
+    },
+    enabled: payrollRun?.payroll_status === "final",
+  });
+
+  const runTrialMutation = useMutation({
+    mutationFn: async () => {
+      const { error } = await supabase
+        .from("payroll_runs")
+        .update({
+          payroll_status: "trial" as PayrollStatus,
+          trial_run_at: new Date().toISOString(),
+          trial_run_by: (await supabase.auth.getUser()).data.user?.id,
+        })
+        .eq("id", id);
+
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["payrollRun", id] });
+      toast.success("Trial payroll run completed. Review the calculations before finalizing.");
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Failed to run trial payroll");
+    },
+  });
+
+  const revertToTrialMutation = useMutation({
+    mutationFn: async () => {
+      const { error } = await supabase
+        .from("payroll_runs")
+        .update({
+          payroll_status: "draft" as PayrollStatus,
+          trial_run_at: null,
+          trial_run_by: null,
+        })
+        .eq("id", id);
+
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["payrollRun", id] });
+      toast.success("Payroll reverted to draft. You can make changes and re-run trial.");
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Failed to revert payroll");
+    },
+  });
+
+  const finalizeMutation = useMutation({
+    mutationFn: async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error("Not authenticated");
+
+      // Get profile for company_id
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("company_id")
+        .eq("id", user.id)
+        .single();
+
+      // Generate payroll number
+      const payrollNumber = `PR-${format(new Date(), "yyyyMM")}-${id?.slice(0, 4).toUpperCase()}`;
+
+      // Create GL Journal Entry
+      const { data: journalEntry, error: journalError } = await supabase
+        .from("journal_entries")
+        .insert({
+          user_id: user.id,
+          company_id: profile?.company_id,
+          entry_date: new Date().toISOString().split("T")[0],
+          reference_number: `PAYROLL-${payrollNumber}`,
+          description: `Payroll for period ${format(new Date(payrollRun!.period_start), "MMM yyyy")}`,
+          is_posted: true,
+          is_locked: true,
+        })
+        .select()
+        .single();
+
+      if (journalError) throw journalError;
+
+      // Create payroll journal link
+      await supabase.from("payroll_journals").insert({
+        payroll_run_id: id,
+        journal_entry_id: journalEntry.id,
+        journal_type: "payroll_expense",
+        description: "Monthly payroll GL posting",
+      });
+
+      // Finalize the payroll run
+      const { error } = await supabase
+        .from("payroll_runs")
+        .update({
+          payroll_status: "final" as PayrollStatus,
+          status: "completed",
+          finalized_at: new Date().toISOString(),
+          finalized_by: user.id,
+          is_locked: true,
+          payroll_number: payrollNumber,
+          gl_posted: true,
+          gl_journal_id: journalEntry.id,
+        })
+        .eq("id", id);
+
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["payrollRun", id] });
+      queryClient.invalidateQueries({ queryKey: ["payroll-journals", id] });
+      toast.success("Payroll finalized and posted to General Ledger!");
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Failed to finalize payroll");
     },
   });
 
@@ -140,7 +290,6 @@ export default function PayrollDetail() {
           const employee = item.employees;
           if (!employee.email) continue;
 
-          // Generate cryptographically secure random password
           const password = generateSecurePassword();
 
           await supabase.functions.invoke('send-payslip-email', {
@@ -184,7 +333,6 @@ export default function PayrollDetail() {
   const downloadBatchPayslips = () => {
     if (!payrollItems || !payrollRun) return;
     
-    // Generate batch payslip content
     let batchContent = `PAYSLIPS - ${new Date(payrollRun.period_start).toLocaleDateString()} to ${new Date(payrollRun.period_end).toLocaleDateString()}\n`;
     batchContent += '='.repeat(100) + '\n\n';
 
@@ -232,8 +380,30 @@ export default function PayrollDetail() {
     toast.success('Batch payslips downloaded successfully!');
   };
 
+  const getStatusBadge = (status: PayrollStatus | null) => {
+    switch (status) {
+      case "draft":
+        return <Badge variant="outline" className="border-yellow-500 text-yellow-600">Draft</Badge>;
+      case "trial":
+        return <Badge variant="secondary" className="bg-blue-100 text-blue-700">Trial Run</Badge>;
+      case "final":
+        return <Badge className="bg-green-600">Finalized</Badge>;
+      default:
+        return <Badge variant="outline">Unknown</Badge>;
+    }
+  };
+
+  const payrollStatus = payrollRun?.payroll_status as PayrollStatus | null;
+  const isDraft = payrollStatus === "draft";
+  const isTrial = payrollStatus === "trial";
+  const isFinal = payrollStatus === "final";
+
   if (isLoading) {
-    return <div>Loading...</div>;
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
   }
 
   return (
@@ -245,7 +415,13 @@ export default function PayrollDetail() {
             Back
           </Button>
           <div>
-            <h1 className="text-3xl font-bold">Payroll Details</h1>
+            <div className="flex items-center gap-3">
+              <h1 className="text-3xl font-bold">Payroll Details</h1>
+              {getStatusBadge(payrollStatus)}
+              {payrollRun?.payroll_number && (
+                <span className="text-sm text-muted-foreground font-mono">{payrollRun.payroll_number}</span>
+              )}
+            </div>
             <p className="text-muted-foreground">
               {payrollRun && (
                 <>
@@ -257,74 +433,235 @@ export default function PayrollDetail() {
           </div>
         </div>
         <div className="flex gap-2">
-          <Button onClick={sendPayslipEmails} variant="outline">
-            Email Payslips
-          </Button>
-          <Button onClick={downloadBatchPayslips} variant="outline">
-            Download All
-          </Button>
-          <Button onClick={exportToCSV}>
+          {isDraft && (
+            <Button 
+              onClick={() => runTrialMutation.mutate()}
+              disabled={runTrialMutation.isPending}
+              className="bg-blue-600 hover:bg-blue-700"
+            >
+              {runTrialMutation.isPending ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <Play className="h-4 w-4 mr-2" />
+              )}
+              Run Trial Payroll
+            </Button>
+          )}
+          {isTrial && (
+            <>
+              <Button 
+                variant="outline"
+                onClick={() => revertToTrialMutation.mutate()}
+                disabled={revertToTrialMutation.isPending}
+              >
+                {revertToTrialMutation.isPending ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <RotateCcw className="h-4 w-4 mr-2" />
+                )}
+                Revert to Draft
+              </Button>
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button className="bg-green-600 hover:bg-green-700">
+                    <CheckCircle className="h-4 w-4 mr-2" />
+                    Finalize Payroll
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle className="flex items-center gap-2">
+                      <AlertTriangle className="h-5 w-5 text-amber-500" />
+                      Finalize Payroll
+                    </AlertDialogTitle>
+                    <AlertDialogDescription className="space-y-2">
+                      <p>This action will:</p>
+                      <ul className="list-disc list-inside space-y-1 text-sm">
+                        <li>Lock the payroll permanently - no further edits allowed</li>
+                        <li>Post journal entries to the General Ledger</li>
+                        <li>Create statutory liability accounts (PAYE, NAPSA, NHIMA)</li>
+                        <li>Generate payroll number for reference</li>
+                      </ul>
+                      <p className="font-medium mt-4">Are you sure you want to proceed?</p>
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction
+                      onClick={() => finalizeMutation.mutate()}
+                      disabled={finalizeMutation.isPending}
+                      className="bg-green-600 hover:bg-green-700"
+                    >
+                      {finalizeMutation.isPending ? (
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      ) : null}
+                      Finalize & Post to GL
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </>
+          )}
+          {isFinal && (
+            <>
+              <Button onClick={sendPayslipEmails} variant="outline">
+                Email Payslips
+              </Button>
+              <Button onClick={downloadBatchPayslips} variant="outline">
+                Download All
+              </Button>
+            </>
+          )}
+          <Button onClick={exportToCSV} variant="outline">
             <Download className="mr-2 h-4 w-4" />
             Export CSV
           </Button>
         </div>
       </div>
 
+      {/* Status Warning for Trial */}
+      {isTrial && (
+        <Card className="border-blue-200 bg-blue-50">
+          <CardContent className="py-4">
+            <div className="flex items-center gap-3">
+              <AlertTriangle className="h-5 w-5 text-blue-600" />
+              <div>
+                <p className="font-medium text-blue-900">Trial Payroll Run</p>
+                <p className="text-sm text-blue-700">
+                  Review the calculations below. No GL entries have been posted. Click "Finalize Payroll" when ready.
+                </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* GL Posting Info for Final */}
+      {isFinal && glJournals && glJournals.length > 0 && (
+        <Card className="border-green-200 bg-green-50">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-lg flex items-center gap-2">
+              <BookOpen className="h-5 w-5 text-green-600" />
+              General Ledger Postings
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              {glJournals.map((journal: any) => (
+                <div key={journal.id} className="flex items-center justify-between p-3 bg-white rounded-lg border">
+                  <div>
+                    <p className="font-medium">{journal.journal_entries?.reference_number}</p>
+                    <p className="text-sm text-muted-foreground">{journal.description}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-sm">
+                      {journal.journal_entries?.entry_date && 
+                        format(new Date(journal.journal_entries.entry_date), "dd MMM yyyy")
+                      }
+                    </p>
+                    <Badge variant="outline" className="text-green-600 border-green-600">Posted</Badge>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <Button 
+              variant="link" 
+              className="mt-2 p-0 h-auto text-green-700"
+              onClick={() => navigate("/journal-entries")}
+            >
+              View all journal entries →
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="border rounded-lg p-4">
-          <p className="text-sm text-muted-foreground">Total Gross</p>
-          <p className="text-2xl font-bold">{formatZMW(Number(payrollRun?.total_gross || 0))}</p>
-        </div>
-        <div className="border rounded-lg p-4">
-          <p className="text-sm text-muted-foreground">Total Deductions</p>
-          <p className="text-2xl font-bold">{formatZMW(Number(payrollRun?.total_deductions || 0))}</p>
-        </div>
-        <div className="border rounded-lg p-4">
-          <p className="text-sm text-muted-foreground">Total Net</p>
-          <p className="text-2xl font-bold">{formatZMW(Number(payrollRun?.total_net || 0))}</p>
-        </div>
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription>Total Gross</CardDescription>
+            <CardTitle className="text-2xl">{formatZMW(Number(payrollRun?.total_gross || 0))}</CardTitle>
+          </CardHeader>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription>Total Deductions</CardDescription>
+            <CardTitle className="text-2xl text-destructive">{formatZMW(Number(payrollRun?.total_deductions || 0))}</CardTitle>
+          </CardHeader>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription>Total Net</CardDescription>
+            <CardTitle className="text-2xl text-primary">{formatZMW(Number(payrollRun?.total_net || 0))}</CardTitle>
+          </CardHeader>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription>Employees</CardDescription>
+            <CardTitle className="text-2xl">{payrollItems?.length || 0}</CardTitle>
+          </CardHeader>
+        </Card>
       </div>
 
       {/* Payroll Items Table */}
-      <div className="border rounded-lg">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Employee</TableHead>
-              <TableHead>Gross</TableHead>
-              <TableHead>Deductions</TableHead>
-              <TableHead>Net Salary</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {payrollItems?.map((item: any) => (
-              <TableRow key={item.id}>
-                <TableCell>
-                  <div>
-                    <p className="font-medium">{item.employees.full_name}</p>
-                    <p className="text-sm text-muted-foreground">{item.employees.employee_number}</p>
-                  </div>
-                </TableCell>
-                <TableCell>{formatZMW(Number(item.gross_salary))}</TableCell>
-                <TableCell>{formatZMW(Number(item.total_deductions))}</TableCell>
-                <TableCell className="font-medium">{formatZMW(Number(item.net_salary))}</TableCell>
-                <TableCell className="text-right">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => viewPayslip(item.employee_id)}
-                  >
-                    <FileText className="h-4 w-4 mr-2" />
-                    Payslip
-                  </Button>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Payroll Items</CardTitle>
+          <CardDescription>Individual employee payroll calculations</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="border rounded-lg overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Employee</TableHead>
+                  <TableHead className="text-right">Basic</TableHead>
+                  <TableHead className="text-right">Allowances</TableHead>
+                  <TableHead className="text-right">Gross</TableHead>
+                  <TableHead className="text-right">PAYE</TableHead>
+                  <TableHead className="text-right">NAPSA</TableHead>
+                  <TableHead className="text-right">NHIMA</TableHead>
+                  <TableHead className="text-right">Total Ded.</TableHead>
+                  <TableHead className="text-right">Net Salary</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {payrollItems?.map((item: any) => (
+                  <TableRow key={item.id}>
+                    <TableCell>
+                      <div>
+                        <p className="font-medium">{item.employees.full_name}</p>
+                        <p className="text-sm text-muted-foreground">{item.employees.employee_number}</p>
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-right">{formatZMW(Number(item.basic_salary))}</TableCell>
+                    <TableCell className="text-right">
+                      {formatZMW(Number(item.housing_allowance || 0) + Number(item.transport_allowance || 0) + Number(item.other_allowances || 0))}
+                    </TableCell>
+                    <TableCell className="text-right font-medium">{formatZMW(Number(item.gross_salary))}</TableCell>
+                    <TableCell className="text-right text-destructive">{formatZMW(Number(item.paye))}</TableCell>
+                    <TableCell className="text-right text-destructive">{formatZMW(Number(item.napsa_employee))}</TableCell>
+                    <TableCell className="text-right text-destructive">{formatZMW(Number(item.nhima_employee))}</TableCell>
+                    <TableCell className="text-right text-destructive">{formatZMW(Number(item.total_deductions))}</TableCell>
+                    <TableCell className="text-right font-medium text-primary">{formatZMW(Number(item.net_salary))}</TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => viewPayslip(item.employee_id)}
+                      >
+                        <FileText className="h-4 w-4 mr-2" />
+                        Payslip
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }
