@@ -1,11 +1,13 @@
 import { useState, useEffect } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -13,10 +15,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, Trash2, Save, Send } from "lucide-react";
+import { Plus, Trash2, Save, Send, FileCheck, AlertCircle } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { useCompanySettings } from "@/hooks/useCompanySettings";
+import { useZRAInvoice } from "@/hooks/useZRAInvoice";
 
 interface InvoiceLine {
   id: string;
@@ -28,9 +31,11 @@ interface InvoiceLine {
 
 export default function NewInvoice() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
   const customerId = searchParams.get("customer");
   const { data: settings } = useCompanySettings();
+  const { submitToZRA, isSubmitting } = useZRAInvoice();
   
   const [selectedCustomer, setSelectedCustomer] = useState(customerId || "");
   const [invoiceNumber, setInvoiceNumber] = useState(`INV-${Date.now()}`);
@@ -38,6 +43,7 @@ export default function NewInvoice() {
   const [dueDate, setDueDate] = useState("");
   const [notes, setNotes] = useState("");
   const [terms, setTerms] = useState("");
+  const [submitToZRAOnSend, setSubmitToZRAOnSend] = useState(true);
   
   const [lines, setLines] = useState<InvoiceLine[]>([
     { id: "1", description: "", quantity: 1, rate: 0, amount: 0 },
@@ -100,10 +106,17 @@ export default function NewInvoice() {
 
   const saveMutation = useMutation({
     mutationFn: async (status: string) => {
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("company_id")
+        .eq("id", user?.id)
+        .single();
+
       const { data: invoice, error: invoiceError } = await supabase
         .from("invoices")
         .insert({
           user_id: user?.id,
+          company_id: profile?.company_id,
           customer_id: selectedCustomer || null,
           invoice_number: invoiceNumber,
           invoice_date: invoiceDate,
@@ -114,6 +127,7 @@ export default function NewInvoice() {
           status,
           notes,
           terms,
+          zra_submission_status: isVatRegistered && submitToZRAOnSend && status === "sent" ? "pending" : null,
         })
         .select()
         .single();
@@ -139,7 +153,18 @@ export default function NewInvoice() {
 
       return invoice;
     },
-    onSuccess: (_, status) => {
+    onSuccess: async (invoice, status) => {
+      // If VAT registered and sending, submit to ZRA
+      if (isVatRegistered && submitToZRAOnSend && status === "sent") {
+        try {
+          await submitToZRA.mutateAsync(invoice.id);
+        } catch (e) {
+          // Invoice saved but ZRA submission queued
+          console.log("ZRA submission queued for retry");
+        }
+      }
+      
+      queryClient.invalidateQueries({ queryKey: ["invoices"] });
       toast.success(status === "sent" ? "Invoice sent successfully" : "Invoice saved as draft");
       navigate("/invoices");
     },
@@ -359,6 +384,35 @@ export default function NewInvoice() {
               </div>
             </CardContent>
           </Card>
+
+          {isVatRegistered && (
+            <Card className="border-primary/20 bg-primary/5">
+              <CardContent className="pt-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <FileCheck className="h-4 w-4 text-primary" />
+                  <span className="font-medium text-sm">ZRA Smart Invoice</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm">Submit to ZRA on send</p>
+                    <p className="text-xs text-muted-foreground">
+                      Invoice will be submitted for ZRA approval
+                    </p>
+                  </div>
+                  <Switch
+                    checked={submitToZRAOnSend}
+                    onCheckedChange={setSubmitToZRAOnSend}
+                  />
+                </div>
+                {isSubmitting && (
+                  <Badge variant="outline" className="animate-pulse">
+                    <AlertCircle className="h-3 w-3 mr-1" />
+                    Submitting to ZRA...
+                  </Badge>
+                )}
+              </CardContent>
+            </Card>
+          )}
 
           {!isVatRegistered && (
             <Card className="bg-muted/50">
