@@ -14,3 +14,9 @@ verify_jwt = true
 
 [functions.create-approval-request]
 verify_jwt = true
+
+[functions.zra-smart-invoice]
+verify_jwt = false
+
+[functions.run-depreciation]
+verify_jwt = false
