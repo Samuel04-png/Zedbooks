@@ -13,6 +13,7 @@ import {
   Settings,
   Heart,
   Calculator,
+  BookOpen,
 } from "lucide-react";
 import { UserMenu } from "./UserMenu";
 import { useUserRole, canAccessRoute, AppRole } from "@/hooks/useUserRole";
@@ -100,6 +101,7 @@ const navigation: NavSection[] = [
   {
     title: "Accounting",
     items: [
+      { title: "Chart of Accounts", icon: BookOpen, href: "/chart-of-accounts" },
       { title: "Journal Entries", icon: FileText, href: "/journal-entries" },
       { title: "Financial Periods", icon: Clock, href: "/financial-periods" },
     ],
