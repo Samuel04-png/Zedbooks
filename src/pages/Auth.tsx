@@ -1,18 +1,14 @@
 import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Heart, ArrowLeft, Chrome, Phone, Mail, Loader2, RefreshCw, CheckCircle2, ShieldCheck, KeyRound } from "lucide-react";
-import { Separator } from "@/components/ui/separator";
-import { Skeleton } from "@/components/ui/skeleton";
-import { useNavigate } from "react-router-dom";
+import { User, Lock, Loader2, RefreshCw, Mail, ArrowRight } from "lucide-react";
+import { useNavigate, Link } from "react-router-dom";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { z } from "zod";
-import PublicNavbar from "@/components/layout/PublicNavbar";
 
 const loginSchema = z.object({
   email: z.string().email("Invalid email address"),
@@ -38,32 +34,18 @@ const newPasswordSchema = z.object({
   path: ["confirmPassword"],
 });
 
-const phoneSchema = z.object({
-  phone: z.string().min(10, "Phone number must be at least 10 digits").regex(/^\+?[0-9]+$/, "Invalid phone number format"),
-});
-
-const otpSchema = z.object({
-  otp: z.string().length(6, "OTP must be 6 digits"),
-});
-
-type AuthView = "login" | "forgot-password" | "reset-password" | "phone-login" | "verify-otp" | "verify-email" | "verify-signup-otp" | "verify-2fa";
-type LoginMethod = "email" | "phone";
+type AuthView = "login" | "forgot-password" | "reset-password" | "verify-email";
 
 export default function Auth() {
   const navigate = useNavigate();
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
-  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [isResending, setIsResending] = useState(false);
   const [authView, setAuthView] = useState<AuthView>("login");
-  const [loginMethod, setLoginMethod] = useState<LoginMethod>("email");
   const [rememberMe, setRememberMe] = useState(false);
   const [hasSubmittedForm, setHasSubmittedForm] = useState(false);
-  const [pendingUserId, setPendingUserId] = useState<string | null>(null);
-  
-  // Resend OTP cooldown
   const [resendCooldown, setResendCooldown] = useState(0);
-  
+
   const [loginForm, setLoginForm] = useState({ email: "", password: "" });
   const [signupForm, setSignupForm] = useState({
     organizationName: "",
@@ -76,12 +58,8 @@ export default function Auth() {
     password: "",
     confirmPassword: "",
   });
-  const [phoneForm, setPhoneForm] = useState({ phone: "" });
-  const [otpForm, setOtpForm] = useState({ otp: "" });
-  const [twoFaCode, setTwoFaCode] = useState("");
   const [pendingVerificationEmail, setPendingVerificationEmail] = useState("");
 
-  // Cooldown timer effect
   useEffect(() => {
     if (resendCooldown > 0) {
       const timer = setTimeout(() => setResendCooldown(resendCooldown - 1), 1000);
@@ -89,31 +67,7 @@ export default function Auth() {
     }
   }, [resendCooldown]);
 
-  const handleGoogleSignIn = async () => {
-    setIsGoogleLoading(true);
-    setHasSubmittedForm(true);
-    try {
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: "google",
-        options: {
-          redirectTo: `${window.location.origin}/auth`,
-        },
-      });
-
-      if (error) {
-        toast.error(error.message);
-        setHasSubmittedForm(false);
-      }
-    } catch (error) {
-      toast.error("Failed to sign in with Google");
-      setHasSubmittedForm(false);
-    } finally {
-      setIsGoogleLoading(false);
-    }
-  };
-
   const checkCompanySetupAndRedirect = useCallback(async (userId: string) => {
-    // Check if company settings exist
     const { data: settings } = await supabase
       .from("company_settings")
       .select("id, company_name")
@@ -128,33 +82,26 @@ export default function Auth() {
   }, [navigate]);
 
   useEffect(() => {
-    // Check URL for password recovery token
     const hashParams = new URLSearchParams(window.location.hash.substring(1));
     const accessToken = hashParams.get("access_token");
     const type = hashParams.get("type");
-    
+
     if (accessToken && type === "recovery") {
       setAuthView("reset-password");
       setIsCheckingAuth(false);
       return;
     }
 
-    // Check if user is already logged in - but only redirect if they didn't just land on the page
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session) {
-        // Only auto-redirect if there's a valid session AND the user explicitly submitted a form
         checkCompanySetupAndRedirect(session.user.id);
       } else {
         setIsCheckingAuth(false);
       }
     });
 
-    // Listen for auth state changes - only redirect after form submission
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((event, session) => {
-      if (session && hasSubmittedForm && authView !== "reset-password" && authView !== "verify-email" && authView !== "verify-signup-otp" && authView !== "verify-2fa") {
-        // Defer the redirect to avoid deadlock
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (session && hasSubmittedForm && authView !== "reset-password" && authView !== "verify-email") {
         setTimeout(() => {
           checkCompanySetupAndRedirect(session.user.id);
         }, 0);
@@ -170,7 +117,6 @@ export default function Auth() {
 
     try {
       const validated = loginSchema.parse(loginForm);
-
       const { data, error } = await supabase.auth.signInWithPassword({
         email: validated.email,
         password: validated.password,
@@ -179,11 +125,8 @@ export default function Auth() {
       if (error) {
         toast.error(error.message);
       } else if (data.session) {
-        // Check if 2FA is enabled for this user (would need to be stored in user metadata or profiles)
-        // For now, we proceed directly
         setHasSubmittedForm(true);
         toast.success("Logged in successfully");
-        // Auth state change handler will redirect
       }
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -202,8 +145,6 @@ export default function Auth() {
 
     try {
       const validated = signupSchema.parse(signupForm);
-
-      // First, create the account with email verification
       const { data, error } = await supabase.auth.signUp({
         email: validated.email,
         password: validated.password,
@@ -219,11 +160,9 @@ export default function Auth() {
       if (error) {
         toast.error(error.message);
       } else if (data.user) {
-        // Check if email confirmation is required
         if (data.user.identities && data.user.identities.length === 0) {
           toast.error("An account with this email already exists");
         } else {
-          // Show email verification pending state
           setPendingVerificationEmail(validated.email);
           setAuthView("verify-email");
           toast.success("Verification email sent! Please check your inbox.");
@@ -242,7 +181,7 @@ export default function Auth() {
 
   const handleResendVerificationEmail = async () => {
     if (resendCooldown > 0) return;
-    
+
     setIsResending(true);
     try {
       const { error } = await supabase.auth.resend({
@@ -254,109 +193,12 @@ export default function Auth() {
         toast.error(error.message);
       } else {
         toast.success("Verification email resent!");
-        setResendCooldown(60); // 60 second cooldown
+        setResendCooldown(60);
       }
     } catch (error) {
       toast.error("Failed to resend verification email");
     } finally {
       setIsResending(false);
-    }
-  };
-
-  const handlePhoneSignIn = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsLoading(true);
-
-    try {
-      const validated = phoneSchema.parse(phoneForm);
-      
-      // Ensure phone number starts with +
-      const formattedPhone = validated.phone.startsWith('+') 
-        ? validated.phone 
-        : `+${validated.phone}`;
-
-      const { error } = await supabase.auth.signInWithOtp({
-        phone: formattedPhone,
-      });
-
-      if (error) {
-        toast.error(error.message);
-      } else {
-        toast.success("OTP sent to your phone!");
-        setAuthView("verify-otp");
-        setResendCooldown(60); // Start cooldown
-      }
-    } catch (error) {
-      if (error instanceof z.ZodError) {
-        toast.error(error.errors[0].message);
-      } else {
-        toast.error("Failed to send OTP");
-      }
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleResendOtp = async () => {
-    if (resendCooldown > 0) return;
-    
-    setIsResending(true);
-    try {
-      const formattedPhone = phoneForm.phone.startsWith('+') 
-        ? phoneForm.phone 
-        : `+${phoneForm.phone}`;
-
-      const { error } = await supabase.auth.signInWithOtp({
-        phone: formattedPhone,
-      });
-
-      if (error) {
-        toast.error(error.message);
-      } else {
-        toast.success("OTP resent successfully!");
-        setResendCooldown(60); // 60 second cooldown
-      }
-    } catch (error) {
-      toast.error("Failed to resend OTP");
-    } finally {
-      setIsResending(false);
-    }
-  };
-
-  const handleVerifyOtp = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsLoading(true);
-    setHasSubmittedForm(true);
-
-    try {
-      const validated = otpSchema.parse(otpForm);
-      
-      const formattedPhone = phoneForm.phone.startsWith('+') 
-        ? phoneForm.phone 
-        : `+${phoneForm.phone}`;
-
-      const { data, error } = await supabase.auth.verifyOtp({
-        phone: formattedPhone,
-        token: validated.otp,
-        type: "sms",
-      });
-
-      if (error) {
-        toast.error(error.message);
-        setHasSubmittedForm(false);
-      } else if (data.session) {
-        toast.success("Phone verified successfully!");
-        // Auth state change handler will redirect
-      }
-    } catch (error) {
-      if (error instanceof z.ZodError) {
-        toast.error(error.errors[0].message);
-      } else {
-        toast.error("Failed to verify OTP");
-      }
-      setHasSubmittedForm(false);
-    } finally {
-      setIsLoading(false);
     }
   };
 
@@ -366,7 +208,6 @@ export default function Auth() {
 
     try {
       const validated = resetEmailSchema.parse({ email: resetEmail });
-
       const { error } = await supabase.auth.resetPasswordForEmail(validated.email, {
         redirectTo: `${window.location.origin}/auth`,
       });
@@ -395,7 +236,6 @@ export default function Auth() {
 
     try {
       const validated = newPasswordSchema.parse(newPasswordForm);
-
       const { error } = await supabase.auth.updateUser({
         password: validated.password,
       });
@@ -418,652 +258,372 @@ export default function Auth() {
     }
   };
 
-  // Loading state while checking authentication
   if (isCheckingAuth) {
     return (
-      <div className="min-h-screen flex flex-col bg-gradient-to-br from-primary/5 via-background to-accent/5">
-        <PublicNavbar />
-        <div className="flex-1 flex items-center justify-center p-4">
-          <div className="w-full max-w-md">
-            <div className="text-center mb-8">
-              <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-primary/10 mb-4">
-                <Loader2 className="h-8 w-8 text-primary animate-spin" />
-              </div>
-              <h1 className="text-3xl font-bold text-foreground mb-2">ZedBooks</h1>
-              <p className="text-muted-foreground">Checking authentication...</p>
+      <div className="min-h-screen flex items-center justify-center bg-white">
+        <div className="text-center">
+          <Loader2 className="h-8 w-8 animate-spin text-primary mx-auto mb-4" />
+          <p className="text-muted-foreground">Checking authentication...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Email verification view
+  if (authView === "verify-email") {
+    return (
+      <div className="min-h-screen flex">
+        {/* Left side - Gradient blob design */}
+        <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden bg-gradient-to-br from-pink-400 via-rose-400 to-orange-300">
+          <div className="absolute -left-32 -top-32 w-96 h-96 bg-gradient-to-br from-pink-500 to-rose-500 rounded-full opacity-80" />
+          <div className="absolute left-20 top-1/4 w-64 h-64 bg-gradient-to-br from-rose-400 to-pink-400 rounded-full opacity-70" />
+          <div className="absolute -left-16 bottom-1/4 w-80 h-80 bg-gradient-to-tr from-orange-400 to-rose-400 rounded-full opacity-75" />
+          <div className="absolute right-10 bottom-10 w-48 h-48 bg-gradient-to-br from-pink-300 to-rose-300 rounded-full opacity-60" />
+        </div>
+
+        {/* Right side - Verification content */}
+        <div className="flex-1 flex items-center justify-center p-8 bg-white">
+          <div className="w-full max-w-md text-center">
+            <div className="mx-auto w-20 h-20 bg-gradient-to-r from-pink-500 to-orange-400 rounded-full flex items-center justify-center mb-6">
+              <Mail className="h-10 w-10 text-white" />
+            </div>
+            <h1 className="text-3xl font-bold text-gray-900 mb-2">Verify Your Email</h1>
+            <p className="text-gray-500 mb-6">
+              We've sent a verification link to<br />
+              <span className="font-medium text-gray-900">{pendingVerificationEmail}</span>
+            </p>
+
+            <div className="bg-gray-50 p-4 rounded-xl mb-6">
+              <p className="text-sm text-gray-600">
+                Click the link in your email to verify your account. Check your spam folder if you don't see it.
+              </p>
             </div>
 
-            <Card>
-              <CardHeader>
-                <Skeleton className="h-8 w-32" />
-                <Skeleton className="h-4 w-64 mt-2" />
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <Skeleton className="h-10 w-full" />
-                <Skeleton className="h-10 w-full" />
-                <Skeleton className="h-4 w-full" />
-                <Skeleton className="h-10 w-full" />
-                <Skeleton className="h-10 w-full" />
-                <Skeleton className="h-10 w-full" />
-              </CardContent>
-            </Card>
+            <Button
+              variant="outline"
+              className="w-full mb-4 rounded-full"
+              onClick={handleResendVerificationEmail}
+              disabled={isResending || resendCooldown > 0}
+            >
+              {isResending ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Resending...
+                </>
+              ) : resendCooldown > 0 ? (
+                <>
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  Resend in {resendCooldown}s
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  Resend Verification Email
+                </>
+              )}
+            </Button>
+
+            <Button
+              variant="link"
+              onClick={() => setAuthView("login")}
+              className="text-gray-500"
+            >
+              Back to Login
+            </Button>
           </div>
         </div>
       </div>
     );
   }
 
-  // Email verification pending view
-  if (authView === "verify-email") {
+  // Forgot password view
+  if (authView === "forgot-password") {
     return (
-      <div className="min-h-screen flex flex-col bg-gradient-to-br from-primary/5 via-background to-accent/5">
-        <PublicNavbar />
-        <div className="flex-1 flex items-center justify-center p-4">
+      <div className="min-h-screen flex">
+        {/* Left side - Gradient blob design */}
+        <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden bg-gradient-to-br from-pink-400 via-rose-400 to-orange-300">
+          <div className="absolute -left-32 -top-32 w-96 h-96 bg-gradient-to-br from-pink-500 to-rose-500 rounded-full opacity-80" />
+          <div className="absolute left-20 top-1/4 w-64 h-64 bg-gradient-to-br from-rose-400 to-pink-400 rounded-full opacity-70" />
+          <div className="absolute -left-16 bottom-1/4 w-80 h-80 bg-gradient-to-tr from-orange-400 to-rose-400 rounded-full opacity-75" />
+          <div className="absolute right-10 bottom-10 w-48 h-48 bg-gradient-to-br from-pink-300 to-rose-300 rounded-full opacity-60" />
+        </div>
+
+        {/* Right side - Form */}
+        <div className="flex-1 flex items-center justify-center p-8 bg-white">
           <div className="w-full max-w-md">
-            <Card>
-              <CardHeader className="text-center">
-                <div className="mx-auto w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mb-4">
-                  <Mail className="h-8 w-8 text-primary" />
+            <div className="text-center mb-8">
+              <h1 className="text-3xl font-bold text-gray-900 mb-2">Reset Password</h1>
+              <p className="text-gray-500">Enter your email to receive a reset link</p>
+            </div>
+
+            <form onSubmit={handleForgotPassword} className="space-y-6">
+              <div className="relative">
+                <User className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+                <Input
+                  type="email"
+                  placeholder="Email Address"
+                  value={resetEmail}
+                  onChange={(e) => setResetEmail(e.target.value)}
+                  className="pl-12 h-12 rounded-full border-gray-200 focus:border-pink-400 focus:ring-pink-400"
+                />
+              </div>
+
+              <Button
+                type="submit"
+                className="w-full h-12 rounded-full bg-gradient-to-r from-pink-500 to-orange-400 hover:from-pink-600 hover:to-orange-500 text-white font-semibold"
+                disabled={isLoading}
+              >
+                {isLoading ? (
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                ) : (
+                  "Send Reset Link"
+                )}
+              </Button>
+
+              <Button
+                type="button"
+                variant="link"
+                onClick={() => setAuthView("login")}
+                className="w-full text-gray-500"
+              >
+                Back to Login
+              </Button>
+            </form>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Reset password view
+  if (authView === "reset-password") {
+    return (
+      <div className="min-h-screen flex">
+        {/* Left side - Gradient blob design */}
+        <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden bg-gradient-to-br from-pink-400 via-rose-400 to-orange-300">
+          <div className="absolute -left-32 -top-32 w-96 h-96 bg-gradient-to-br from-pink-500 to-rose-500 rounded-full opacity-80" />
+          <div className="absolute left-20 top-1/4 w-64 h-64 bg-gradient-to-br from-rose-400 to-pink-400 rounded-full opacity-70" />
+          <div className="absolute -left-16 bottom-1/4 w-80 h-80 bg-gradient-to-tr from-orange-400 to-rose-400 rounded-full opacity-75" />
+          <div className="absolute right-10 bottom-10 w-48 h-48 bg-gradient-to-br from-pink-300 to-rose-300 rounded-full opacity-60" />
+        </div>
+
+        {/* Right side - Form */}
+        <div className="flex-1 flex items-center justify-center p-8 bg-white">
+          <div className="w-full max-w-md">
+            <div className="text-center mb-8">
+              <h1 className="text-3xl font-bold text-gray-900 mb-2">Create New Password</h1>
+              <p className="text-gray-500">Enter your new password below</p>
+            </div>
+
+            <form onSubmit={handleResetPassword} className="space-y-6">
+              <div className="relative">
+                <Lock className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+                <Input
+                  type="password"
+                  placeholder="New Password"
+                  value={newPasswordForm.password}
+                  onChange={(e) => setNewPasswordForm({ ...newPasswordForm, password: e.target.value })}
+                  className="pl-12 h-12 rounded-full border-gray-200 focus:border-pink-400 focus:ring-pink-400"
+                />
+              </div>
+
+              <div className="relative">
+                <Lock className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+                <Input
+                  type="password"
+                  placeholder="Confirm Password"
+                  value={newPasswordForm.confirmPassword}
+                  onChange={(e) => setNewPasswordForm({ ...newPasswordForm, confirmPassword: e.target.value })}
+                  className="pl-12 h-12 rounded-full border-gray-200 focus:border-pink-400 focus:ring-pink-400"
+                />
+              </div>
+
+              <Button
+                type="submit"
+                className="w-full h-12 rounded-full bg-gradient-to-r from-pink-500 to-orange-400 hover:from-pink-600 hover:to-orange-500 text-white font-semibold"
+                disabled={isLoading}
+              >
+                {isLoading ? (
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                ) : (
+                  "Update Password"
+                )}
+              </Button>
+            </form>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Main login/signup view
+  return (
+    <div className="min-h-screen flex">
+      {/* Left side - Gradient blob design */}
+      <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden bg-gradient-to-br from-pink-400 via-rose-400 to-orange-300">
+        <div className="absolute -left-32 -top-32 w-96 h-96 bg-gradient-to-br from-pink-500 to-rose-500 rounded-full opacity-80" />
+        <div className="absolute left-20 top-1/4 w-64 h-64 bg-gradient-to-br from-rose-400 to-pink-400 rounded-full opacity-70" />
+        <div className="absolute -left-16 bottom-1/4 w-80 h-80 bg-gradient-to-tr from-orange-400 to-rose-400 rounded-full opacity-75" />
+        <div className="absolute right-10 bottom-10 w-48 h-48 bg-gradient-to-br from-pink-300 to-rose-300 rounded-full opacity-60" />
+      </div>
+
+      {/* Right side - Forms */}
+      <div className="flex-1 flex items-center justify-center p-8 bg-white">
+        <div className="w-full max-w-md">
+          <Tabs defaultValue="login" className="w-full">
+            <TabsContent value="login">
+              <div className="text-center mb-8">
+                <h1 className="text-3xl font-bold text-gray-900 mb-2">User Login</h1>
+                <p className="text-gray-500">Welcome back! Please sign in to continue.</p>
+              </div>
+
+              <form onSubmit={handleLogin} className="space-y-5">
+                <div className="relative">
+                  <User className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+                  <Input
+                    type="email"
+                    placeholder="Email"
+                    value={loginForm.email}
+                    onChange={(e) => setLoginForm({ ...loginForm, email: e.target.value })}
+                    className="pl-12 h-12 rounded-full border-gray-200 focus:border-pink-400 focus:ring-pink-400"
+                  />
                 </div>
-                <CardTitle className="text-2xl">Verify Your Email</CardTitle>
-                <CardDescription>
-                  We've sent a verification link to<br />
-                  <span className="font-medium text-foreground">{pendingVerificationEmail}</span>
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="bg-muted/50 p-4 rounded-lg text-center text-sm">
-                  <p className="text-muted-foreground">
-                    Click the link in your email to verify your account. 
-                    Check your spam folder if you don't see it.
-                  </p>
+
+                <div className="relative">
+                  <Lock className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+                  <Input
+                    type="password"
+                    placeholder="Password"
+                    value={loginForm.password}
+                    onChange={(e) => setLoginForm({ ...loginForm, password: e.target.value })}
+                    className="pl-12 h-12 rounded-full border-gray-200 focus:border-pink-400 focus:ring-pink-400"
+                  />
                 </div>
-                
+
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Checkbox
+                      id="remember"
+                      checked={rememberMe}
+                      onCheckedChange={(checked) => setRememberMe(checked as boolean)}
+                    />
+                    <Label htmlFor="remember" className="text-sm text-gray-600">
+                      Remember me
+                    </Label>
+                  </div>
+                </div>
+
                 <Button
-                  type="button"
-                  variant="outline"
-                  className="w-full"
-                  onClick={handleResendVerificationEmail}
-                  disabled={isResending || resendCooldown > 0}
+                  type="submit"
+                  className="w-full h-12 rounded-full bg-gradient-to-r from-pink-500 to-orange-400 hover:from-pink-600 hover:to-orange-500 text-white font-semibold shadow-lg"
+                  disabled={isLoading}
                 >
-                  {isResending ? (
-                    <>
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      Resending...
-                    </>
-                  ) : resendCooldown > 0 ? (
-                    <>
-                      <RefreshCw className="h-4 w-4 mr-2" />
-                      Resend in {resendCooldown}s
-                    </>
+                  {isLoading ? (
+                    <Loader2 className="h-5 w-5 animate-spin" />
                   ) : (
-                    <>
-                      <RefreshCw className="h-4 w-4 mr-2" />
-                      Resend Verification Email
-                    </>
+                    "LOGIN"
                   )}
                 </Button>
 
-                <Button
-                  type="button"
-                  variant="ghost"
-                  className="w-full"
-                  onClick={() => {
-                    setAuthView("login");
-                    setPendingVerificationEmail("");
-                  }}
-                >
-                  <ArrowLeft className="h-4 w-4 mr-2" />
-                  Back to Login
-                </Button>
-              </CardContent>
-            </Card>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (authView === "verify-otp") {
-    return (
-      <div className="min-h-screen flex flex-col bg-gradient-to-br from-primary/5 via-background to-accent/5">
-        <PublicNavbar />
-        <div className="flex-1 flex items-center justify-center p-4">
-          <div className="w-full max-w-md">
-            <Card>
-              <CardHeader className="text-center">
-                <div className="mx-auto w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mb-4">
-                  <Phone className="h-8 w-8 text-primary" />
-                </div>
-                <CardTitle className="text-2xl">Verify Phone Number</CardTitle>
-                <CardDescription>
-                  Enter the 6-digit code sent to<br />
-                  <span className="font-medium text-foreground">{phoneForm.phone}</span>
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <form onSubmit={handleVerifyOtp} className="space-y-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="otp">Verification Code</Label>
-                    <Input
-                      id="otp"
-                      type="text"
-                      placeholder="123456"
-                      maxLength={6}
-                      value={otpForm.otp}
-                      onChange={(e) => setOtpForm({ otp: e.target.value.replace(/\D/g, '') })}
-                      required
-                      className="text-center text-2xl tracking-widest"
-                      autoFocus
-                    />
-                  </div>
-                  
-                  <Button type="submit" className="w-full" disabled={isLoading}>
-                    {isLoading ? (
-                      <>
-                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        Verifying...
-                      </>
-                    ) : (
-                      "Verify Code"
-                    )}
-                  </Button>
-
-                  <Button
+                <div className="text-center">
+                  <button
                     type="button"
-                    variant="outline"
-                    className="w-full"
-                    onClick={handleResendOtp}
-                    disabled={isResending || resendCooldown > 0}
+                    onClick={() => setAuthView("forgot-password")}
+                    className="text-sm text-gray-500 hover:text-pink-500"
                   >
-                    {isResending ? (
-                      <>
-                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        Resending...
-                      </>
-                    ) : resendCooldown > 0 ? (
-                      <>
-                        <RefreshCw className="h-4 w-4 mr-2" />
-                        Resend in {resendCooldown}s
-                      </>
-                    ) : (
-                      <>
-                        <RefreshCw className="h-4 w-4 mr-2" />
-                        Resend OTP
-                      </>
-                    )}
-                  </Button>
-
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    className="w-full"
-                    onClick={() => {
-                      setAuthView("login");
-                      setOtpForm({ otp: "" });
-                    }}
-                  >
-                    <ArrowLeft className="h-4 w-4 mr-2" />
-                    Back to Login
-                  </Button>
-                </form>
-              </CardContent>
-            </Card>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (authView === "verify-2fa") {
-    return (
-      <div className="min-h-screen flex flex-col bg-gradient-to-br from-primary/5 via-background to-accent/5">
-        <PublicNavbar />
-        <div className="flex-1 flex items-center justify-center p-4">
-          <div className="w-full max-w-md">
-            <Card>
-              <CardHeader className="text-center">
-                <div className="mx-auto w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mb-4">
-                  <KeyRound className="h-8 w-8 text-primary" />
+                    Forgot Username / Password?
+                  </button>
                 </div>
-                <CardTitle className="text-2xl">Two-Factor Authentication</CardTitle>
-                <CardDescription>
-                  Enter the code from your authenticator app
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <form className="space-y-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="2fa-code">Authentication Code</Label>
-                    <Input
-                      id="2fa-code"
-                      type="text"
-                      placeholder="000000"
-                      maxLength={6}
-                      value={twoFaCode}
-                      onChange={(e) => setTwoFaCode(e.target.value.replace(/\D/g, ''))}
-                      required
-                      className="text-center text-2xl tracking-widest"
-                      autoFocus
-                    />
-                  </div>
-                  
-                  <Button type="submit" className="w-full" disabled={isLoading}>
-                    {isLoading ? (
-                      <>
-                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        Verifying...
-                      </>
-                    ) : (
-                      "Verify"
-                    )}
-                  </Button>
+              </form>
 
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    className="w-full"
-                    onClick={() => {
-                      setAuthView("login");
-                      setTwoFaCode("");
-                    }}
-                  >
-                    <ArrowLeft className="h-4 w-4 mr-2" />
-                    Back to Login
-                  </Button>
-                </form>
-              </CardContent>
-            </Card>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (authView === "forgot-password") {
-    return (
-      <div className="min-h-screen flex flex-col bg-gradient-to-br from-primary/5 via-background to-accent/5">
-        <PublicNavbar />
-        <div className="flex-1 flex items-center justify-center p-4">
-          <div className="w-full max-w-md">
-            <Card>
-              <CardHeader className="text-center">
-                <div className="mx-auto w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mb-4">
-                  <Mail className="h-8 w-8 text-primary" />
-                </div>
-                <CardTitle className="text-2xl">Reset Password</CardTitle>
-                <CardDescription>Enter your email to receive a password reset link</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <form onSubmit={handleForgotPassword} className="space-y-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="reset-email">Email</Label>
-                    <Input
-                      id="reset-email"
-                      type="email"
-                      placeholder="your.email@example.com"
-                      value={resetEmail}
-                      onChange={(e) => setResetEmail(e.target.value)}
-                      required
-                    />
-                  </div>
-                  <Button type="submit" className="w-full" disabled={isLoading}>
-                    {isLoading ? (
-                      <>
-                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        Sending...
-                      </>
-                    ) : (
-                      "Send Reset Link"
-                    )}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    className="w-full"
-                    onClick={() => setAuthView("login")}
-                  >
-                    <ArrowLeft className="h-4 w-4 mr-2" />
-                    Back to Login
-                  </Button>
-                </form>
-              </CardContent>
-            </Card>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (authView === "reset-password") {
-    return (
-      <div className="min-h-screen flex flex-col bg-gradient-to-br from-primary/5 via-background to-accent/5">
-        <PublicNavbar />
-        <div className="flex-1 flex items-center justify-center p-4">
-          <div className="w-full max-w-md">
-            <Card>
-              <CardHeader className="text-center">
-                <div className="mx-auto w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mb-4">
-                  <ShieldCheck className="h-8 w-8 text-primary" />
-                </div>
-                <CardTitle className="text-2xl">Set New Password</CardTitle>
-                <CardDescription>Enter your new password below</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <form onSubmit={handleResetPassword} className="space-y-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="new-password">New Password</Label>
-                    <Input
-                      id="new-password"
-                      type="password"
-                      value={newPasswordForm.password}
-                      onChange={(e) =>
-                        setNewPasswordForm({ ...newPasswordForm, password: e.target.value })
-                      }
-                      required
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="confirm-password">Confirm Password</Label>
-                    <Input
-                      id="confirm-password"
-                      type="password"
-                      value={newPasswordForm.confirmPassword}
-                      onChange={(e) =>
-                        setNewPasswordForm({ ...newPasswordForm, confirmPassword: e.target.value })
-                      }
-                      required
-                    />
-                  </div>
-                  <Button type="submit" className="w-full" disabled={isLoading}>
-                    {isLoading ? (
-                      <>
-                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        Updating...
-                      </>
-                    ) : (
-                      "Update Password"
-                    )}
-                  </Button>
-                </form>
-              </CardContent>
-            </Card>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="min-h-screen flex flex-col bg-gradient-to-br from-primary/5 via-background to-accent/5">
-      <PublicNavbar />
-      <div className="flex-1 flex items-center justify-center p-4">
-        <div className="w-full max-w-md">
-          <Card>
-            <CardHeader className="text-center">
-              <CardTitle className="text-2xl">Welcome to ZedBooks</CardTitle>
-              <CardDescription>Sign in to your account or create a new one</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Tabs defaultValue="login" className="w-full">
-                <TabsList className="grid w-full grid-cols-2">
-                  <TabsTrigger value="login">Login</TabsTrigger>
-                  <TabsTrigger value="signup">Sign Up</TabsTrigger>
+              <div className="mt-8 text-center">
+                <TabsList className="bg-transparent">
+                  <TabsTrigger value="signup" className="text-gray-600 hover:text-pink-500">
+                    Create Your Account <ArrowRight className="h-4 w-4 ml-1 inline" />
+                  </TabsTrigger>
                 </TabsList>
-                
-                <TabsContent value="login">
-                  <div className="space-y-4 pt-4">
-                    {/* Social Login Buttons */}
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="w-full"
-                      onClick={handleGoogleSignIn}
-                      disabled={isGoogleLoading}
-                    >
-                      {isGoogleLoading ? (
-                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      ) : (
-                        <Chrome className="h-4 w-4 mr-2" />
-                      )}
-                      {isGoogleLoading ? "Signing in..." : "Continue with Google"}
-                    </Button>
+              </div>
+            </TabsContent>
 
-                    {/* Login Method Toggle */}
-                    <div className="flex gap-2">
-                      <Button
-                        type="button"
-                        variant={loginMethod === "email" ? "default" : "outline"}
-                        size="sm"
-                        className="flex-1"
-                        onClick={() => setLoginMethod("email")}
-                      >
-                        <Mail className="h-4 w-4 mr-2" />
-                        Email
-                      </Button>
-                      <Button
-                        type="button"
-                        variant={loginMethod === "phone" ? "default" : "outline"}
-                        size="sm"
-                        className="flex-1"
-                        onClick={() => setLoginMethod("phone")}
-                      >
-                        <Phone className="h-4 w-4 mr-2" />
-                        Phone
-                      </Button>
-                    </div>
-                    
-                    <div className="relative">
-                      <div className="absolute inset-0 flex items-center">
-                        <Separator className="w-full" />
-                      </div>
-                      <div className="relative flex justify-center text-xs uppercase">
-                        <span className="bg-card px-2 text-muted-foreground">
-                          Or continue with {loginMethod}
-                        </span>
-                      </div>
-                    </div>
+            <TabsContent value="signup">
+              <div className="text-center mb-8">
+                <h1 className="text-3xl font-bold text-gray-900 mb-2">Create Account</h1>
+                <p className="text-gray-500">Start your free trial today</p>
+              </div>
 
-                    {loginMethod === "email" ? (
-                      <form onSubmit={handleLogin} className="space-y-4">
-                        <div className="space-y-2">
-                          <Label htmlFor="login-email">Email</Label>
-                          <Input
-                            id="login-email"
-                            type="email"
-                            placeholder="your.email@example.com"
-                            value={loginForm.email}
-                            onChange={(e) =>
-                              setLoginForm({ ...loginForm, email: e.target.value })
-                            }
-                            required
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label htmlFor="login-password">Password</Label>
-                          <Input
-                            id="login-password"
-                            type="password"
-                            value={loginForm.password}
-                            onChange={(e) =>
-                              setLoginForm({ ...loginForm, password: e.target.value })
-                            }
-                            required
-                          />
-                        </div>
+              <form onSubmit={handleSignup} className="space-y-4">
+                <div className="relative">
+                  <User className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+                  <Input
+                    type="text"
+                    placeholder="Organization Name"
+                    value={signupForm.organizationName}
+                    onChange={(e) => setSignupForm({ ...signupForm, organizationName: e.target.value })}
+                    className="pl-12 h-12 rounded-full border-gray-200 focus:border-pink-400 focus:ring-pink-400"
+                  />
+                </div>
 
-                        {/* Remember Me Checkbox */}
-                        <div className="flex items-center space-x-2">
-                          <Checkbox
-                            id="remember-me"
-                            checked={rememberMe}
-                            onCheckedChange={(checked) => setRememberMe(checked === true)}
-                          />
-                          <Label
-                            htmlFor="remember-me"
-                            className="text-sm font-normal cursor-pointer"
-                          >
-                            Remember me for 30 days
-                          </Label>
-                        </div>
+                <div className="relative">
+                  <Mail className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+                  <Input
+                    type="email"
+                    placeholder="Email Address"
+                    value={signupForm.email}
+                    onChange={(e) => setSignupForm({ ...signupForm, email: e.target.value })}
+                    className="pl-12 h-12 rounded-full border-gray-200 focus:border-pink-400 focus:ring-pink-400"
+                  />
+                </div>
 
-                        <Button type="submit" className="w-full" disabled={isLoading}>
-                          {isLoading ? (
-                            <>
-                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                              Signing in...
-                            </>
-                          ) : (
-                            "Sign In"
-                          )}
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="link"
-                          className="w-full text-sm"
-                          onClick={() => setAuthView("forgot-password")}
-                        >
-                          Forgot password?
-                        </Button>
-                      </form>
-                    ) : (
-                      <form onSubmit={handlePhoneSignIn} className="space-y-4">
-                        <div className="space-y-2">
-                          <Label htmlFor="phone">Phone Number</Label>
-                          <Input
-                            id="phone"
-                            type="tel"
-                            placeholder="+260971234567"
-                            value={phoneForm.phone}
-                            onChange={(e) =>
-                              setPhoneForm({ phone: e.target.value })
-                            }
-                            required
-                          />
-                          <p className="text-xs text-muted-foreground">
-                            Include country code (e.g., +260 for Zambia)
-                          </p>
-                        </div>
-                        <Button type="submit" className="w-full" disabled={isLoading}>
-                          {isLoading ? (
-                            <>
-                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                              Sending OTP...
-                            </>
-                          ) : (
-                            "Send Verification Code"
-                          )}
-                        </Button>
-                      </form>
-                    )}
-                  </div>
-                </TabsContent>
+                <div className="relative">
+                  <User className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+                  <Input
+                    type="tel"
+                    placeholder="Phone Number (e.g., +260...)"
+                    value={signupForm.phone}
+                    onChange={(e) => setSignupForm({ ...signupForm, phone: e.target.value })}
+                    className="pl-12 h-12 rounded-full border-gray-200 focus:border-pink-400 focus:ring-pink-400"
+                  />
+                </div>
 
-                <TabsContent value="signup">
-                  <div className="space-y-4 pt-4">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="w-full"
-                      onClick={handleGoogleSignIn}
-                      disabled={isGoogleLoading}
-                    >
-                      {isGoogleLoading ? (
-                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      ) : (
-                        <Chrome className="h-4 w-4 mr-2" />
-                      )}
-                      {isGoogleLoading ? "Signing up..." : "Continue with Google"}
-                    </Button>
-                    
-                    <div className="relative">
-                      <div className="absolute inset-0 flex items-center">
-                        <Separator className="w-full" />
-                      </div>
-                      <div className="relative flex justify-center text-xs uppercase">
-                        <span className="bg-card px-2 text-muted-foreground">
-                          Or continue with email
-                        </span>
-                      </div>
-                    </div>
+                <div className="relative">
+                  <Lock className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+                  <Input
+                    type="password"
+                    placeholder="Password"
+                    value={signupForm.password}
+                    onChange={(e) => setSignupForm({ ...signupForm, password: e.target.value })}
+                    className="pl-12 h-12 rounded-full border-gray-200 focus:border-pink-400 focus:ring-pink-400"
+                  />
+                </div>
 
-                    <form onSubmit={handleSignup} className="space-y-4">
-                      <div className="space-y-2">
-                        <Label htmlFor="signup-name">Organization Name</Label>
-                        <Input
-                          id="signup-name"
-                          placeholder="Your NGO Name"
-                          value={signupForm.organizationName}
-                          onChange={(e) =>
-                            setSignupForm({
-                              ...signupForm,
-                              organizationName: e.target.value,
-                            })
-                          }
-                          required
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="signup-email">Email</Label>
-                        <Input
-                          id="signup-email"
-                          type="email"
-                          placeholder="your.email@example.com"
-                          value={signupForm.email}
-                          onChange={(e) =>
-                            setSignupForm({ ...signupForm, email: e.target.value })
-                          }
-                          required
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="signup-phone">Phone Number</Label>
-                        <Input
-                          id="signup-phone"
-                          type="tel"
-                          placeholder="+260971234567"
-                          value={signupForm.phone}
-                          onChange={(e) =>
-                            setSignupForm({ ...signupForm, phone: e.target.value })
-                          }
-                          required
-                        />
-                        <p className="text-xs text-muted-foreground">
-                          Include country code (e.g., +260 for Zambia)
-                        </p>
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="signup-password">Password</Label>
-                        <Input
-                          id="signup-password"
-                          type="password"
-                          value={signupForm.password}
-                          onChange={(e) =>
-                            setSignupForm({ ...signupForm, password: e.target.value })
-                          }
-                          required
-                        />
-                      </div>
-                      <Button type="submit" className="w-full" disabled={isLoading}>
-                        {isLoading ? (
-                          <>
-                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                            Creating account...
-                          </>
-                        ) : (
-                          "Create Account"
-                        )}
-                      </Button>
-                    </form>
-                  </div>
-                </TabsContent>
-              </Tabs>
-            </CardContent>
-          </Card>
+                <Button
+                  type="submit"
+                  className="w-full h-12 rounded-full bg-gradient-to-r from-pink-500 to-orange-400 hover:from-pink-600 hover:to-orange-500 text-white font-semibold shadow-lg"
+                  disabled={isLoading}
+                >
+                  {isLoading ? (
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                  ) : (
+                    "CREATE ACCOUNT"
+                  )}
+                </Button>
+              </form>
 
-          <p className="text-center text-sm text-muted-foreground mt-6">
-            For Zambian NGOs &middot; PAYE, NAPSA, NHIMA compliant
-          </p>
+              <div className="mt-8 text-center">
+                <TabsList className="bg-transparent">
+                  <TabsTrigger value="login" className="text-gray-600 hover:text-pink-500">
+                    Already have an account? Login
+                  </TabsTrigger>
+                </TabsList>
+              </div>
+            </TabsContent>
+          </Tabs>
+
+          <div className="mt-8 text-center">
+            <Link to="/" className="text-sm text-gray-500 hover:text-pink-500">
+              ← Back to Home
+            </Link>
+          </div>
         </div>
       </div>
     </div>

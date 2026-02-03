@@ -54,6 +54,7 @@ import FixedAssets from "./pages/FixedAssets";
 import AssetDepreciation from "./pages/AssetDepreciation";
 import FinancialPeriods from "./pages/FinancialPeriods";
 import JournalEntries from "./pages/JournalEntries";
+import ChartOfAccounts from "./pages/ChartOfAccounts";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -125,6 +126,7 @@ const App = () => (
               <Route path="/asset-depreciation" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><AssetDepreciation /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/financial-periods" element={<ProtectedRoute><AppLayout><RoleProtectedRoute allowedRoles={["super_admin", "admin", "accountant"]}><FinancialPeriods /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/journal-entries" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><JournalEntries /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+              <Route path="/chart-of-accounts" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><ChartOfAccounts /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               
               {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
               <Route path="*" element={<NotFound />} />
