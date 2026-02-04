@@ -11,10 +11,11 @@ import {
   DollarSign,
   BarChart3,
   Settings,
-  Heart,
   Calculator,
   BookOpen,
+  Building2,
 } from "lucide-react";
+import { useSidebar } from "@/components/ui/sidebar";
 import { UserMenu } from "./UserMenu";
 import { useUserRole, canAccessRoute, AppRole } from "@/hooks/useUserRole";
 import {
@@ -95,7 +96,7 @@ const navigation: NavSection[] = [
     title: "Projects & Grants",
     items: [
       { title: "Projects", icon: BriefcaseIcon, href: "/projects" },
-      { title: "Donors & Grants", icon: Heart, href: "/donors" },
+      { title: "Donors & Grants", icon: Users, href: "/donors" },
     ],
   },
   {
@@ -152,8 +153,8 @@ export function AppSidebar() {
       <Sidebar>
         <SidebarHeader className="border-b border-sidebar-border p-4">
           <div className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-sidebar-primary">
-              <Heart className="h-5 w-5 text-sidebar-primary-foreground" />
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-r from-orange-500 to-orange-600">
+              <Building2 className="h-5 w-5 text-white" />
             </div>
             <div className="flex flex-col">
               <span className="text-sm font-semibold text-sidebar-foreground">ZedBooks</span>
@@ -163,7 +164,7 @@ export function AppSidebar() {
         </SidebarHeader>
         <SidebarContent>
           <div className="flex items-center justify-center p-8">
-            <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary"></div>
+            <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-orange-500"></div>
           </div>
         </SidebarContent>
       </Sidebar>
@@ -174,8 +175,8 @@ export function AppSidebar() {
     <Sidebar>
       <SidebarHeader className="border-b border-sidebar-border p-4">
         <Link to="/dashboard" className="flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-sidebar-primary">
-            <Heart className="h-5 w-5 text-sidebar-primary-foreground" />
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-r from-orange-500 to-orange-600">
+            <Building2 className="h-5 w-5 text-white" />
           </div>
           <div className="flex flex-col">
             <span className="text-sm font-semibold text-sidebar-foreground">ZedBooks</span>
