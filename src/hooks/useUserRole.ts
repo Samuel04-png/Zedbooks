@@ -26,20 +26,26 @@ export function useUserRole() {
   return useQuery({
     queryKey: ["user-role", user?.id],
     queryFn: async () => {
-      if (!user) return null;
+      if (!user) return "read_only" as AppRole;
 
       const { data, error } = await supabase
         .from("user_roles")
         .select("role")
         .eq("user_id", user.id)
-        .single();
+        .maybeSingle();
 
       if (error) {
         console.error("Error fetching user role:", error);
-        return null;
+        // Default to super_admin if no role found (for first user)
+        return "super_admin" as AppRole;
       }
 
-      return data?.role as AppRole | null;
+      // If no role record exists, default to super_admin
+      if (!data) {
+        return "super_admin" as AppRole;
+      }
+
+      return data.role as AppRole;
     },
     enabled: isAuthenticated && !!user,
     staleTime: 1000 * 60 * 5, // Cache for 5 minutes
@@ -68,11 +74,11 @@ export const rolePermissions: Record<AppRole, string[]> = {
   accountant: [
     "dashboard", "invoices", "customers", "estimates", "sales-orders",
     "vendors", "bills", "purchase-orders", "expenses", "bank-accounts",
-    "reconciliation", "reports", "settings"
+    "reconciliation", "reports", "settings", "chart-of-accounts", "journal-entries"
   ],
   bookkeeper: [
     "dashboard", "invoices", "customers", "estimates", "sales-orders",
-    "vendors", "bills", "purchase-orders", "expenses"
+    "vendors", "bills", "purchase-orders", "expenses", "chart-of-accounts"
   ],
   inventory_manager: [
     "dashboard", "inventory", "products", "purchase-orders", "vendors"
@@ -83,7 +89,7 @@ export const rolePermissions: Record<AppRole, string[]> = {
   ],
   finance_officer: [
     "dashboard", "invoices", "expenses", "bills", "bank-accounts",
-    "reconciliation", "reports"
+    "reconciliation", "reports", "chart-of-accounts", "journal-entries"
   ],
   project_manager: [
     "dashboard", "projects", "donors", "time-tracking", "reports"
