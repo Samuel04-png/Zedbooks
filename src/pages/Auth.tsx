@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Checkbox } from "@/components/ui/checkbox";
-import { User, Lock, Loader2, RefreshCw, Mail, ArrowRight } from "lucide-react";
+import { User, Lock, Loader2, RefreshCw, Mail, ArrowRight, Building2 } from "lucide-react";
 import { useNavigate, Link } from "react-router-dom";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
@@ -43,7 +43,6 @@ export default function Auth() {
   const [isResending, setIsResending] = useState(false);
   const [authView, setAuthView] = useState<AuthView>("login");
   const [rememberMe, setRememberMe] = useState(false);
-  const [hasSubmittedForm, setHasSubmittedForm] = useState(false);
   const [resendCooldown, setResendCooldown] = useState(0);
 
   const [loginForm, setLoginForm] = useState({ email: "", password: "" });
@@ -68,16 +67,21 @@ export default function Auth() {
   }, [resendCooldown]);
 
   const checkCompanySetupAndRedirect = useCallback(async (userId: string) => {
-    const { data: settings } = await supabase
-      .from("company_settings")
-      .select("id, company_name")
-      .eq("user_id", userId)
-      .maybeSingle();
+    try {
+      const { data: settings } = await supabase
+        .from("company_settings")
+        .select("id, company_name")
+        .eq("user_id", userId)
+        .maybeSingle();
 
-    if (!settings || !settings.company_name) {
-      navigate("/setup");
-    } else {
-      navigate("/dashboard");
+      if (!settings || !settings.company_name) {
+        navigate("/setup", { replace: true });
+      } else {
+        navigate("/dashboard", { replace: true });
+      }
+    } catch (error) {
+      // Default to dashboard on error
+      navigate("/dashboard", { replace: true });
     }
   }, [navigate]);
 
@@ -101,7 +105,8 @@ export default function Auth() {
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (session && hasSubmittedForm && authView !== "reset-password" && authView !== "verify-email") {
+      if (event === "SIGNED_IN" && session) {
+        // Immediately redirect on sign in
         setTimeout(() => {
           checkCompanySetupAndRedirect(session.user.id);
         }, 0);
@@ -109,7 +114,7 @@ export default function Auth() {
     });
 
     return () => subscription.unsubscribe();
-  }, [navigate, authView, hasSubmittedForm, checkCompanySetupAndRedirect]);
+  }, [checkCompanySetupAndRedirect]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -125,8 +130,8 @@ export default function Auth() {
       if (error) {
         toast.error(error.message);
       } else if (data.session) {
-        setHasSubmittedForm(true);
         toast.success("Logged in successfully");
+        // The onAuthStateChange will handle redirect
       }
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -274,17 +279,30 @@ export default function Auth() {
     return (
       <div className="min-h-screen flex">
         {/* Left side - Gradient blob design */}
-        <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden bg-gradient-to-br from-pink-400 via-rose-400 to-orange-300">
-          <div className="absolute -left-32 -top-32 w-96 h-96 bg-gradient-to-br from-pink-500 to-rose-500 rounded-full opacity-80" />
-          <div className="absolute left-20 top-1/4 w-64 h-64 bg-gradient-to-br from-rose-400 to-pink-400 rounded-full opacity-70" />
-          <div className="absolute -left-16 bottom-1/4 w-80 h-80 bg-gradient-to-tr from-orange-400 to-rose-400 rounded-full opacity-75" />
-          <div className="absolute right-10 bottom-10 w-48 h-48 bg-gradient-to-br from-pink-300 to-rose-300 rounded-full opacity-60" />
+        <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden bg-gradient-to-br from-amber-400 via-orange-400 to-red-400">
+          <div className="absolute -left-32 -top-32 w-96 h-96 bg-gradient-to-br from-amber-500 to-orange-500 rounded-full opacity-80" />
+          <div className="absolute left-20 top-1/4 w-64 h-64 bg-gradient-to-br from-orange-400 to-amber-400 rounded-full opacity-70" />
+          <div className="absolute -left-16 bottom-1/4 w-80 h-80 bg-gradient-to-tr from-red-400 to-orange-400 rounded-full opacity-75" />
+          <div className="absolute right-10 bottom-10 w-48 h-48 bg-gradient-to-br from-amber-300 to-orange-300 rounded-full opacity-60" />
+          
+          {/* Logo overlay */}
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="text-center text-white">
+              <div className="flex items-center justify-center gap-3 mb-4">
+                <div className="h-16 w-16 rounded-2xl bg-white/20 backdrop-blur flex items-center justify-center">
+                  <Building2 className="h-10 w-10 text-white" />
+                </div>
+              </div>
+              <h2 className="text-4xl font-bold">ZedBooks</h2>
+              <p className="text-white/80 mt-2">Accountability with Purpose</p>
+            </div>
+          </div>
         </div>
 
         {/* Right side - Verification content */}
         <div className="flex-1 flex items-center justify-center p-8 bg-white">
           <div className="w-full max-w-md text-center">
-            <div className="mx-auto w-20 h-20 bg-gradient-to-r from-pink-500 to-orange-400 rounded-full flex items-center justify-center mb-6">
+            <div className="mx-auto w-20 h-20 bg-gradient-to-r from-amber-500 to-orange-500 rounded-full flex items-center justify-center mb-6">
               <Mail className="h-10 w-10 text-white" />
             </div>
             <h1 className="text-3xl font-bold text-gray-900 mb-2">Verify Your Email</h1>
@@ -293,15 +311,15 @@ export default function Auth() {
               <span className="font-medium text-gray-900">{pendingVerificationEmail}</span>
             </p>
 
-            <div className="bg-gray-50 p-4 rounded-xl mb-6">
-              <p className="text-sm text-gray-600">
+            <div className="bg-amber-50 p-4 rounded-xl mb-6 border border-amber-100">
+              <p className="text-sm text-amber-800">
                 Click the link in your email to verify your account. Check your spam folder if you don't see it.
               </p>
             </div>
 
             <Button
               variant="outline"
-              className="w-full mb-4 rounded-full"
+              className="w-full mb-4 rounded-full border-orange-300 hover:bg-orange-50"
               onClick={handleResendVerificationEmail}
               disabled={isResending || resendCooldown > 0}
             >
@@ -341,11 +359,23 @@ export default function Auth() {
     return (
       <div className="min-h-screen flex">
         {/* Left side - Gradient blob design */}
-        <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden bg-gradient-to-br from-pink-400 via-rose-400 to-orange-300">
-          <div className="absolute -left-32 -top-32 w-96 h-96 bg-gradient-to-br from-pink-500 to-rose-500 rounded-full opacity-80" />
-          <div className="absolute left-20 top-1/4 w-64 h-64 bg-gradient-to-br from-rose-400 to-pink-400 rounded-full opacity-70" />
-          <div className="absolute -left-16 bottom-1/4 w-80 h-80 bg-gradient-to-tr from-orange-400 to-rose-400 rounded-full opacity-75" />
-          <div className="absolute right-10 bottom-10 w-48 h-48 bg-gradient-to-br from-pink-300 to-rose-300 rounded-full opacity-60" />
+        <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden bg-gradient-to-br from-amber-400 via-orange-400 to-red-400">
+          <div className="absolute -left-32 -top-32 w-96 h-96 bg-gradient-to-br from-amber-500 to-orange-500 rounded-full opacity-80" />
+          <div className="absolute left-20 top-1/4 w-64 h-64 bg-gradient-to-br from-orange-400 to-amber-400 rounded-full opacity-70" />
+          <div className="absolute -left-16 bottom-1/4 w-80 h-80 bg-gradient-to-tr from-red-400 to-orange-400 rounded-full opacity-75" />
+          <div className="absolute right-10 bottom-10 w-48 h-48 bg-gradient-to-br from-amber-300 to-orange-300 rounded-full opacity-60" />
+          
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="text-center text-white">
+              <div className="flex items-center justify-center gap-3 mb-4">
+                <div className="h-16 w-16 rounded-2xl bg-white/20 backdrop-blur flex items-center justify-center">
+                  <Building2 className="h-10 w-10 text-white" />
+                </div>
+              </div>
+              <h2 className="text-4xl font-bold">ZedBooks</h2>
+              <p className="text-white/80 mt-2">Accountability with Purpose</p>
+            </div>
+          </div>
         </div>
 
         {/* Right side - Form */}
@@ -364,13 +394,13 @@ export default function Auth() {
                   placeholder="Email Address"
                   value={resetEmail}
                   onChange={(e) => setResetEmail(e.target.value)}
-                  className="pl-12 h-12 rounded-full border-gray-200 focus:border-pink-400 focus:ring-pink-400"
+                  className="pl-12 h-12 rounded-full border-gray-200 focus:border-orange-400 focus:ring-orange-400"
                 />
               </div>
 
               <Button
                 type="submit"
-                className="w-full h-12 rounded-full bg-gradient-to-r from-pink-500 to-orange-400 hover:from-pink-600 hover:to-orange-500 text-white font-semibold"
+                className="w-full h-12 rounded-full bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-semibold"
                 disabled={isLoading}
               >
                 {isLoading ? (
@@ -400,11 +430,23 @@ export default function Auth() {
     return (
       <div className="min-h-screen flex">
         {/* Left side - Gradient blob design */}
-        <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden bg-gradient-to-br from-pink-400 via-rose-400 to-orange-300">
-          <div className="absolute -left-32 -top-32 w-96 h-96 bg-gradient-to-br from-pink-500 to-rose-500 rounded-full opacity-80" />
-          <div className="absolute left-20 top-1/4 w-64 h-64 bg-gradient-to-br from-rose-400 to-pink-400 rounded-full opacity-70" />
-          <div className="absolute -left-16 bottom-1/4 w-80 h-80 bg-gradient-to-tr from-orange-400 to-rose-400 rounded-full opacity-75" />
-          <div className="absolute right-10 bottom-10 w-48 h-48 bg-gradient-to-br from-pink-300 to-rose-300 rounded-full opacity-60" />
+        <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden bg-gradient-to-br from-amber-400 via-orange-400 to-red-400">
+          <div className="absolute -left-32 -top-32 w-96 h-96 bg-gradient-to-br from-amber-500 to-orange-500 rounded-full opacity-80" />
+          <div className="absolute left-20 top-1/4 w-64 h-64 bg-gradient-to-br from-orange-400 to-amber-400 rounded-full opacity-70" />
+          <div className="absolute -left-16 bottom-1/4 w-80 h-80 bg-gradient-to-tr from-red-400 to-orange-400 rounded-full opacity-75" />
+          <div className="absolute right-10 bottom-10 w-48 h-48 bg-gradient-to-br from-amber-300 to-orange-300 rounded-full opacity-60" />
+          
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="text-center text-white">
+              <div className="flex items-center justify-center gap-3 mb-4">
+                <div className="h-16 w-16 rounded-2xl bg-white/20 backdrop-blur flex items-center justify-center">
+                  <Building2 className="h-10 w-10 text-white" />
+                </div>
+              </div>
+              <h2 className="text-4xl font-bold">ZedBooks</h2>
+              <p className="text-white/80 mt-2">Accountability with Purpose</p>
+            </div>
+          </div>
         </div>
 
         {/* Right side - Form */}
@@ -423,7 +465,7 @@ export default function Auth() {
                   placeholder="New Password"
                   value={newPasswordForm.password}
                   onChange={(e) => setNewPasswordForm({ ...newPasswordForm, password: e.target.value })}
-                  className="pl-12 h-12 rounded-full border-gray-200 focus:border-pink-400 focus:ring-pink-400"
+                  className="pl-12 h-12 rounded-full border-gray-200 focus:border-orange-400 focus:ring-orange-400"
                 />
               </div>
 
@@ -434,13 +476,13 @@ export default function Auth() {
                   placeholder="Confirm Password"
                   value={newPasswordForm.confirmPassword}
                   onChange={(e) => setNewPasswordForm({ ...newPasswordForm, confirmPassword: e.target.value })}
-                  className="pl-12 h-12 rounded-full border-gray-200 focus:border-pink-400 focus:ring-pink-400"
+                  className="pl-12 h-12 rounded-full border-gray-200 focus:border-orange-400 focus:ring-orange-400"
                 />
               </div>
 
               <Button
                 type="submit"
-                className="w-full h-12 rounded-full bg-gradient-to-r from-pink-500 to-orange-400 hover:from-pink-600 hover:to-orange-500 text-white font-semibold"
+                className="w-full h-12 rounded-full bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-semibold"
                 disabled={isLoading}
               >
                 {isLoading ? (
@@ -460,21 +502,51 @@ export default function Auth() {
   return (
     <div className="min-h-screen flex">
       {/* Left side - Gradient blob design */}
-      <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden bg-gradient-to-br from-pink-400 via-rose-400 to-orange-300">
-        <div className="absolute -left-32 -top-32 w-96 h-96 bg-gradient-to-br from-pink-500 to-rose-500 rounded-full opacity-80" />
-        <div className="absolute left-20 top-1/4 w-64 h-64 bg-gradient-to-br from-rose-400 to-pink-400 rounded-full opacity-70" />
-        <div className="absolute -left-16 bottom-1/4 w-80 h-80 bg-gradient-to-tr from-orange-400 to-rose-400 rounded-full opacity-75" />
-        <div className="absolute right-10 bottom-10 w-48 h-48 bg-gradient-to-br from-pink-300 to-rose-300 rounded-full opacity-60" />
+      <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden bg-gradient-to-br from-amber-400 via-orange-400 to-red-400">
+        <div className="absolute -left-32 -top-32 w-96 h-96 bg-gradient-to-br from-amber-500 to-orange-500 rounded-full opacity-80" />
+        <div className="absolute left-20 top-1/4 w-64 h-64 bg-gradient-to-br from-orange-400 to-amber-400 rounded-full opacity-70" />
+        <div className="absolute -left-16 bottom-1/4 w-80 h-80 bg-gradient-to-tr from-red-400 to-orange-400 rounded-full opacity-75" />
+        <div className="absolute right-10 bottom-10 w-48 h-48 bg-gradient-to-br from-amber-300 to-orange-300 rounded-full opacity-60" />
+        
+        {/* Logo overlay */}
+        <div className="absolute inset-0 flex items-center justify-center">
+          <div className="text-center text-white">
+            <div className="flex items-center justify-center gap-3 mb-4">
+              <div className="h-16 w-16 rounded-2xl bg-white/20 backdrop-blur flex items-center justify-center">
+                <Building2 className="h-10 w-10 text-white" />
+              </div>
+            </div>
+            <h2 className="text-4xl font-bold">ZedBooks</h2>
+            <p className="text-white/80 mt-2">Accountability with Purpose</p>
+          </div>
+        </div>
       </div>
 
       {/* Right side - Forms */}
       <div className="flex-1 flex items-center justify-center p-8 bg-white">
         <div className="w-full max-w-md">
+          {/* Mobile logo */}
+          <div className="lg:hidden flex items-center justify-center gap-2 mb-8">
+            <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-amber-500 to-orange-500 flex items-center justify-center">
+              <Building2 className="h-6 w-6 text-white" />
+            </div>
+            <span className="text-xl font-bold">ZedBooks</span>
+          </div>
+
           <Tabs defaultValue="login" className="w-full">
+            <TabsList className="grid w-full grid-cols-2 mb-8 rounded-full bg-gray-100 p-1">
+              <TabsTrigger value="login" className="rounded-full data-[state=active]:bg-white data-[state=active]:shadow-sm">
+                Login
+              </TabsTrigger>
+              <TabsTrigger value="signup" className="rounded-full data-[state=active]:bg-white data-[state=active]:shadow-sm">
+                Sign Up
+              </TabsTrigger>
+            </TabsList>
+
             <TabsContent value="login">
               <div className="text-center mb-8">
-                <h1 className="text-3xl font-bold text-gray-900 mb-2">User Login</h1>
-                <p className="text-gray-500">Welcome back! Please sign in to continue.</p>
+                <h1 className="text-3xl font-bold text-gray-900 mb-2">Welcome Back</h1>
+                <p className="text-gray-500">Sign in to continue to your dashboard</p>
               </div>
 
               <form onSubmit={handleLogin} className="space-y-5">
@@ -485,7 +557,7 @@ export default function Auth() {
                     placeholder="Email"
                     value={loginForm.email}
                     onChange={(e) => setLoginForm({ ...loginForm, email: e.target.value })}
-                    className="pl-12 h-12 rounded-full border-gray-200 focus:border-pink-400 focus:ring-pink-400"
+                    className="pl-12 h-12 rounded-full border-gray-200 focus:border-orange-400 focus:ring-orange-400"
                   />
                 </div>
 
@@ -496,7 +568,7 @@ export default function Auth() {
                     placeholder="Password"
                     value={loginForm.password}
                     onChange={(e) => setLoginForm({ ...loginForm, password: e.target.value })}
-                    className="pl-12 h-12 rounded-full border-gray-200 focus:border-pink-400 focus:ring-pink-400"
+                    className="pl-12 h-12 rounded-full border-gray-200 focus:border-orange-400 focus:ring-orange-400"
                   />
                 </div>
 
@@ -511,11 +583,18 @@ export default function Auth() {
                       Remember me
                     </Label>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => setAuthView("forgot-password")}
+                    className="text-sm text-orange-500 hover:text-orange-600"
+                  >
+                    Forgot Password?
+                  </button>
                 </div>
 
                 <Button
                   type="submit"
-                  className="w-full h-12 rounded-full bg-gradient-to-r from-pink-500 to-orange-400 hover:from-pink-600 hover:to-orange-500 text-white font-semibold shadow-lg"
+                  className="w-full h-12 rounded-full bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-semibold shadow-lg"
                   disabled={isLoading}
                 >
                   {isLoading ? (
@@ -524,25 +603,7 @@ export default function Auth() {
                     "LOGIN"
                   )}
                 </Button>
-
-                <div className="text-center">
-                  <button
-                    type="button"
-                    onClick={() => setAuthView("forgot-password")}
-                    className="text-sm text-gray-500 hover:text-pink-500"
-                  >
-                    Forgot Username / Password?
-                  </button>
-                </div>
               </form>
-
-              <div className="mt-8 text-center">
-                <TabsList className="bg-transparent">
-                  <TabsTrigger value="signup" className="text-gray-600 hover:text-pink-500">
-                    Create Your Account <ArrowRight className="h-4 w-4 ml-1 inline" />
-                  </TabsTrigger>
-                </TabsList>
-              </div>
             </TabsContent>
 
             <TabsContent value="signup">
@@ -553,13 +614,13 @@ export default function Auth() {
 
               <form onSubmit={handleSignup} className="space-y-4">
                 <div className="relative">
-                  <User className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+                  <Building2 className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
                   <Input
                     type="text"
                     placeholder="Organization Name"
                     value={signupForm.organizationName}
                     onChange={(e) => setSignupForm({ ...signupForm, organizationName: e.target.value })}
-                    className="pl-12 h-12 rounded-full border-gray-200 focus:border-pink-400 focus:ring-pink-400"
+                    className="pl-12 h-12 rounded-full border-gray-200 focus:border-orange-400 focus:ring-orange-400"
                   />
                 </div>
 
@@ -570,7 +631,7 @@ export default function Auth() {
                     placeholder="Email Address"
                     value={signupForm.email}
                     onChange={(e) => setSignupForm({ ...signupForm, email: e.target.value })}
-                    className="pl-12 h-12 rounded-full border-gray-200 focus:border-pink-400 focus:ring-pink-400"
+                    className="pl-12 h-12 rounded-full border-gray-200 focus:border-orange-400 focus:ring-orange-400"
                   />
                 </div>
 
@@ -581,7 +642,7 @@ export default function Auth() {
                     placeholder="Phone Number (e.g., +260...)"
                     value={signupForm.phone}
                     onChange={(e) => setSignupForm({ ...signupForm, phone: e.target.value })}
-                    className="pl-12 h-12 rounded-full border-gray-200 focus:border-pink-400 focus:ring-pink-400"
+                    className="pl-12 h-12 rounded-full border-gray-200 focus:border-orange-400 focus:ring-orange-400"
                   />
                 </div>
 
@@ -592,13 +653,13 @@ export default function Auth() {
                     placeholder="Password"
                     value={signupForm.password}
                     onChange={(e) => setSignupForm({ ...signupForm, password: e.target.value })}
-                    className="pl-12 h-12 rounded-full border-gray-200 focus:border-pink-400 focus:ring-pink-400"
+                    className="pl-12 h-12 rounded-full border-gray-200 focus:border-orange-400 focus:ring-orange-400"
                   />
                 </div>
 
                 <Button
                   type="submit"
-                  className="w-full h-12 rounded-full bg-gradient-to-r from-pink-500 to-orange-400 hover:from-pink-600 hover:to-orange-500 text-white font-semibold shadow-lg"
+                  className="w-full h-12 rounded-full bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-semibold shadow-lg"
                   disabled={isLoading}
                 >
                   {isLoading ? (
@@ -608,19 +669,11 @@ export default function Auth() {
                   )}
                 </Button>
               </form>
-
-              <div className="mt-8 text-center">
-                <TabsList className="bg-transparent">
-                  <TabsTrigger value="login" className="text-gray-600 hover:text-pink-500">
-                    Already have an account? Login
-                  </TabsTrigger>
-                </TabsList>
-              </div>
             </TabsContent>
           </Tabs>
 
           <div className="mt-8 text-center">
-            <Link to="/" className="text-sm text-gray-500 hover:text-pink-500">
+            <Link to="/" className="text-sm text-gray-500 hover:text-orange-500">
               ← Back to Home
             </Link>
           </div>

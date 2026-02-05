@@ -14,10 +14,12 @@ import {
   Calculator,
   BookOpen,
   Building2,
+  LogOut,
+  ChevronDown,
 } from "lucide-react";
-import { useSidebar } from "@/components/ui/sidebar";
 import { UserMenu } from "./UserMenu";
 import { useUserRole, canAccessRoute, AppRole } from "@/hooks/useUserRole";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Sidebar,
   SidebarContent,
@@ -30,6 +32,12 @@ import {
   SidebarHeader,
   SidebarFooter,
 } from "@/components/ui/sidebar";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import { cn } from "@/lib/utils";
 
 interface NavItem {
   title: string;
@@ -127,7 +135,8 @@ const navigation: NavSection[] = [
 ];
 
 function filterNavigationByRole(navSections: NavSection[], role: AppRole | null): NavSection[] {
-  if (!role) return [];
+  // If no role, show everything (will be filtered by RoleProtectedRoute)
+  if (!role) return navSections;
   
   // Super admin and admin see everything
   if (role === "super_admin" || role === "admin") {
@@ -146,75 +155,81 @@ export function AppSidebar() {
   const location = useLocation();
   const { data: userRole, isLoading } = useUserRole();
 
-  const filteredNavigation = filterNavigationByRole(navigation, userRole || null);
-
-  if (isLoading) {
-    return (
-      <Sidebar>
-        <SidebarHeader className="border-b border-sidebar-border p-4">
-          <div className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-r from-orange-500 to-orange-600">
-              <Building2 className="h-5 w-5 text-white" />
-            </div>
-            <div className="flex flex-col">
-              <span className="text-sm font-semibold text-sidebar-foreground">ZedBooks</span>
-              <span className="text-xs text-sidebar-foreground/70">Loading...</span>
-            </div>
-          </div>
-        </SidebarHeader>
-        <SidebarContent>
-          <div className="flex items-center justify-center p-8">
-            <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-orange-500"></div>
-          </div>
-        </SidebarContent>
-      </Sidebar>
-    );
-  }
+  // Always show navigation, even while loading - just use default super_admin view
+  const filteredNavigation = filterNavigationByRole(navigation, userRole || "super_admin");
 
   return (
-    <Sidebar>
+    <Sidebar className="border-r border-sidebar-border">
       <SidebarHeader className="border-b border-sidebar-border p-4">
-        <Link to="/dashboard" className="flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-r from-orange-500 to-orange-600">
-            <Building2 className="h-5 w-5 text-white" />
+        <Link to="/dashboard" className="flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-amber-400 to-orange-500 shadow-lg">
+            <Building2 className="h-6 w-6 text-white" />
           </div>
           <div className="flex flex-col">
-            <span className="text-sm font-semibold text-sidebar-foreground">ZedBooks</span>
-            <span className="text-xs text-sidebar-foreground/70">Accountability with Purpose</span>
+            <span className="text-base font-bold text-sidebar-foreground">ZedBooks</span>
+            <span className="text-xs text-sidebar-foreground/60">Accountability with Purpose</span>
           </div>
         </Link>
       </SidebarHeader>
       
       <SidebarContent>
-        {filteredNavigation.map((section) => (
-          <SidebarGroup key={section.title}>
-            <SidebarGroupLabel>{section.title}</SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {section.items.map((item) => {
-                  const isActive = location.pathname === item.href;
-                  return (
-                    <SidebarMenuItem key={item.href}>
-                      <SidebarMenuButton asChild isActive={isActive}>
-                        <Link to={item.href}>
-                          <item.icon className="h-4 w-4" />
-                          <span>{item.title}</span>
-                        </Link>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  );
-                })}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-        ))}
+        <ScrollArea className="h-full">
+          <div className="space-y-1 p-2">
+            {filteredNavigation.map((section, sectionIndex) => {
+              const hasActiveItem = section.items.some(
+                (item) => location.pathname === item.href
+              );
+              
+              return (
+                <Collapsible
+                  key={section.title}
+                  defaultOpen={hasActiveItem || sectionIndex < 3}
+                  className="group/collapsible"
+                >
+                  <SidebarGroup className="p-0">
+                    <CollapsibleTrigger className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm font-medium text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors">
+                      <span>{section.title}</span>
+                      <ChevronDown className="h-4 w-4 transition-transform group-data-[state=open]/collapsible:rotate-180" />
+                    </CollapsibleTrigger>
+                    <CollapsibleContent>
+                      <SidebarGroupContent className="mt-1">
+                        <SidebarMenu>
+                          {section.items.map((item) => {
+                            const isActive = location.pathname === item.href;
+                            return (
+                              <SidebarMenuItem key={item.href}>
+                                <SidebarMenuButton
+                                  asChild
+                                  isActive={isActive}
+                                  className={cn(
+                                    "ml-2 transition-all",
+                                    isActive && "bg-primary/10 text-primary font-medium border-l-2 border-primary"
+                                  )}
+                                >
+                                  <Link to={item.href}>
+                                    <item.icon className="h-4 w-4" />
+                                    <span>{item.title}</span>
+                                  </Link>
+                                </SidebarMenuButton>
+                              </SidebarMenuItem>
+                            );
+                          })}
+                        </SidebarMenu>
+                      </SidebarGroupContent>
+                    </CollapsibleContent>
+                  </SidebarGroup>
+                </Collapsible>
+              );
+            })}
+          </div>
+        </ScrollArea>
       </SidebarContent>
 
       <SidebarFooter className="border-t border-sidebar-border p-4">
         <div className="flex items-center justify-between gap-2">
           <Link
             to="/settings"
-            className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-sidebar-foreground hover:bg-sidebar-accent"
+            className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-sidebar-foreground hover:bg-sidebar-accent transition-colors"
           >
             <Settings className="h-4 w-4" />
             <span>Settings</span>
