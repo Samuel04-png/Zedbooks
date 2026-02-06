@@ -188,10 +188,10 @@ export default function ChartOfAccounts() {
       if (!user) throw new Error("Not authenticated");
 
       const accountsToInsert = DEFAULT_ACCOUNTS.map(acc => ({
-        ...acc,
         account_code: acc.code,
         account_name: acc.name,
         account_type: acc.type,
+        description: acc.description,
         user_id: user.id,
       }));
 
