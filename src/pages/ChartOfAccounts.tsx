@@ -35,40 +35,39 @@ import { Plus, Search, Edit2, Trash2, ChevronRight, Folder, FileText, Filter, Do
 import { LoadingState } from "@/components/ui/LoadingState";
 
 const ACCOUNT_TYPES = [
-  { value: "Asset", label: "Asset", normalBalance: "Debit" },
-  { value: "Liability", label: "Liability", normalBalance: "Credit" },
-  { value: "Equity", label: "Equity", normalBalance: "Credit" },
-  { value: "Revenue", label: "Revenue", normalBalance: "Credit" },
-  { value: "Cost of Sales", label: "Cost of Sales", normalBalance: "Debit" },
-  { value: "Expense", label: "Expense", normalBalance: "Debit" },
+  { value: "asset", label: "Asset", normalBalance: "Debit" },
+  { value: "liability", label: "Liability", normalBalance: "Credit" },
+  { value: "equity", label: "Equity", normalBalance: "Credit" },
+  { value: "revenue", label: "Revenue", normalBalance: "Credit" },
+  { value: "expense", label: "Expense", normalBalance: "Debit" },
 ];
 
 const DEFAULT_ACCOUNTS = [
-  { code: "1000", name: "Cash", type: "Asset", description: "Money available in bank or cash" },
-  { code: "1010", name: "Petty Cash", type: "Asset", description: "Small cash for daily needs" },
-  { code: "1100", name: "Accounts Receivable", type: "Asset", description: "Amount to be received from customers" },
-  { code: "1200", name: "Inventory", type: "Asset", description: "Stock of goods for sale" },
-  { code: "1300", name: "Prepaid Expenses", type: "Asset", description: "Advance payments for future expenses" },
-  { code: "1500", name: "Fixed Assets", type: "Asset", description: "Long-term tangible assets" },
-  { code: "1510", name: "Accumulated Depreciation", type: "Asset", description: "Total depreciation of fixed assets" },
-  { code: "2000", name: "Accounts Payable", type: "Liability", description: "Money owed to suppliers" },
-  { code: "2100", name: "Taxes Payable", type: "Liability", description: "Taxes due to government" },
-  { code: "2200", name: "Loans Payable", type: "Liability", description: "Bank or other loans taken" },
-  { code: "2300", name: "NAPSA Payable", type: "Liability", description: "NAPSA contributions payable" },
-  { code: "2310", name: "NHIMA Payable", type: "Liability", description: "NHIMA contributions payable" },
-  { code: "2320", name: "PAYE Payable", type: "Liability", description: "Pay As You Earn tax payable" },
-  { code: "3000", name: "Owner's Equity", type: "Equity", description: "Owner's investment in business" },
-  { code: "3100", name: "Retained Earnings", type: "Equity", description: "Accumulated profits retained" },
-  { code: "4000", name: "Sales Revenue", type: "Revenue", description: "Income from sales" },
-  { code: "4100", name: "Service Revenue", type: "Revenue", description: "Income from services" },
-  { code: "4200", name: "Grant Income", type: "Revenue", description: "Income from grants and donations" },
-  { code: "5000", name: "Cost of Goods Sold", type: "Cost of Sales", description: "Direct costs of goods sold" },
-  { code: "6000", name: "Rent Expense", type: "Expense", description: "Monthly office rent" },
-  { code: "6100", name: "Office Supplies", type: "Expense", description: "Supplies used in office" },
-  { code: "6200", name: "Salaries Expense", type: "Expense", description: "Employee salaries" },
-  { code: "6300", name: "Utilities Expense", type: "Expense", description: "Electricity, internet, water bills" },
-  { code: "6400", name: "Depreciation Expense", type: "Expense", description: "Periodic asset depreciation" },
-  { code: "6500", name: "Bank Charges", type: "Expense", description: "Bank fees and charges" },
+  { code: "1000", name: "Cash", type: "asset", description: "Money available in bank or cash" },
+  { code: "1010", name: "Petty Cash", type: "asset", description: "Small cash for daily needs" },
+  { code: "1100", name: "Accounts Receivable", type: "asset", description: "Amount to be received from customers" },
+  { code: "1200", name: "Inventory", type: "asset", description: "Stock of goods for sale" },
+  { code: "1300", name: "Prepaid Expenses", type: "asset", description: "Advance payments for future expenses" },
+  { code: "1500", name: "Fixed Assets", type: "asset", description: "Long-term tangible assets" },
+  { code: "1510", name: "Accumulated Depreciation", type: "asset", description: "Total depreciation of fixed assets" },
+  { code: "2000", name: "Accounts Payable", type: "liability", description: "Money owed to suppliers" },
+  { code: "2100", name: "Taxes Payable", type: "liability", description: "Taxes due to government" },
+  { code: "2200", name: "Loans Payable", type: "liability", description: "Bank or other loans taken" },
+  { code: "2300", name: "NAPSA Payable", type: "liability", description: "NAPSA contributions payable" },
+  { code: "2310", name: "NHIMA Payable", type: "liability", description: "NHIMA contributions payable" },
+  { code: "2320", name: "PAYE Payable", type: "liability", description: "Pay As You Earn tax payable" },
+  { code: "3000", name: "Owner's Equity", type: "equity", description: "Owner's investment in business" },
+  { code: "3100", name: "Retained Earnings", type: "equity", description: "Accumulated profits retained" },
+  { code: "4000", name: "Sales Revenue", type: "revenue", description: "Income from sales" },
+  { code: "4100", name: "Service Revenue", type: "revenue", description: "Income from services" },
+  { code: "4200", name: "Grant Income", type: "revenue", description: "Income from grants and donations" },
+  { code: "5000", name: "Cost of Goods Sold", type: "expense", description: "Direct costs of goods sold" },
+  { code: "6000", name: "Rent Expense", type: "expense", description: "Monthly office rent" },
+  { code: "6100", name: "Office Supplies", type: "expense", description: "Supplies used in office" },
+  { code: "6200", name: "Salaries Expense", type: "expense", description: "Employee salaries" },
+  { code: "6300", name: "Utilities Expense", type: "expense", description: "Electricity, internet, water bills" },
+  { code: "6400", name: "Depreciation Expense", type: "expense", description: "Periodic asset depreciation" },
+  { code: "6500", name: "Bank Charges", type: "expense", description: "Bank fees and charges" },
 ];
 
 interface Account {
@@ -251,12 +250,11 @@ export default function ChartOfAccounts() {
 
   const getTypeColor = (type: string) => {
     switch (type) {
-      case "Asset": return "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200";
-      case "Liability": return "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200";
-      case "Equity": return "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200";
-      case "Revenue": return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200";
-      case "Cost of Sales": return "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200";
-      case "Expense": return "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200";
+      case "asset": return "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200";
+      case "liability": return "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200";
+      case "equity": return "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200";
+      case "revenue": return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200";
+      case "expense": return "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200";
       default: return "bg-muted text-muted-foreground";
     }
   };
