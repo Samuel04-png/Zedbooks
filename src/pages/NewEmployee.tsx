@@ -5,51 +5,62 @@ import * as z from "zod";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import {
-  Form,
-  FormControl,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from "@/components/ui/form";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
+import { Form } from "@/components/ui/form";
 import { toast } from "sonner";
-import { ArrowLeft, Mail } from "lucide-react";
+import { ArrowLeft, Mail, Save, ChevronRight } from "lucide-react";
 import { useCompanySettings } from "@/hooks/useCompanySettings";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import { EmployeePersonalTab } from "@/components/payroll/EmployeePersonalTab";
+import { EmployeeEngagementTab } from "@/components/payroll/EmployeeEngagementTab";
+import { EmployeePayTab } from "@/components/payroll/EmployeePayTab";
 
 const employeeSchema = z.object({
-  full_name: z.string().min(1, "Full name is required"),
+  // Personal Details
   employee_number: z.string().min(1, "Employee number is required"),
-  email: z.string().email().optional().or(z.literal("")),
-  phone: z.string().optional(),
-  position: z.string().optional(),
-  department: z.string().optional(),
-  basic_salary: z.string().min(1, "Basic salary is required"),
-  housing_allowance: z.string().optional(),
-  transport_allowance: z.string().optional(),
-  other_allowances: z.string().optional(),
-  employment_date: z.string().min(1, "Employment date is required"),
-  employment_status: z.string().default("active"),
-  contract_type: z.string().optional(),
-  contract_start_date: z.string().optional(),
-  contract_end_date: z.string().optional(),
-  has_gratuity: z.boolean().default(false),
-  gratuity_rate: z.string().optional(),
+  nrc_number: z.string().optional(),
   tpin: z.string().optional(),
-  nhima_number: z.string().optional(),
   napsa_number: z.string().optional(),
+  nhima_number: z.string().optional(),
+  full_name: z.string().min(1, "Full name is required"),
+  date_of_birth: z.string().optional(),
+  gender: z.string().optional(),
+  nationality: z.string().optional(),
+  marital_status: z.string().optional(),
+  phone: z.string().optional(),
+  address: z.string().optional(),
+  email: z.string().email().optional().or(z.literal("")),
+  department: z.string().optional(),
+  division: z.string().optional(),
+  position: z.string().optional(),
+  job_grade: z.string().optional(),
+  cost_centre: z.string().optional(),
+  
+  // Engagement
+  contract_type: z.string().optional(),
+  employment_status: z.string().default("active"),
+  employment_date: z.string().min(1, "Employment date is required"),
+  contract_end_date: z.string().optional(),
+  currency: z.string().default("ZMW"),
+  pay_point: z.string().optional(),
   bank_name: z.string().optional(),
   bank_branch: z.string().optional(),
   bank_account_number: z.string().optional(),
+  has_gratuity: z.boolean().default(false),
+  gratuity_rate: z.string().optional(),
+  
+  // Pay
+  rate_type: z.string().default("monthly"),
+  basic_salary: z.string().min(1, "Basic salary is required"),
+  pay_rate: z.string().optional(),
+  housing_allowance: z.string().optional(),
+  transport_allowance: z.string().optional(),
+  other_allowances: z.string().optional(),
+  overtime_rate_multiplier: z.string().optional(),
+  
+  // Options
   send_invite: z.boolean().default(false),
 });
 
@@ -58,6 +69,8 @@ type EmployeeFormData = z.infer<typeof employeeSchema>;
 export default function NewEmployee() {
   const navigate = useNavigate();
   const { data: companySettings } = useCompanySettings();
+  const [activeTab, setActiveTab] = React.useState("personal");
+  const [isSubmitting, setIsSubmitting] = React.useState(false);
 
   const form = useForm<EmployeeFormData>({
     resolver: zodResolver(employeeSchema),
@@ -65,17 +78,11 @@ export default function NewEmployee() {
       employment_status: "active",
       has_gratuity: false,
       send_invite: false,
+      currency: "ZMW",
+      rate_type: "monthly",
+      nationality: "Zambian",
     },
   });
-
-  // Auto-calculate housing allowance (30% of basic salary)
-  const basicSalary = form.watch("basic_salary");
-  React.useEffect(() => {
-    if (basicSalary && !isNaN(Number(basicSalary))) {
-      const housingAllowance = (Number(basicSalary) * 0.3).toFixed(2);
-      form.setValue("housing_allowance", housingAllowance);
-    }
-  }, [basicSalary, form]);
 
   const generateTemporaryPassword = () => {
     const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
@@ -87,73 +94,126 @@ export default function NewEmployee() {
   };
 
   const onSubmit = async (data: EmployeeFormData) => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      toast.error("You must be logged in");
-      return;
-    }
-
-    const { error } = await supabase.from("employees").insert([{
-      full_name: data.full_name,
-      employee_number: data.employee_number,
-      email: data.email || null,
-      phone: data.phone || null,
-      position: data.position || null,
-      department: data.department || null,
-      basic_salary: Number(data.basic_salary),
-      housing_allowance: data.housing_allowance ? Number(data.housing_allowance) : 0,
-      transport_allowance: data.transport_allowance ? Number(data.transport_allowance) : 0,
-      other_allowances: data.other_allowances ? Number(data.other_allowances) : 0,
-      employment_date: data.employment_date,
-      employment_status: data.employment_status || 'active',
-      contract_type: data.contract_type || null,
-      contract_start_date: data.contract_start_date || null,
-      contract_end_date: data.contract_end_date || null,
-      has_gratuity: data.has_gratuity || false,
-      gratuity_rate: data.gratuity_rate ? Number(data.gratuity_rate) : 0,
-      tpin: data.tpin || null,
-      nhima_number: data.nhima_number || null,
-      napsa_number: data.napsa_number || null,
-      bank_name: data.bank_name || null,
-      bank_branch: data.bank_branch || null,
-      bank_account_number: data.bank_account_number || null,
-      user_id: user.id,
-    }]);
-
-    if (error) {
-      toast.error("Failed to create employee");
-      return;
-    }
-
-    // Send invite email if option is checked and email is provided
-    if (data.send_invite && data.email) {
-      const tempPassword = generateTemporaryPassword();
-      try {
-        const { error: inviteError } = await supabase.functions.invoke("send-employee-invite", {
-          body: {
-            employeeName: data.full_name,
-            employeeEmail: data.email,
-            companyName: companySettings?.company_name || "ZedBooks",
-            temporaryPassword: tempPassword,
-            loginUrl: `${window.location.origin}/auth`,
-          },
-        });
-
-        if (inviteError) {
-          console.error("Failed to send invite:", inviteError);
-          toast.warning("Employee created but invite email failed to send");
-        } else {
-          toast.success("Employee created and invite email sent!");
-        }
-      } catch (err) {
-        console.error("Error sending invite:", err);
-        toast.warning("Employee created but invite email failed to send");
+    setIsSubmitting(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        toast.error("You must be logged in");
+        return;
       }
-    } else {
-      toast.success("Employee created successfully");
-    }
 
-    navigate("/employees");
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("company_id")
+        .eq("id", user.id)
+        .single();
+
+      const { data: employee, error } = await supabase.from("employees").insert([{
+        // Personal
+        employee_number: data.employee_number,
+        nrc_number: data.nrc_number || null,
+        tpin: data.tpin || null,
+        napsa_number: data.napsa_number || null,
+        nhima_number: data.nhima_number || null,
+        full_name: data.full_name,
+        date_of_birth: data.date_of_birth || null,
+        gender: data.gender || null,
+        nationality: data.nationality || null,
+        marital_status: data.marital_status || null,
+        phone: data.phone || null,
+        address: data.address || null,
+        email: data.email || null,
+        department: data.department || null,
+        division: data.division || null,
+        position: data.position || null,
+        job_grade: data.job_grade || null,
+        cost_centre: data.cost_centre || null,
+        
+        // Engagement
+        contract_type: data.contract_type || null,
+        employment_status: data.employment_status || 'active',
+        employment_date: data.employment_date,
+        contract_end_date: data.contract_end_date || null,
+        has_gratuity: data.has_gratuity || false,
+        gratuity_rate: data.gratuity_rate ? Number(data.gratuity_rate) : 0,
+        bank_name: data.bank_name || null,
+        bank_branch: data.bank_branch || null,
+        bank_account_number: data.bank_account_number || null,
+        
+        // Pay
+        basic_salary: Number(data.basic_salary),
+        housing_allowance: data.housing_allowance ? Number(data.housing_allowance) : 0,
+        transport_allowance: data.transport_allowance ? Number(data.transport_allowance) : 0,
+        other_allowances: data.other_allowances ? Number(data.other_allowances) : 0,
+        
+        user_id: user.id,
+        company_id: profile?.company_id,
+      }]).select().single();
+
+      if (error) {
+        toast.error("Failed to create employee");
+        console.error(error);
+        return;
+      }
+
+      // Create payroll profile with default settings
+      const isConsultant = data.contract_type === "consultant";
+      await supabase.from("employee_payroll_profiles").insert({
+        employee_id: employee.id,
+        company_id: profile?.company_id,
+        rate_type: data.rate_type,
+        pay_rate: data.pay_rate ? Number(data.pay_rate) : null,
+        overtime_rate_multiplier: data.overtime_rate_multiplier ? Number(data.overtime_rate_multiplier) : 1.5,
+        currency: data.currency,
+        apply_paye: !isConsultant,
+        apply_napsa: !isConsultant,
+        apply_nhima: !isConsultant,
+        is_consultant: isConsultant,
+        apply_wht: isConsultant,
+        consultant_type: isConsultant ? "local" : null,
+      });
+
+      // Send invite email if option is checked and email is provided
+      if (data.send_invite && data.email) {
+        const tempPassword = generateTemporaryPassword();
+        try {
+          const { error: inviteError } = await supabase.functions.invoke("send-employee-invite", {
+            body: {
+              employeeName: data.full_name,
+              employeeEmail: data.email,
+              companyName: companySettings?.company_name || "ZedBooks",
+              temporaryPassword: tempPassword,
+              loginUrl: `${window.location.origin}/auth`,
+            },
+          });
+
+          if (inviteError) {
+            toast.warning("Employee created but invite email failed to send");
+          }
+        } catch (err) {
+          toast.warning("Employee created but invite email failed to send");
+        }
+      }
+
+      toast.success("Employee created successfully");
+      // Navigate to payroll setup for this employee
+      navigate(`/employees/${employee.id}/payroll-setup`);
+    } catch (error) {
+      console.error(error);
+      toast.error("Failed to create employee");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const nextTab = () => {
+    if (activeTab === "personal") setActiveTab("engagement");
+    else if (activeTab === "engagement") setActiveTab("pay");
+  };
+
+  const prevTab = () => {
+    if (activeTab === "pay") setActiveTab("engagement");
+    else if (activeTab === "engagement") setActiveTab("personal");
   };
 
   return (
@@ -165,422 +225,95 @@ export default function NewEmployee() {
         </Button>
         <div>
           <h1 className="text-3xl font-bold">Add New Employee</h1>
-          <p className="text-muted-foreground">Create a new employee record</p>
+          <p className="text-muted-foreground">Complete the onboarding form in 3 steps</p>
         </div>
       </div>
 
       <Form {...form}>
-        <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-8">
-          <div className="border rounded-lg p-6 space-y-6">
-            <h2 className="text-xl font-semibold">Personal Information</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <FormField
-                control={form.control}
-                name="full_name"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Full Name *</FormLabel>
-                    <FormControl>
-                      <Input {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="employee_number"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Employee Number *</FormLabel>
-                    <FormControl>
-                      <Input {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="email"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Email</FormLabel>
-                    <FormControl>
-                      <Input type="email" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="phone"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Phone</FormLabel>
-                    <FormControl>
-                      <Input {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            </div>
-          </div>
+        <form onSubmit={form.handleSubmit(onSubmit)}>
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
+            <TabsList className="grid w-full grid-cols-3">
+              <TabsTrigger value="personal" className="flex items-center gap-2">
+                <span className="hidden sm:inline">1.</span> Personal Details
+              </TabsTrigger>
+              <TabsTrigger value="engagement" className="flex items-center gap-2">
+                <span className="hidden sm:inline">2.</span> Engagement
+              </TabsTrigger>
+              <TabsTrigger value="pay" className="flex items-center gap-2">
+                <span className="hidden sm:inline">3.</span> Pay
+              </TabsTrigger>
+            </TabsList>
 
-          <div className="border rounded-lg p-6 space-y-6">
-            <h2 className="text-xl font-semibold">Employment Details</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <FormField
-                control={form.control}
-                name="position"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Position</FormLabel>
-                    <FormControl>
-                      <Input {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="department"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Department</FormLabel>
-                    <FormControl>
-                      <Input {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="employment_date"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Employment Date *</FormLabel>
-                    <FormControl>
-                      <Input type="date" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="employment_status"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Employment Status</FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value}>
-                      <FormControl>
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        <SelectItem value="active">Active</SelectItem>
-                        <SelectItem value="inactive">Inactive</SelectItem>
-                        <SelectItem value="terminated">Terminated</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            </div>
-          </div>
+            <Card>
+              <CardContent className="pt-6">
+                <TabsContent value="personal" className="mt-0">
+                  <EmployeePersonalTab form={form} />
+                </TabsContent>
 
-          <div className="border rounded-lg p-6 space-y-6">
-            <h2 className="text-xl font-semibold">Contract Details</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <FormField
-                control={form.control}
-                name="contract_type"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Contract Type</FormLabel>
-                    <Select onValueChange={field.onChange} value={field.value}>
-                      <FormControl>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select contract type" />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        <SelectItem value="permanent">Permanent</SelectItem>
-                        <SelectItem value="fixed-term">Fixed-Term</SelectItem>
-                        <SelectItem value="temporary">Temporary</SelectItem>
-                        <SelectItem value="internship">Internship</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="contract_start_date"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Contract Start Date</FormLabel>
-                    <FormControl>
-                      <Input type="date" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="contract_end_date"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Contract End Date</FormLabel>
-                    <FormControl>
-                      <Input type="date" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="has_gratuity"
-                render={({ field }) => (
-                  <FormItem className="flex flex-row items-center justify-between rounded-lg border p-4">
-                    <div className="space-y-0.5">
-                      <FormLabel className="text-base">Attracts Gratuity</FormLabel>
-                      <div className="text-sm text-muted-foreground">
-                        Enable if this contract includes gratuity
+                <TabsContent value="engagement" className="mt-0">
+                  <EmployeeEngagementTab form={form} />
+                </TabsContent>
+
+                <TabsContent value="pay" className="mt-0">
+                  <EmployeePayTab form={form} />
+                </TabsContent>
+              </CardContent>
+            </Card>
+
+            {/* Send Invite Option */}
+            {activeTab === "pay" && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Employee Invite</CardTitle>
+                  <CardDescription>Send login credentials to the employee</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Mail className="h-4 w-4 text-muted-foreground" />
+                      <div>
+                        <Label>Send Invite Email</Label>
+                        <p className="text-sm text-muted-foreground">
+                          Send login credentials to employee's email
+                        </p>
                       </div>
                     </div>
-                    <FormControl>
-                      <Switch
-                        checked={field.value}
-                        onCheckedChange={field.onChange}
-                      />
-                    </FormControl>
-                  </FormItem>
-                )}
-              />
-              {form.watch("has_gratuity") && (
-                <FormField
-                  control={form.control}
-                  name="gratuity_rate"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Gratuity Rate (%)</FormLabel>
-                      <FormControl>
-                        <Input 
-                          type="number" 
-                          step="0.01" 
-                          placeholder="e.g., 25 for 25%" 
-                          {...field} 
-                        />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              )}
-            </div>
-          </div>
+                    <Switch
+                      checked={form.watch("send_invite")}
+                      onCheckedChange={(checked) => form.setValue("send_invite", checked)}
+                      disabled={!form.watch("email")}
+                    />
+                  </div>
+                </CardContent>
+              </Card>
+            )}
 
-          <div className="border rounded-lg p-6 space-y-6">
-            <h2 className="text-xl font-semibold">Salary & Allowances</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <FormField
-                control={form.control}
-                name="basic_salary"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Basic Salary (ZMW) *</FormLabel>
-                    <FormControl>
-                      <Input type="number" step="0.01" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
+            {/* Navigation Buttons */}
+            <div className="flex justify-between">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={prevTab}
+                disabled={activeTab === "personal"}
+              >
+                Previous
+              </Button>
+              
+              <div className="flex gap-2">
+                {activeTab !== "pay" ? (
+                  <Button type="button" onClick={nextTab}>
+                    Next
+                    <ChevronRight className="h-4 w-4 ml-1" />
+                  </Button>
+                ) : (
+                  <Button type="submit" disabled={isSubmitting}>
+                    <Save className="h-4 w-4 mr-2" />
+                    {isSubmitting ? "Saving..." : "Save & Setup Payroll"}
+                  </Button>
                 )}
-              />
-              <FormField
-                control={form.control}
-                name="housing_allowance"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Housing Allowance (ZMW)</FormLabel>
-                    <FormControl>
-                      <Input 
-                        type="number" 
-                        step="0.01" 
-                        {...field} 
-                        placeholder="Auto-calculated at 30% of basic salary"
-                        readOnly
-                        className="bg-muted"
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="transport_allowance"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Transport Allowance (ZMW)</FormLabel>
-                    <FormControl>
-                      <Input type="number" step="0.01" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="other_allowances"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Other Allowances (ZMW)</FormLabel>
-                    <FormControl>
-                      <Input type="number" step="0.01" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
+              </div>
             </div>
-          </div>
-
-          <div className="border rounded-lg p-6 space-y-6">
-            <h2 className="text-xl font-semibold">Statutory Information</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <FormField
-                control={form.control}
-                name="tpin"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>TPIN</FormLabel>
-                    <FormControl>
-                      <Input {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="nhima_number"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>NHIMA Number</FormLabel>
-                    <FormControl>
-                      <Input {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="napsa_number"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>NAPSA Number</FormLabel>
-                    <FormControl>
-                      <Input {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            </div>
-          </div>
-
-          <div className="border rounded-lg p-6 space-y-6">
-            <h2 className="text-xl font-semibold">Bank Details</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <FormField
-                control={form.control}
-                name="bank_name"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Bank Name</FormLabel>
-                    <FormControl>
-                      <Input {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="bank_branch"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Bank Branch</FormLabel>
-                    <FormControl>
-                      <Input {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="bank_account_number"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Account Number</FormLabel>
-                    <FormControl>
-                      <Input {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            </div>
-          </div>
-
-          {/* Send Invite Option */}
-          {form.watch("email") && (
-            <div className="border rounded-lg p-6 space-y-6">
-              <FormField
-                control={form.control}
-                name="send_invite"
-                render={({ field }) => (
-                  <FormItem className="flex flex-row items-center justify-between rounded-lg border p-4">
-                    <div className="space-y-0.5">
-                      <FormLabel className="text-base flex items-center gap-2">
-                        <Mail className="h-4 w-4" />
-                        Send Invitation Email
-                      </FormLabel>
-                      <div className="text-sm text-muted-foreground">
-                        Send an email with login credentials to the employee
-                      </div>
-                    </div>
-                    <FormControl>
-                      <Switch
-                        checked={field.value}
-                        onCheckedChange={field.onChange}
-                      />
-                    </FormControl>
-                  </FormItem>
-                )}
-              />
-            </div>
-          )}
-
-          <div className="flex justify-end gap-4">
-            <Button type="button" variant="outline" onClick={() => navigate("/employees")}>
-              Cancel
-            </Button>
-            <Button type="submit">Create Employee</Button>
-          </div>
+          </Tabs>
         </form>
       </Form>
     </div>

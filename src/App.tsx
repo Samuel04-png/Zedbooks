@@ -55,6 +55,8 @@ import AssetDepreciation from "./pages/AssetDepreciation";
 import FinancialPeriods from "./pages/FinancialPeriods";
 import JournalEntries from "./pages/JournalEntries";
 import ChartOfAccounts from "./pages/ChartOfAccounts";
+import EmployeePayrollSetupPage from "./pages/EmployeePayrollSetupPage";
+import PayrollSettings from "./pages/PayrollSettings";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -102,6 +104,7 @@ const App = () => (
               <Route path="/employees/new" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><NewEmployee /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/employees/:id/edit" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><EditEmployee /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/employees/bulk-upload" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><BulkUploadEmployees /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+              <Route path="/employees/:id/payroll-setup" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><EmployeePayrollSetupPage /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/payroll" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><Payroll /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/payroll/new" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><NewPayrollRun /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/payroll/:id" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><PayrollDetail /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
@@ -119,6 +122,7 @@ const App = () => (
               <Route path="/payroll-reports" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><PayrollReports /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/zra-compliance" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><ZRACompliance /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/tax-calculator" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><TaxCalculator /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+              <Route path="/payroll-settings" element={<ProtectedRoute><AppLayout><RoleProtectedRoute allowedRoles={["super_admin", "admin"]}><PayrollSettings /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/settings" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><CompanySettings /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/users" element={<ProtectedRoute><AppLayout><RoleProtectedRoute allowedRoles={["super_admin", "admin"]}><UserManagement /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/audit-logs" element={<ProtectedRoute><AppLayout><RoleProtectedRoute allowedRoles={["super_admin", "admin", "auditor"]}><AuditLogs /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
