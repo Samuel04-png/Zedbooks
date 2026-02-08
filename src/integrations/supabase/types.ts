@@ -956,6 +956,42 @@ export type Database = {
         }
         Relationships: []
       }
+      customer_price_lists: {
+        Row: {
+          created_at: string
+          customer_id: string
+          id: string
+          price_list_id: string
+        }
+        Insert: {
+          created_at?: string
+          customer_id: string
+          id?: string
+          price_list_id: string
+        }
+        Update: {
+          created_at?: string
+          customer_id?: string
+          id?: string
+          price_list_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "customer_price_lists_customer_id_fkey"
+            columns: ["customer_id"]
+            isOneToOne: false
+            referencedRelation: "customers"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "customer_price_lists_price_list_id_fkey"
+            columns: ["price_list_id"]
+            isOneToOne: false
+            referencedRelation: "price_lists"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       customers: {
         Row: {
           address: string | null
@@ -2486,6 +2522,185 @@ export type Database = {
           },
         ]
       }
+      price_list_items: {
+        Row: {
+          created_at: string
+          discount_percent: number | null
+          id: string
+          min_quantity: number | null
+          price: number
+          price_list_id: string
+          product_id: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          discount_percent?: number | null
+          id?: string
+          min_quantity?: number | null
+          price: number
+          price_list_id: string
+          product_id: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          discount_percent?: number | null
+          id?: string
+          min_quantity?: number | null
+          price?: number
+          price_list_id?: string
+          product_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "price_list_items_price_list_id_fkey"
+            columns: ["price_list_id"]
+            isOneToOne: false
+            referencedRelation: "price_lists"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "price_list_items_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products_services"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      price_lists: {
+        Row: {
+          company_id: string | null
+          created_at: string
+          currency: string | null
+          description: string | null
+          id: string
+          is_active: boolean | null
+          is_default: boolean | null
+          name: string
+          updated_at: string
+          valid_from: string | null
+          valid_to: string | null
+        }
+        Insert: {
+          company_id?: string | null
+          created_at?: string
+          currency?: string | null
+          description?: string | null
+          id?: string
+          is_active?: boolean | null
+          is_default?: boolean | null
+          name: string
+          updated_at?: string
+          valid_from?: string | null
+          valid_to?: string | null
+        }
+        Update: {
+          company_id?: string | null
+          created_at?: string
+          currency?: string | null
+          description?: string | null
+          id?: string
+          is_active?: boolean | null
+          is_default?: boolean | null
+          name?: string
+          updated_at?: string
+          valid_from?: string | null
+          valid_to?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "price_lists_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      products_services: {
+        Row: {
+          category: string | null
+          company_id: string | null
+          cost_price: number | null
+          created_at: string
+          description: string | null
+          id: string
+          is_active: boolean | null
+          is_taxable: boolean | null
+          name: string
+          preferred_vendor_id: string | null
+          quantity_on_hand: number | null
+          reorder_point: number | null
+          selling_price: number | null
+          sku: string | null
+          tax_rate: number | null
+          track_inventory: boolean | null
+          type: string
+          unit_of_measure: string | null
+          updated_at: string
+        }
+        Insert: {
+          category?: string | null
+          company_id?: string | null
+          cost_price?: number | null
+          created_at?: string
+          description?: string | null
+          id?: string
+          is_active?: boolean | null
+          is_taxable?: boolean | null
+          name: string
+          preferred_vendor_id?: string | null
+          quantity_on_hand?: number | null
+          reorder_point?: number | null
+          selling_price?: number | null
+          sku?: string | null
+          tax_rate?: number | null
+          track_inventory?: boolean | null
+          type?: string
+          unit_of_measure?: string | null
+          updated_at?: string
+        }
+        Update: {
+          category?: string | null
+          company_id?: string | null
+          cost_price?: number | null
+          created_at?: string
+          description?: string | null
+          id?: string
+          is_active?: boolean | null
+          is_taxable?: boolean | null
+          name?: string
+          preferred_vendor_id?: string | null
+          quantity_on_hand?: number | null
+          reorder_point?: number | null
+          selling_price?: number | null
+          sku?: string | null
+          tax_rate?: number | null
+          track_inventory?: boolean | null
+          type?: string
+          unit_of_measure?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "products_services_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "products_services_preferred_vendor_id_fkey"
+            columns: ["preferred_vendor_id"]
+            isOneToOne: false
+            referencedRelation: "vendors"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       profiles: {
         Row: {
           company_id: string | null
@@ -2809,6 +3024,7 @@ export type Database = {
           movement_date: string
           movement_type: string
           notes: string | null
+          product_id: string | null
           quantity: number
           reference_number: string | null
           user_id: string
@@ -2823,6 +3039,7 @@ export type Database = {
           movement_date?: string
           movement_type: string
           notes?: string | null
+          product_id?: string | null
           quantity: number
           reference_number?: string | null
           user_id: string
@@ -2837,6 +3054,7 @@ export type Database = {
           movement_date?: string
           movement_type?: string
           notes?: string | null
+          product_id?: string | null
           quantity?: number
           reference_number?: string | null
           user_id?: string
@@ -2847,6 +3065,13 @@ export type Database = {
             columns: ["inventory_item_id"]
             isOneToOne: false
             referencedRelation: "inventory_items"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "stock_movements_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products_services"
             referencedColumns: ["id"]
           },
         ]
