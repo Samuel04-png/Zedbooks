@@ -113,11 +113,23 @@ export default function Landing() {
             </Link>
           </nav>
 
-          <Link to="/auth">
-            <Button variant="outline" className="rounded-full border-orange-500 text-orange-500 hover:bg-orange-50">
-              Contact Sales
-            </Button>
-          </Link>
+          <div className="flex items-center gap-3">
+            <a href="mailto:hello@byteandberry.com">
+              <Button variant="ghost" className="text-gray-600 hover:text-orange-500">
+                Contact Sales
+              </Button>
+            </a>
+            <Link to="/auth">
+              <Button variant="ghost" className="text-gray-600 hover:text-orange-500">
+                Sign In
+              </Button>
+            </Link>
+            <Link to="/auth">
+              <Button className="rounded-full bg-orange-500 hover:bg-orange-600">
+                Get Started
+              </Button>
+            </Link>
+          </div>
         </div>
       </header>
 

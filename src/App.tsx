@@ -57,6 +57,7 @@ import JournalEntries from "./pages/JournalEntries";
 import ChartOfAccounts from "./pages/ChartOfAccounts";
 import EmployeePayrollSetupPage from "./pages/EmployeePayrollSetupPage";
 import PayrollSettings from "./pages/PayrollSettings";
+import Products from "./pages/Products";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -96,7 +97,7 @@ const App = () => (
               <Route path="/bills" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><Bills /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/purchase-orders" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><PurchaseOrders /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/expenses" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><Expenses /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
-              <Route path="/products" element={<ProtectedRoute><AppLayout><ComingSoon title="Products & Services" /></AppLayout></ProtectedRoute>} />
+              <Route path="/products" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><Products /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/inventory" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><Inventory /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/bank-accounts" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><BankAccounts /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/reconciliation" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><Reconciliation /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
