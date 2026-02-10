@@ -6,58 +6,12 @@ import { HRDashboard } from "@/components/dashboard/HRDashboard";
 import { InventoryDashboard } from "@/components/dashboard/InventoryDashboard";
 import { ProjectManagerDashboard } from "@/components/dashboard/ProjectManagerDashboard";
 import { AuditorDashboard } from "@/components/dashboard/AuditorDashboard";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { DollarSign, TrendingUp, TrendingDown, Users, FileText } from "lucide-react";
-
-function DefaultDashboard() {
-  const metrics = [
-    { title: "Total Revenue", value: "ZMW 245,890", change: "+12.5%", trend: "up", icon: DollarSign },
-    { title: "Outstanding Invoices", value: "ZMW 58,240", change: "23 invoices", trend: "neutral", icon: FileText },
-    { title: "Total Expenses", value: "ZMW 142,560", change: "+8.2%", trend: "down", icon: TrendingDown },
-    { title: "Active Donors", value: "47", change: "+3 this month", trend: "up", icon: Users },
-  ];
-
-  return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight text-foreground">Dashboard</h1>
-          <p className="text-muted-foreground">Overview of your organization's financials</p>
-        </div>
-      </div>
-
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        {metrics.map((metric) => (
-          <Card key={metric.title}>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">{metric.title}</CardTitle>
-              <metric.icon className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{metric.value}</div>
-              <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
-                {metric.trend === "up" && <TrendingUp className="h-3 w-3 text-success" />}
-                {metric.trend === "down" && <TrendingDown className="h-3 w-3 text-destructive" />}
-                {metric.change}
-              </p>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Welcome</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <p className="text-muted-foreground">
-            Select a module from the sidebar to get started.
-          </p>
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
+import { FinancialManagerDashboard } from "@/components/dashboard/FinancialManagerDashboard";
+import { AssistantAccountantDashboard } from "@/components/dashboard/AssistantAccountantDashboard";
+import { FinanceOfficerDashboard } from "@/components/dashboard/FinanceOfficerDashboard";
+import { CashierDashboard } from "@/components/dashboard/CashierDashboard";
+import { StaffDashboard } from "@/components/dashboard/StaffDashboard";
+import { ReadOnlyDashboard } from "@/components/dashboard/ReadOnlyDashboard";
 
 export default function Dashboard() {
   const { data: userRole, isLoading } = useUserRole();
@@ -74,11 +28,18 @@ export default function Dashboard() {
     case "super_admin":
     case "admin":
       return <SuperAdminDashboard />;
+    case "financial_manager":
+      return <FinancialManagerDashboard />;
     case "accountant":
-    case "finance_officer":
       return <AccountantDashboard />;
+    case "assistant_accountant":
+      return <AssistantAccountantDashboard />;
+    case "finance_officer":
+      return <FinanceOfficerDashboard />;
     case "bookkeeper":
       return <BookkeeperDashboard />;
+    case "cashier":
+      return <CashierDashboard />;
     case "hr_manager":
       return <HRDashboard />;
     case "inventory_manager":
@@ -87,9 +48,11 @@ export default function Dashboard() {
       return <ProjectManagerDashboard />;
     case "auditor":
       return <AuditorDashboard />;
+    case "staff":
+      return <StaffDashboard />;
     case "read_only":
-      return <DefaultDashboard />;
+      return <ReadOnlyDashboard />;
     default:
-      return <DefaultDashboard />;
+      return <ReadOnlyDashboard />;
   }
 }
