@@ -4,6 +4,7 @@ import { useAuth } from "@/contexts/AuthContext";
 
 export type AppRole = 
   | "admin"
+  | "financial_manager"
   | "finance_officer"
   | "hr_manager"
   | "project_manager"
@@ -11,7 +12,9 @@ export type AppRole =
   | "read_only"
   | "super_admin"
   | "accountant"
+  | "assistant_accountant"
   | "bookkeeper"
+  | "cashier"
   | "inventory_manager"
   | "staff";
 
@@ -69,16 +72,36 @@ export function useHasRole(requiredRoles: AppRole[]) {
 
 // Role permissions mapping
 export const rolePermissions: Record<AppRole, string[]> = {
-  super_admin: ["*"], // Access to everything
-  admin: ["*"], // Access to everything
+  super_admin: ["*"],
+  admin: ["*"],
+  financial_manager: [
+    "dashboard", "invoices", "customers", "estimates", "sales-orders",
+    "vendors", "bills", "purchase-orders", "expenses", "bank-accounts",
+    "reconciliation", "reports", "settings", "chart-of-accounts", "journal-entries",
+    "payroll", "payroll-reports", "employees", "fixed-assets", "asset-depreciation",
+    "financial-periods", "zra-compliance", "tax-calculator"
+  ],
   accountant: [
     "dashboard", "invoices", "customers", "estimates", "sales-orders",
     "vendors", "bills", "purchase-orders", "expenses", "bank-accounts",
-    "reconciliation", "reports", "settings", "chart-of-accounts", "journal-entries"
+    "reconciliation", "reports", "settings", "chart-of-accounts", "journal-entries",
+    "fixed-assets", "asset-depreciation", "financial-periods", "tax-calculator"
+  ],
+  assistant_accountant: [
+    "dashboard", "invoices", "customers", "estimates", "sales-orders",
+    "vendors", "bills", "purchase-orders", "expenses", "chart-of-accounts"
+  ],
+  finance_officer: [
+    "dashboard", "invoices", "expenses", "bills", "bank-accounts",
+    "reconciliation", "reports", "chart-of-accounts", "journal-entries"
   ],
   bookkeeper: [
     "dashboard", "invoices", "customers", "estimates", "sales-orders",
-    "vendors", "bills", "purchase-orders", "expenses", "chart-of-accounts"
+    "vendors", "bills", "purchase-orders", "expenses", "chart-of-accounts",
+    "reconciliation"
+  ],
+  cashier: [
+    "dashboard", "bank-accounts", "expenses", "reconciliation"
   ],
   inventory_manager: [
     "dashboard", "inventory", "products", "purchase-orders", "vendors"
@@ -87,21 +110,18 @@ export const rolePermissions: Record<AppRole, string[]> = {
     "dashboard", "employees", "payroll", "advances", "payroll-reports",
     "time-tracking"
   ],
-  finance_officer: [
-    "dashboard", "invoices", "expenses", "bills", "bank-accounts",
-    "reconciliation", "reports", "chart-of-accounts", "journal-entries"
-  ],
   project_manager: [
     "dashboard", "projects", "donors", "time-tracking", "reports"
   ],
   auditor: [
-    "dashboard", "reports", "payroll-reports", "audit-logs"
-  ],
-  read_only: [
-    "dashboard"
+    "dashboard", "reports", "payroll-reports", "audit-logs",
+    "journal-entries", "chart-of-accounts"
   ],
   staff: [
     "dashboard", "time-tracking"
+  ],
+  read_only: [
+    "dashboard"
   ],
 };
 
