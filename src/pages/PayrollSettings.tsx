@@ -1,16 +1,25 @@
-import { useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useAuth } from "@/contexts/AuthContext";
+import { companyService } from "@/services/firebase";
+import { firestore } from "@/integrations/firebase/client";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import {
+  collection,
+  doc,
+  getDocs,
+  query,
+  serverTimestamp,
+  where,
+  writeBatch,
+} from "firebase/firestore";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "sonner";
-import { Plus, Save, Trash2, Settings } from "lucide-react";
-import { formatZMW } from "@/utils/zambianTaxCalculations";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Plus, Save, Settings, Trash2 } from "lucide-react";
 
 interface TaxBand {
   id?: string;
@@ -43,162 +52,193 @@ const DEFAULT_RATES: StatutoryRate[] = [
   { rate_type: "wht_nonresident", employee_rate: 0.20, employer_rate: 0, cap_amount: null },
 ];
 
+const toNumber = (value: unknown, fallback = 0): number => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const toNullableNumber = (value: unknown): number | null => {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
 export default function PayrollSettings() {
+  const { user } = useAuth();
   const queryClient = useQueryClient();
   const [taxBands, setTaxBands] = useState<TaxBand[]>([]);
   const [rates, setRates] = useState<StatutoryRate[]>([]);
   const [isInitialized, setIsInitialized] = useState(false);
 
-  // Fetch company ID
-  const { data: companyId } = useQuery({
-    queryKey: ["user-company-id"],
+  const companyQuery = useQuery({
+    queryKey: ["payroll-settings-company-id", user?.id],
     queryFn: async () => {
-      const { data: { user } } = await supabase.auth.getUser();
       if (!user) return null;
-      const { data } = await supabase
-        .from("profiles")
-        .select("company_id")
-        .eq("id", user.id)
-        .single();
-      return data?.company_id;
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      return membership?.companyId ?? null;
     },
+    enabled: Boolean(user),
   });
 
-  // Fetch PAYE tax bands
+  const companyId = companyQuery.data ?? null;
+
   const { data: existingBands, isLoading: bandsLoading } = useQuery({
     queryKey: ["paye-tax-bands", companyId],
     queryFn: async () => {
-      if (!companyId) return [];
-      const { data, error } = await supabase
-        .from("paye_tax_bands")
-        .select("*")
-        .eq("company_id", companyId)
-        .eq("is_active", true)
-        .order("band_order");
-      if (error) throw error;
-      return data || [];
+      if (!companyId) return [] as TaxBand[];
+
+      const ref = collection(firestore, COLLECTIONS.PAYE_TAX_BANDS);
+      const snapshot = await getDocs(query(ref, where("companyId", "==", companyId)));
+
+      return snapshot.docs
+        .map((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          return {
+            id: docSnap.id,
+            band_order: toNumber(row.bandOrder ?? row.band_order, 0),
+            min_amount: toNumber(row.minAmount ?? row.min_amount, 0),
+            max_amount: toNullableNumber(row.maxAmount ?? row.max_amount),
+            rate: toNumber(row.rate, 0),
+            is_active: Boolean(row.isActive ?? row.is_active ?? true),
+          };
+        })
+        .filter((band) => band.is_active)
+        .sort((a, b) => a.band_order - b.band_order)
+        .map(({ is_active: _isActive, ...band }) => band);
     },
-    enabled: !!companyId,
+    enabled: Boolean(companyId),
   });
 
-  // Fetch statutory rates
   const { data: existingRates, isLoading: ratesLoading } = useQuery({
     queryKey: ["statutory-rates", companyId],
     queryFn: async () => {
-      if (!companyId) return [];
-      const { data, error } = await supabase
-        .from("payroll_statutory_rates")
-        .select("*")
-        .eq("company_id", companyId)
-        .eq("is_active", true);
-      if (error) throw error;
-      return data || [];
+      if (!companyId) return [] as StatutoryRate[];
+
+      const ref = collection(firestore, COLLECTIONS.PAYROLL_STATUTORY_RATES);
+      const snapshot = await getDocs(query(ref, where("companyId", "==", companyId)));
+
+      return snapshot.docs
+        .map((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          return {
+            id: docSnap.id,
+            rate_type: String(row.rateType ?? row.rate_type ?? ""),
+            employee_rate: toNumber(row.employeeRate ?? row.employee_rate, 0),
+            employer_rate: toNumber(row.employerRate ?? row.employer_rate, 0),
+            cap_amount: toNullableNumber(row.capAmount ?? row.cap_amount),
+            is_active: Boolean(row.isActive ?? row.is_active ?? true),
+          };
+        })
+        .filter((rate) => rate.is_active)
+        .map(({ is_active: _isActive, ...rate }) => rate);
     },
-    enabled: !!companyId,
+    enabled: Boolean(companyId),
   });
 
-  // Initialize state from database or defaults
-  if (!isInitialized && !bandsLoading && !ratesLoading) {
+  useEffect(() => {
+    if (isInitialized) return;
+    if (bandsLoading || ratesLoading) return;
+
     if (existingBands && existingBands.length > 0) {
-      setTaxBands(existingBands.map(b => ({
-        id: b.id,
-        band_order: b.band_order,
-        min_amount: Number(b.min_amount),
-        max_amount: b.max_amount ? Number(b.max_amount) : null,
-        rate: Number(b.rate),
-      })));
+      setTaxBands(existingBands);
     } else {
       setTaxBands(DEFAULT_TAX_BANDS);
     }
 
     if (existingRates && existingRates.length > 0) {
-      setRates(existingRates.map(r => ({
-        id: r.id,
-        rate_type: r.rate_type,
-        employee_rate: Number(r.employee_rate),
-        employer_rate: Number(r.employer_rate),
-        cap_amount: r.cap_amount ? Number(r.cap_amount) : null,
-      })));
+      setRates(existingRates);
     } else {
       setRates(DEFAULT_RATES);
     }
-    setIsInitialized(true);
-  }
 
-  // Save PAYE bands
+    setIsInitialized(true);
+  }, [isInitialized, bandsLoading, ratesLoading, existingBands, existingRates]);
+
   const saveBandsMutation = useMutation({
     mutationFn: async () => {
-      if (!companyId) throw new Error("No company ID");
-      
-      // Soft delete existing
-      await supabase
-        .from("paye_tax_bands")
-        .update({ is_active: false })
-        .eq("company_id", companyId);
+      if (!companyId) throw new Error("No company context found");
 
-      // Insert new
-      const bandsToInsert = taxBands.map((band, index) => ({
-        company_id: companyId,
-        band_order: index + 1,
-        min_amount: band.min_amount,
-        max_amount: band.max_amount,
-        rate: band.rate,
-        is_active: true,
-      }));
+      const ref = collection(firestore, COLLECTIONS.PAYE_TAX_BANDS);
+      const existingSnapshot = await getDocs(query(ref, where("companyId", "==", companyId)));
 
-      const { error } = await supabase.from("paye_tax_bands").insert(bandsToInsert);
-      if (error) throw error;
+      const batch = writeBatch(firestore);
+      existingSnapshot.docs.forEach((docSnap) => {
+        batch.set(docSnap.ref, { isActive: false, updatedAt: serverTimestamp() }, { merge: true });
+      });
+
+      taxBands.forEach((band, index) => {
+        const nextRef = doc(collection(firestore, COLLECTIONS.PAYE_TAX_BANDS));
+        batch.set(nextRef, {
+          companyId,
+          bandOrder: index + 1,
+          minAmount: Number(band.min_amount),
+          maxAmount: band.max_amount === null ? null : Number(band.max_amount),
+          rate: Number(band.rate),
+          isActive: true,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      });
+
+      await batch.commit();
     },
     onSuccess: () => {
       toast.success("PAYE tax bands saved successfully");
-      queryClient.invalidateQueries({ queryKey: ["paye-tax-bands"] });
+      queryClient.invalidateQueries({ queryKey: ["paye-tax-bands", companyId] });
     },
-    onError: () => {
-      toast.error("Failed to save tax bands");
+    onError: (error: Error) => {
+      toast.error(error.message || "Failed to save tax bands");
     },
   });
 
-  // Save statutory rates
   const saveRatesMutation = useMutation({
     mutationFn: async () => {
-      if (!companyId) throw new Error("No company ID");
-      
-      // Soft delete existing
-      await supabase
-        .from("payroll_statutory_rates")
-        .update({ is_active: false })
-        .eq("company_id", companyId);
+      if (!companyId) throw new Error("No company context found");
 
-      // Insert new
-      const ratesToInsert = rates.map((rate) => ({
-        company_id: companyId,
-        rate_type: rate.rate_type,
-        employee_rate: rate.employee_rate,
-        employer_rate: rate.employer_rate,
-        cap_amount: rate.cap_amount,
-        is_active: true,
-      }));
+      const ref = collection(firestore, COLLECTIONS.PAYROLL_STATUTORY_RATES);
+      const existingSnapshot = await getDocs(query(ref, where("companyId", "==", companyId)));
 
-      const { error } = await supabase.from("payroll_statutory_rates").insert(ratesToInsert);
-      if (error) throw error;
+      const batch = writeBatch(firestore);
+      existingSnapshot.docs.forEach((docSnap) => {
+        batch.set(docSnap.ref, { isActive: false, updatedAt: serverTimestamp() }, { merge: true });
+      });
+
+      rates.forEach((rate) => {
+        const nextRef = doc(collection(firestore, COLLECTIONS.PAYROLL_STATUTORY_RATES));
+        batch.set(nextRef, {
+          companyId,
+          rateType: rate.rate_type,
+          employeeRate: Number(rate.employee_rate),
+          employerRate: Number(rate.employer_rate),
+          capAmount: rate.cap_amount === null ? null : Number(rate.cap_amount),
+          isActive: true,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      });
+
+      await batch.commit();
     },
     onSuccess: () => {
       toast.success("Statutory rates saved successfully");
-      queryClient.invalidateQueries({ queryKey: ["statutory-rates"] });
+      queryClient.invalidateQueries({ queryKey: ["statutory-rates", companyId] });
     },
-    onError: () => {
-      toast.error("Failed to save statutory rates");
+    onError: (error: Error) => {
+      toast.error(error.message || "Failed to save statutory rates");
     },
   });
 
   const addTaxBand = () => {
     const lastBand = taxBands[taxBands.length - 1];
-    setTaxBands([...taxBands, {
-      band_order: taxBands.length + 1,
-      min_amount: lastBand?.max_amount || 0,
-      max_amount: null,
-      rate: 0,
-    }]);
+    setTaxBands([
+      ...taxBands,
+      {
+        band_order: taxBands.length + 1,
+        min_amount: lastBand?.max_amount || 0,
+        max_amount: null,
+        rate: 0,
+      },
+    ]);
   };
 
   const removeTaxBand = (index: number) => {
@@ -219,14 +259,22 @@ export default function PayrollSettings() {
 
   const getRateLabel = (type: string) => {
     switch (type) {
-      case "napsa": return "NAPSA";
-      case "nhima": return "NHIMA";
-      case "pension": return "Pension";
-      case "wht_local": return "WHT (Local Consultant)";
-      case "wht_nonresident": return "WHT (Non-Resident)";
-      default: return type;
+      case "napsa":
+        return "NAPSA";
+      case "nhima":
+        return "NHIMA";
+      case "pension":
+        return "Pension";
+      case "wht_local":
+        return "WHT (Local Consultant)";
+      case "wht_nonresident":
+        return "WHT (Non-Resident)";
+      default:
+        return type;
     }
   };
+
+  const isLoading = companyQuery.isLoading || bandsLoading || ratesLoading;
 
   return (
     <div className="space-y-6">
@@ -249,7 +297,7 @@ export default function PayrollSettings() {
             <CardHeader>
               <CardTitle>PAYE Tax Bands (Monthly)</CardTitle>
               <CardDescription>
-                Configure the progressive tax bands for Pay As You Earn calculations
+                Configure the progressive tax bands for Pay As You Earn calculations.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -272,7 +320,7 @@ export default function PayrollSettings() {
                           type="number"
                           step="0.01"
                           value={band.min_amount}
-                          onChange={(e) => updateBand(index, "min_amount", Number(e.target.value))}
+                          onChange={(event) => updateBand(index, "min_amount", Number(event.target.value))}
                           className="w-32"
                         />
                       </TableCell>
@@ -281,8 +329,10 @@ export default function PayrollSettings() {
                           type="number"
                           step="0.01"
                           value={band.max_amount ?? ""}
-                          onChange={(e) => updateBand(index, "max_amount", e.target.value ? Number(e.target.value) : null)}
-                          placeholder="∞"
+                          onChange={(event) =>
+                            updateBand(index, "max_amount", event.target.value ? Number(event.target.value) : null)
+                          }
+                          placeholder="inf"
                           className="w-32"
                         />
                       </TableCell>
@@ -291,7 +341,7 @@ export default function PayrollSettings() {
                           type="number"
                           step="0.01"
                           value={band.rate * 100}
-                          onChange={(e) => updateBand(index, "rate", Number(e.target.value) / 100)}
+                          onChange={(event) => updateBand(index, "rate", Number(event.target.value) / 100)}
                           className="w-24"
                         />
                       </TableCell>
@@ -311,11 +361,14 @@ export default function PayrollSettings() {
               </Table>
 
               <div className="flex justify-between">
-                <Button variant="outline" onClick={addTaxBand}>
+                <Button variant="outline" onClick={addTaxBand} disabled={!companyId || isLoading}>
                   <Plus className="h-4 w-4 mr-2" />
                   Add Band
                 </Button>
-                <Button onClick={() => saveBandsMutation.mutate()} disabled={saveBandsMutation.isPending}>
+                <Button
+                  onClick={() => saveBandsMutation.mutate()}
+                  disabled={saveBandsMutation.isPending || !companyId || isLoading}
+                >
                   <Save className="h-4 w-4 mr-2" />
                   {saveBandsMutation.isPending ? "Saving..." : "Save Tax Bands"}
                 </Button>
@@ -329,7 +382,7 @@ export default function PayrollSettings() {
             <CardHeader>
               <CardTitle>Statutory Contribution Rates</CardTitle>
               <CardDescription>
-                Configure NAPSA, NHIMA, Pension, and WHT rates
+                Configure NAPSA, NHIMA, Pension, and WHT rates.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -351,7 +404,7 @@ export default function PayrollSettings() {
                           type="number"
                           step="0.01"
                           value={rate.employee_rate * 100}
-                          onChange={(e) => updateRate(index, "employee_rate", Number(e.target.value) / 100)}
+                          onChange={(event) => updateRate(index, "employee_rate", Number(event.target.value) / 100)}
                           className="w-24"
                         />
                       </TableCell>
@@ -360,7 +413,7 @@ export default function PayrollSettings() {
                           type="number"
                           step="0.01"
                           value={rate.employer_rate * 100}
-                          onChange={(e) => updateRate(index, "employer_rate", Number(e.target.value) / 100)}
+                          onChange={(event) => updateRate(index, "employer_rate", Number(event.target.value) / 100)}
                           className="w-24"
                           disabled={rate.rate_type.startsWith("wht")}
                         />
@@ -370,7 +423,9 @@ export default function PayrollSettings() {
                           type="number"
                           step="0.01"
                           value={rate.cap_amount ?? ""}
-                          onChange={(e) => updateRate(index, "cap_amount", e.target.value ? Number(e.target.value) : null)}
+                          onChange={(event) =>
+                            updateRate(index, "cap_amount", event.target.value ? Number(event.target.value) : null)
+                          }
                           placeholder="No cap"
                           className="w-32"
                         />
@@ -381,7 +436,10 @@ export default function PayrollSettings() {
               </Table>
 
               <div className="flex justify-end">
-                <Button onClick={() => saveRatesMutation.mutate()} disabled={saveRatesMutation.isPending}>
+                <Button
+                  onClick={() => saveRatesMutation.mutate()}
+                  disabled={saveRatesMutation.isPending || !companyId || isLoading}
+                >
                   <Save className="h-4 w-4 mr-2" />
                   {saveRatesMutation.isPending ? "Saving..." : "Save Rates"}
                 </Button>

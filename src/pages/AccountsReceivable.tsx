@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -14,13 +13,51 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Download, Upload, FileText, AlertCircle, Clock, CheckCircle, TrendingUp } from "lucide-react";
+import { Download, Upload, FileText, AlertCircle, CheckCircle, TrendingUp } from "lucide-react";
 import { format, differenceInDays, isPast } from "date-fns";
 import { exportToCSV } from "@/utils/exportToExcel";
 import { ImportDialog } from "@/components/shared/ImportDialog";
 import { toast } from "sonner";
+import { useAuth } from "@/contexts/AuthContext";
+import { companyService } from "@/services/firebase";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { addDoc, collection, documentId, getDocs, query, serverTimestamp, where } from "firebase/firestore";
+import { firestore } from "@/integrations/firebase/client";
+
+interface InvoiceRecord {
+  id: string;
+  invoice_number: string;
+  invoice_date: string;
+  due_date: string | null;
+  total: number;
+  status: string;
+  customer_id: string | null;
+  customers: { name: string } | null;
+}
+
+const chunk = <T,>(items: T[], size: number): T[][] => {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+};
+
+const toDateString = (value: unknown): string => {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  if (typeof value === "object" && value !== null && "toDate" in value) {
+    const ts = value as { toDate?: () => Date };
+    if (typeof ts.toDate === "function") {
+      return ts.toDate().toISOString().slice(0, 10);
+    }
+  }
+  return "";
+};
 
 export default function AccountsReceivable() {
+  const { user } = useAuth();
   const [startDate, setStartDate] = useState(() => {
     const date = new Date();
     date.setMonth(date.getMonth() - 3);
@@ -29,30 +66,68 @@ export default function AccountsReceivable() {
   const [endDate, setEndDate] = useState(new Date().toISOString().split("T")[0]);
   const [showImportDialog, setShowImportDialog] = useState(false);
 
-  const { data: user } = useQuery({
-    queryKey: ["current-user"],
-    queryFn: async () => {
-      const { data } = await supabase.auth.getUser();
-      return data.user;
-    },
-  });
-
   const { data: invoices = [], isLoading, refetch } = useQuery({
-    queryKey: ["accounts-receivable", startDate, endDate],
+    queryKey: ["accounts-receivable", startDate, endDate, user?.id],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("invoices")
-        .select(`
-          *,
-          customers (name)
-        `)
-        .gte("invoice_date", startDate)
-        .lte("invoice_date", endDate)
-        .order("due_date", { ascending: true });
-      if (error) throw error;
-      return data;
+      if (!user) return [] as InvoiceRecord[];
+
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      if (!membership?.companyId) return [] as InvoiceRecord[];
+
+      const invoicesRef = collection(firestore, COLLECTIONS.INVOICES);
+      const invoiceSnapshot = await getDocs(
+        query(invoicesRef, where("companyId", "==", membership.companyId)),
+      );
+
+      const mappedInvoices = invoiceSnapshot.docs
+        .map((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          return {
+            id: docSnap.id,
+            invoice_number: String(row.invoiceNumber ?? row.invoice_number ?? ""),
+            invoice_date: toDateString(row.invoiceDate ?? row.invoice_date),
+            due_date: toDateString(row.dueDate ?? row.due_date) || null,
+            total: Number(row.total ?? 0),
+            status: String(row.status ?? "draft"),
+            customer_id: (row.customerId ?? row.customer_id ?? null) as string | null,
+            customers: null,
+          } satisfies InvoiceRecord;
+        })
+        .filter(
+          (invoice) =>
+            invoice.invoice_date >= startDate && invoice.invoice_date <= endDate,
+        );
+
+      const customerIds = Array.from(
+        new Set(mappedInvoices.map((invoice) => invoice.customer_id).filter(Boolean)),
+      ) as string[];
+
+      const customerNameById = new Map<string, string>();
+      if (customerIds.length > 0) {
+        const customersRef = collection(firestore, COLLECTIONS.CUSTOMERS);
+        const customerChunks = chunk(customerIds, 30);
+        const snapshots = await Promise.all(
+          customerChunks.map((ids) => getDocs(query(customersRef, where(documentId(), "in", ids)))),
+        );
+
+        snapshots.forEach((snapshot) => {
+          snapshot.docs.forEach((docSnap) => {
+            const row = docSnap.data() as Record<string, unknown>;
+            customerNameById.set(docSnap.id, String(row.name ?? "-"));
+          });
+        });
+      }
+
+      return mappedInvoices
+        .map((invoice) => ({
+          ...invoice,
+          customers: invoice.customer_id
+            ? { name: customerNameById.get(invoice.customer_id) || "-" }
+            : null,
+        }))
+        .sort((a, b) => String(a.due_date || "").localeCompare(String(b.due_date || "")));
     },
-    enabled: !!user,
+    enabled: Boolean(user),
   });
 
   const formatCurrency = (amount: number) => {
@@ -62,19 +137,18 @@ export default function AccountsReceivable() {
     }).format(amount);
   };
 
-  // Categorize invoices
-  const unpaidInvoices = invoices.filter((i: any) => i.status !== "paid");
-  const overdueInvoices = unpaidInvoices.filter((i: any) => i.due_date && isPast(new Date(i.due_date)));
-  const dueSoon = unpaidInvoices.filter((i: any) => {
+  const unpaidInvoices = invoices.filter((i) => i.status !== "paid");
+  const overdueInvoices = unpaidInvoices.filter((i) => i.due_date && isPast(new Date(i.due_date)));
+  const dueSoon = unpaidInvoices.filter((i) => {
     if (!i.due_date) return false;
     const days = differenceInDays(new Date(i.due_date), new Date());
     return days >= 0 && days <= 7;
   });
-  const paidInvoices = invoices.filter((i: any) => i.status === "paid");
+  const paidInvoices = invoices.filter((i) => i.status === "paid");
 
-  const totalReceivable = unpaidInvoices.reduce((sum: number, i: any) => sum + (i.total || 0), 0);
-  const totalOverdue = overdueInvoices.reduce((sum: number, i: any) => sum + (i.total || 0), 0);
-  const totalCollected = paidInvoices.reduce((sum: number, i: any) => sum + (i.total || 0), 0);
+  const totalReceivable = unpaidInvoices.reduce((sum, i) => sum + (i.total || 0), 0);
+  const totalOverdue = overdueInvoices.reduce((sum, i) => sum + (i.total || 0), 0);
+  const totalCollected = paidInvoices.reduce((sum, i) => sum + (i.total || 0), 0);
 
   const exportReport = () => {
     const columns = [
@@ -82,9 +156,9 @@ export default function AccountsReceivable() {
       { header: "Invoice Date", key: "invoice_date" },
       { header: "Due Date", key: "due_date" },
       { header: "Amount", key: "total" },
-      { header: "Status", key: "status" }
+      { header: "Status", key: "status" },
     ];
-    exportToCSV(invoices as any, columns, `accounts-receivable-${startDate}-to-${endDate}`);
+    exportToCSV(invoices as Record<string, unknown>[], columns, `accounts-receivable-${startDate}-to-${endDate}`);
   };
 
   const importColumns = [
@@ -93,23 +167,31 @@ export default function AccountsReceivable() {
     { key: "invoice_date", header: "Invoice Date (YYYY-MM-DD)", required: true },
     { key: "due_date", header: "Due Date (YYYY-MM-DD)", required: false },
     { key: "amount", header: "Amount", required: true },
-    { key: "notes", header: "Notes", required: false }
+    { key: "notes", header: "Notes", required: false },
   ];
 
-  const handleImport = async (data: any[]) => {
+  const handleImport = async (data: Record<string, unknown>[]) => {
+    if (!user) throw new Error("You must be logged in");
+
+    const membership = await companyService.getPrimaryMembershipByUser(user.id);
+    if (!membership?.companyId) throw new Error("No company profile found for your account");
+
     for (const row of data) {
-      const { error } = await supabase.from("invoices").insert({
-        invoice_number: row.invoice_number,
-        invoice_date: row.invoice_date,
-        due_date: row.due_date || null,
-        subtotal: parseFloat(row.amount) || 0,
-        total: parseFloat(row.amount) || 0,
-        notes: row.notes || null,
+      await addDoc(collection(firestore, COLLECTIONS.INVOICES), {
+        companyId: membership.companyId,
+        userId: user.id,
+        invoiceNumber: String(row.invoice_number || ""),
+        invoiceDate: String(row.invoice_date || ""),
+        dueDate: (row.due_date as string) || null,
+        subtotal: Number(row.amount) || 0,
+        total: Number(row.amount) || 0,
+        notes: (row.notes as string) || null,
         status: "sent",
-        user_id: user?.id,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
       });
-      if (error) throw error;
     }
+
     refetch();
     toast.success("Invoices imported successfully");
   };
@@ -145,19 +227,11 @@ export default function AccountsReceivable() {
           <div className="flex gap-4 items-end">
             <div className="space-y-2">
               <Label>Start Date</Label>
-              <Input
-                type="date"
-                value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
-              />
+              <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
             </div>
             <div className="space-y-2">
               <Label>End Date</Label>
-              <Input
-                type="date"
-                value={endDate}
-                onChange={(e) => setEndDate(e.target.value)}
-              />
+              <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
             </div>
           </div>
         </CardContent>
@@ -213,7 +287,6 @@ export default function AccountsReceivable() {
         </Card>
       </div>
 
-      {/* Aging Summary */}
       <Card>
         <CardHeader>
           <CardTitle>Aging Summary</CardTitle>
@@ -231,13 +304,13 @@ export default function AccountsReceivable() {
               <TableRow>
                 <TableCell>Current (not due)</TableCell>
                 <TableCell className="text-right">
-                  {unpaidInvoices.filter((i: any) => !i.due_date || differenceInDays(new Date(i.due_date), new Date()) > 7).length}
+                  {unpaidInvoices.filter((i) => !i.due_date || differenceInDays(new Date(i.due_date), new Date()) > 7).length}
                 </TableCell>
                 <TableCell className="text-right">
                   {formatCurrency(
                     unpaidInvoices
-                      .filter((i: any) => !i.due_date || differenceInDays(new Date(i.due_date), new Date()) > 7)
-                      .reduce((sum: number, i: any) => sum + (i.total || 0), 0)
+                      .filter((i) => !i.due_date || differenceInDays(new Date(i.due_date), new Date()) > 7)
+                      .reduce((sum, i) => sum + (i.total || 0), 0),
                   )}
                 </TableCell>
               </TableRow>
@@ -245,32 +318,32 @@ export default function AccountsReceivable() {
                 <TableCell>Due within 7 days</TableCell>
                 <TableCell className="text-right">{dueSoon.length}</TableCell>
                 <TableCell className="text-right text-warning">
-                  {formatCurrency(dueSoon.reduce((sum: number, i: any) => sum + (i.total || 0), 0))}
+                  {formatCurrency(dueSoon.reduce((sum, i) => sum + (i.total || 0), 0))}
                 </TableCell>
               </TableRow>
               <TableRow>
                 <TableCell>1-30 days overdue</TableCell>
                 <TableCell className="text-right">
-                  {overdueInvoices.filter((i: any) => differenceInDays(new Date(), new Date(i.due_date)) <= 30).length}
+                  {overdueInvoices.filter((i) => differenceInDays(new Date(), new Date(i.due_date || "")) <= 30).length}
                 </TableCell>
                 <TableCell className="text-right text-destructive">
                   {formatCurrency(
                     overdueInvoices
-                      .filter((i: any) => differenceInDays(new Date(), new Date(i.due_date)) <= 30)
-                      .reduce((sum: number, i: any) => sum + (i.total || 0), 0)
+                      .filter((i) => differenceInDays(new Date(), new Date(i.due_date || "")) <= 30)
+                      .reduce((sum, i) => sum + (i.total || 0), 0),
                   )}
                 </TableCell>
               </TableRow>
               <TableRow>
                 <TableCell>Over 30 days overdue</TableCell>
                 <TableCell className="text-right">
-                  {overdueInvoices.filter((i: any) => differenceInDays(new Date(), new Date(i.due_date)) > 30).length}
+                  {overdueInvoices.filter((i) => differenceInDays(new Date(), new Date(i.due_date || "")) > 30).length}
                 </TableCell>
                 <TableCell className="text-right text-destructive font-bold">
                   {formatCurrency(
                     overdueInvoices
-                      .filter((i: any) => differenceInDays(new Date(), new Date(i.due_date)) > 30)
-                      .reduce((sum: number, i: any) => sum + (i.total || 0), 0)
+                      .filter((i) => differenceInDays(new Date(), new Date(i.due_date || "")) > 30)
+                      .reduce((sum, i) => sum + (i.total || 0), 0),
                   )}
                 </TableCell>
               </TableRow>
@@ -279,7 +352,6 @@ export default function AccountsReceivable() {
         </CardContent>
       </Card>
 
-      {/* Detail Table */}
       <Card>
         <CardHeader>
           <CardTitle>All Invoices</CardTitle>
@@ -298,10 +370,12 @@ export default function AccountsReceivable() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {invoices.map((invoice: any) => {
-                const daysOverdue = invoice.due_date && invoice.status !== "paid"
-                  ? Math.max(0, differenceInDays(new Date(), new Date(invoice.due_date)))
-                  : 0;
+              {invoices.map((invoice) => {
+                const daysOverdue =
+                  invoice.due_date && invoice.status !== "paid"
+                    ? Math.max(0, differenceInDays(new Date(), new Date(invoice.due_date)))
+                    : 0;
+
                 return (
                   <TableRow key={invoice.id}>
                     <TableCell className="font-medium">{invoice.invoice_number}</TableCell>
@@ -317,17 +391,15 @@ export default function AccountsReceivable() {
                           invoice.status === "paid"
                             ? "default"
                             : daysOverdue > 0
-                            ? "destructive"
-                            : "secondary"
+                              ? "destructive"
+                              : "secondary"
                         }
                       >
                         {invoice.status}
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      {daysOverdue > 0 && (
-                        <span className="text-destructive font-medium">{daysOverdue} days</span>
-                      )}
+                      {invoice.status === "paid" ? "-" : daysOverdue > 0 ? `${daysOverdue} days` : "Current"}
                     </TableCell>
                   </TableRow>
                 );

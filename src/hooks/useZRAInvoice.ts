@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { callFunction } from "@/services/firebase/functionsService";
 
 interface ZRASubmitResponse {
   success: boolean;
@@ -11,38 +11,39 @@ interface ZRASubmitResponse {
   message?: string;
 }
 
+interface ZRAStatusResponse {
+  success: boolean;
+  status?: string;
+  zra_invoice_number?: string;
+  verification_url?: string;
+  message?: string;
+}
+
 export function useZRAInvoice(invoiceId?: string) {
   const queryClient = useQueryClient();
 
-  // Get ZRA status for an invoice
   const { data: zraStatus, isLoading: isLoadingStatus } = useQuery({
     queryKey: ["zra-status", invoiceId],
-    queryFn: async () => {
+    queryFn: async (): Promise<ZRAStatusResponse | null> => {
       if (!invoiceId) return null;
-
-      const { data, error } = await supabase.functions.invoke("zra-smart-invoice", {
-        body: { action: "check_status", invoice_id: invoiceId },
+      return callFunction<{ action: string; invoiceId: string }, ZRAStatusResponse>("zraSmartInvoice", {
+        action: "check_status",
+        invoiceId,
       });
-
-      if (error) throw error;
-      return data;
     },
     enabled: !!invoiceId,
   });
 
-  // Submit invoice to ZRA
   const submitToZRA = useMutation({
     mutationFn: async (invoice_id: string): Promise<ZRASubmitResponse> => {
-      const { data, error } = await supabase.functions.invoke("zra-smart-invoice", {
-        body: { action: "submit_invoice", invoice_id },
+      return callFunction<{ action: string; invoiceId: string }, ZRASubmitResponse>("zraSmartInvoice", {
+        action: "submit_invoice",
+        invoiceId: invoice_id,
       });
-
-      if (error) throw error;
-      return data as ZRASubmitResponse;
     },
     onSuccess: (data) => {
       if (data.success) {
-        toast.success(`Invoice submitted to ZRA: ${data.zra_invoice_number}`);
+        toast.success(`Invoice submitted to ZRA: ${data.zra_invoice_number ?? "Submitted"}`);
         queryClient.invalidateQueries({ queryKey: ["invoices"] });
         queryClient.invalidateQueries({ queryKey: ["zra-status"] });
       } else {
@@ -54,18 +55,14 @@ export function useZRAInvoice(invoiceId?: string) {
     },
   });
 
-  // Retry pending invoices
   const retryPending = useMutation({
     mutationFn: async () => {
-      const { data, error } = await supabase.functions.invoke("zra-smart-invoice", {
-        body: { action: "retry_pending" },
+      return callFunction<{ action: string }, { processed: number; success: boolean }>("zraSmartInvoice", {
+        action: "retry_pending",
       });
-
-      if (error) throw error;
-      return data;
     },
     onSuccess: (data) => {
-      toast.success(`Processed ${data.processed} pending invoices`);
+      toast.success(`Processed ${data.processed ?? 0} pending invoices`);
       queryClient.invalidateQueries({ queryKey: ["invoices"] });
       queryClient.invalidateQueries({ queryKey: ["zra-status"] });
     },

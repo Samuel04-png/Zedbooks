@@ -1,6 +1,5 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
@@ -12,6 +11,22 @@ import { toast } from "sonner";
 import { Plus, Trash2, AlertCircle, Save } from "lucide-react";
 import { formatZMW } from "@/utils/zambianTaxCalculations";
 import { Badge } from "@/components/ui/badge";
+import { useAuth } from "@/contexts/AuthContext";
+import { companyService } from "@/services/firebase";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import {
+  addDoc,
+  collection,
+  doc,
+  getDocs,
+  limit,
+  query,
+  serverTimestamp,
+  setDoc,
+  updateDoc,
+  where,
+} from "firebase/firestore";
+import { firestore } from "@/integrations/firebase/client";
 
 interface EmployeePayrollSetupProps {
   employeeId: string;
@@ -48,6 +63,7 @@ export function EmployeePayrollSetup({
   onClose,
 }: EmployeePayrollSetupProps) {
   const queryClient = useQueryClient();
+  const { user } = useAuth();
   const isConsultant = contractType === "consultant";
 
   const [profile, setProfile] = useState({
@@ -74,46 +90,71 @@ export function EmployeePayrollSetup({
 
   // Fetch existing profile
   const { data: existingProfile } = useQuery({
-    queryKey: ["employee-payroll-profile", employeeId],
+    queryKey: ["employee-payroll-profile", employeeId, user?.id],
+    enabled: Boolean(user),
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("employee_payroll_profiles")
-        .select("*")
-        .eq("employee_id", employeeId)
-        .maybeSingle();
-      if (error) throw error;
-      return data;
+      if (!user) return null;
+
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      if (!membership?.companyId) return null;
+
+      const profileQuery = query(
+        collection(firestore, COLLECTIONS.EMPLOYEE_PAYROLL_PROFILES),
+        where("companyId", "==", membership.companyId),
+        where("employeeId", "==", employeeId),
+        limit(1),
+      );
+
+      const snapshot = await getDocs(profileQuery);
+      if (snapshot.empty) return null;
+
+      const row = snapshot.docs[0];
+      return {
+        id: row.id,
+        ...row.data(),
+      } as Record<string, unknown>;
     },
   });
 
   // Fetch existing allowances
   const { data: existingAllowances } = useQuery({
-    queryKey: ["employee-allowances", employeeId],
+    queryKey: ["employee-allowances", employeeId, user?.id],
+    enabled: Boolean(user),
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("employee_allowances")
-        .select("*")
-        .eq("employee_id", employeeId)
-        .eq("is_active", true);
-      if (error) throw error;
-      return data || [];
+      if (!user) return [];
+
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      if (!membership?.companyId) return [];
+
+      const allowanceQuery = query(
+        collection(firestore, COLLECTIONS.EMPLOYEE_ALLOWANCES),
+        where("companyId", "==", membership.companyId),
+        where("employeeId", "==", employeeId),
+        where("isActive", "==", true),
+      );
+
+      const snapshot = await getDocs(allowanceQuery);
+      return snapshot.docs.map((docSnap) => ({
+        id: docSnap.id,
+        ...docSnap.data(),
+      }));
     },
   });
 
   useEffect(() => {
     if (existingProfile) {
       setProfile({
-        apply_paye: existingProfile.apply_paye ?? !isConsultant,
-        apply_napsa: existingProfile.apply_napsa ?? !isConsultant,
-        apply_nhima: existingProfile.apply_nhima ?? !isConsultant,
-        pension_enabled: existingProfile.pension_enabled ?? false,
-        pension_employee_rate: existingProfile.pension_employee_rate ?? 5,
-        pension_employer_rate: existingProfile.pension_employer_rate ?? 5,
-        is_consultant: existingProfile.is_consultant ?? isConsultant,
-        consultant_type: (existingProfile.consultant_type as "local" | "non_resident") ?? "local",
-        apply_wht: existingProfile.apply_wht ?? isConsultant,
-        rate_type: existingProfile.rate_type ?? "monthly",
-        currency: existingProfile.currency ?? "ZMW",
+        apply_paye: (existingProfile.applyPaye ?? existingProfile.apply_paye ?? !isConsultant) as boolean,
+        apply_napsa: (existingProfile.applyNapsa ?? existingProfile.apply_napsa ?? !isConsultant) as boolean,
+        apply_nhima: (existingProfile.applyNhima ?? existingProfile.apply_nhima ?? !isConsultant) as boolean,
+        pension_enabled: (existingProfile.pensionEnabled ?? existingProfile.pension_enabled ?? false) as boolean,
+        pension_employee_rate: Number(existingProfile.pensionEmployeeRate ?? existingProfile.pension_employee_rate ?? 5),
+        pension_employer_rate: Number(existingProfile.pensionEmployerRate ?? existingProfile.pension_employer_rate ?? 5),
+        is_consultant: (existingProfile.isConsultant ?? existingProfile.is_consultant ?? isConsultant) as boolean,
+        consultant_type: ((existingProfile.consultantType ?? existingProfile.consultant_type ?? "local") as "local" | "non_resident"),
+        apply_wht: (existingProfile.applyWht ?? existingProfile.apply_wht ?? isConsultant) as boolean,
+        rate_type: (existingProfile.rateType ?? existingProfile.rate_type ?? "monthly") as string,
+        currency: (existingProfile.currency ?? "ZMW") as string,
       });
     }
   }, [existingProfile, isConsultant]);
@@ -122,74 +163,98 @@ export function EmployeePayrollSetup({
     if (existingAllowances) {
       setAllowances(existingAllowances.map(a => ({
         id: a.id,
-        allowance_type: a.allowance_type,
-        allowance_name: a.allowance_name,
-        amount: Number(a.amount),
-        is_taxable: a.is_taxable,
+        allowance_type: (a.allowanceType ?? a.allowance_type ?? "custom") as string,
+        allowance_name: (a.allowanceName ?? a.allowance_name ?? "Allowance") as string,
+        amount: Number(a.amount ?? 0),
+        is_taxable: (a.isTaxable ?? a.is_taxable ?? true) as boolean,
       })));
     }
   }, [existingAllowances]);
 
   const saveMutation = useMutation({
     mutationFn: async () => {
-      const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Not authenticated");
 
-      const { data: userProfile } = await supabase
-        .from("profiles")
-        .select("company_id")
-        .eq("id", user.id)
-        .single();
-
-      // Upsert payroll profile
-      const { error: profileError } = await supabase
-        .from("employee_payroll_profiles")
-        .upsert({
-          employee_id: employeeId,
-          company_id: userProfile?.company_id,
-          ...profile,
-        }, { onConflict: "employee_id" });
-
-      if (profileError) throw profileError;
-
-      // Handle allowances
-      // First, soft-delete removed allowances
-      if (existingAllowances) {
-        const existingIds = existingAllowances.map(a => a.id);
-        const currentIds = allowances.filter(a => a.id).map(a => a.id);
-        const removedIds = existingIds.filter(id => !currentIds.includes(id));
-        
-        if (removedIds.length > 0) {
-          await supabase
-            .from("employee_allowances")
-            .update({ is_active: false })
-            .in("id", removedIds);
-        }
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      if (!membership?.companyId) {
+        throw new Error("No company associated with user");
       }
 
-      // Upsert allowances
+      const profileDocId =
+        (existingProfile && typeof (existingProfile as Record<string, unknown>).id === "string"
+          ? String((existingProfile as Record<string, unknown>).id)
+          : employeeId);
+
+      const profilePayload = {
+        employeeId,
+        companyId: membership.companyId,
+        applyPaye: profile.apply_paye,
+        applyNapsa: profile.apply_napsa,
+        applyNhima: profile.apply_nhima,
+        pensionEnabled: profile.pension_enabled,
+        pensionEmployeeRate: profile.pension_employee_rate,
+        pensionEmployerRate: profile.pension_employer_rate,
+        isConsultant: profile.is_consultant,
+        consultantType: profile.consultant_type,
+        applyWht: profile.apply_wht,
+        rateType: profile.rate_type,
+        currency: profile.currency,
+        updatedAt: serverTimestamp(),
+      };
+
+      await setDoc(
+        doc(firestore, COLLECTIONS.EMPLOYEE_PAYROLL_PROFILES, profileDocId),
+        existingProfile
+          ? profilePayload
+          : {
+              ...profilePayload,
+              createdAt: serverTimestamp(),
+            },
+        { merge: true },
+      );
+
+      if (existingAllowances) {
+        const existingIds = existingAllowances
+          .map((allowance) => String((allowance as Record<string, unknown>).id))
+          .filter((id) => Boolean(id));
+        const currentIds = allowances
+          .filter((allowance) => allowance.id)
+          .map((allowance) => String(allowance.id));
+        const removedIds = existingIds.filter((id) => !currentIds.includes(id));
+
+        await Promise.all(
+          removedIds.map((id) =>
+            updateDoc(doc(firestore, COLLECTIONS.EMPLOYEE_ALLOWANCES, id), {
+              isActive: false,
+              updatedAt: serverTimestamp(),
+            }),
+          ),
+        );
+      }
+
       for (const allowance of allowances) {
+        const payload = {
+          employeeId,
+          companyId: membership.companyId,
+          allowanceType: allowance.allowance_type,
+          allowanceName: allowance.allowance_name,
+          amount: allowance.amount,
+          isTaxable: allowance.is_taxable,
+          isActive: true,
+          updatedAt: serverTimestamp(),
+        };
+
         if (allowance.id) {
-          await supabase
-            .from("employee_allowances")
-            .update({
-              allowance_type: allowance.allowance_type,
-              allowance_name: allowance.allowance_name,
-              amount: allowance.amount,
-              is_taxable: allowance.is_taxable,
-            })
-            .eq("id", allowance.id);
+          await setDoc(
+            doc(firestore, COLLECTIONS.EMPLOYEE_ALLOWANCES, String(allowance.id)),
+            payload,
+            { merge: true },
+          );
         } else {
-          await supabase
-            .from("employee_allowances")
-            .insert({
-              employee_id: employeeId,
-              company_id: userProfile?.company_id,
-              allowance_type: allowance.allowance_type,
-              allowance_name: allowance.allowance_name,
-              amount: allowance.amount,
-              is_taxable: allowance.is_taxable,
-            });
+          await addDoc(collection(firestore, COLLECTIONS.EMPLOYEE_ALLOWANCES), {
+            ...payload,
+            createdAt: serverTimestamp(),
+          });
         }
       }
     },
@@ -200,8 +265,9 @@ export function EmployeePayrollSetup({
       onClose?.();
     },
     onError: (error) => {
-      toast.error("Failed to save payroll setup");
-      console.error(error);
+      toast.error(
+        error instanceof Error ? error.message : "Failed to save payroll setup",
+      );
     },
   });
 

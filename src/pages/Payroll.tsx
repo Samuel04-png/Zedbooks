@@ -1,5 +1,4 @@
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Plus } from "lucide-react";
 import { useNavigate } from "react-router-dom";
@@ -13,21 +12,77 @@ import {
 } from "@/components/ui/table";
 import { formatZMW } from "@/utils/zambianTaxCalculations";
 import { format } from "date-fns";
+import { useAuth } from "@/contexts/AuthContext";
+import { companyService } from "@/services/firebase";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { collection, getDocs, orderBy, query, where } from "firebase/firestore";
+import { firestore } from "@/integrations/firebase/client";
+
+interface PayrollRun {
+  id: string;
+  runDate: string;
+  periodStart: string;
+  periodEnd: string;
+  totalGross: number;
+  totalDeductions: number;
+  totalNet: number;
+  status: string;
+}
+
+const mapStatusLabel = (status: string): string => {
+  if (status === "pending_approval") return "Pending Approval";
+  if (status === "final") return "Final";
+  return status;
+};
+
+const statusClassName = (status: string): string => {
+  if (["completed", "approved", "final"].includes(status)) {
+    return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200";
+  }
+
+  if (status === "pending_approval") {
+    return "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200";
+  }
+
+  return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200";
+};
 
 export default function Payroll() {
   const navigate = useNavigate();
+  const { user } = useAuth();
 
   const { data: payrollRuns, isLoading } = useQuery({
-    queryKey: ["payrollRuns"],
+    queryKey: ["payrollRuns", user?.id],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("payroll_runs")
-        .select("*")
-        .order("run_date", { ascending: false });
+      if (!user) return [] as PayrollRun[];
 
-      if (error) throw error;
-      return data;
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      if (!membership?.companyId) return [] as PayrollRun[];
+
+      const payrollRunsRef = collection(firestore, COLLECTIONS.PAYROLL_RUNS);
+      const snapshot = await getDocs(
+        query(
+          payrollRunsRef,
+          where("companyId", "==", membership.companyId),
+          orderBy("runDate", "desc"),
+        ),
+      );
+
+      return snapshot.docs.map((docSnap) => {
+        const row = docSnap.data() as Record<string, unknown>;
+        return {
+          id: docSnap.id,
+          runDate: String(row.runDate ?? row.run_date ?? ""),
+          periodStart: String(row.periodStart ?? row.period_start ?? ""),
+          periodEnd: String(row.periodEnd ?? row.period_end ?? ""),
+          totalGross: Number(row.totalGross ?? row.total_gross ?? 0),
+          totalDeductions: Number(row.totalDeductions ?? row.total_deductions ?? 0),
+          totalNet: Number(row.totalNet ?? row.total_net ?? 0),
+          status: String(row.status ?? row.payrollStatus ?? row.payroll_status ?? "draft"),
+        } satisfies PayrollRun;
+      });
     },
+    enabled: Boolean(user),
   });
 
   return (
@@ -63,28 +118,24 @@ export default function Payroll() {
               {payrollRuns?.map((run) => (
                 <TableRow key={run.id}>
                   <TableCell className="font-medium">
-                    {format(new Date(run.run_date), "dd MMM yyyy")}
+                    {run.runDate ? format(new Date(run.runDate), "dd MMM yyyy") : "-"}
                   </TableCell>
                   <TableCell>
-                    {format(new Date(run.period_start), "dd MMM")} -{" "}
-                    {format(new Date(run.period_end), "dd MMM yyyy")}
+                    {run.periodStart ? format(new Date(run.periodStart), "dd MMM") : "-"} -{" "}
+                    {run.periodEnd ? format(new Date(run.periodEnd), "dd MMM yyyy") : "-"}
                   </TableCell>
-                  <TableCell>{formatZMW(Number(run.total_gross))}</TableCell>
-                  <TableCell>{formatZMW(Number(run.total_deductions))}</TableCell>
-                  <TableCell>{formatZMW(Number(run.total_net))}</TableCell>
+                  <TableCell>{formatZMW(run.totalGross)}</TableCell>
+                  <TableCell>{formatZMW(run.totalDeductions)}</TableCell>
+                  <TableCell>{formatZMW(run.totalNet)}</TableCell>
                   <TableCell>
-                    <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
-                      run.status === 'completed' || run.status === 'approved'
-                        ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' 
-                        : run.status === 'pending_approval'
-                        ? 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200'
-                        : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200'
-                    }`}>
-                      {run.status === 'pending_approval' ? 'Pending Approval' : run.status}
+                    <span
+                      className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${statusClassName(run.status)}`}
+                    >
+                      {mapStatusLabel(run.status)}
                     </span>
                   </TableCell>
                   <TableCell className="text-right">
-                    {run.status === 'pending_approval' ? (
+                    {run.status === "pending_approval" ? (
                       <Button
                         variant="default"
                         size="sm"
@@ -93,11 +144,7 @@ export default function Payroll() {
                         Review & Approve
                       </Button>
                     ) : (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => navigate(`/payroll/${run.id}`)}
-                      >
+                      <Button variant="ghost" size="sm" onClick={() => navigate(`/payroll/${run.id}`)}>
                         View
                       </Button>
                     )}

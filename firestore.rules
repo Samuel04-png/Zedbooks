@@ -1,0 +1,428 @@
+rules_version = "2";
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function membershipPath(companyId) {
+      return /databases/$(database)/documents/companyUsers/$(companyId + "_" + request.auth.uid);
+    }
+
+    function isCompanyMember(companyId) {
+      return isSignedIn()
+        && exists(membershipPath(companyId))
+        && get(membershipPath(companyId)).data.status == "active";
+    }
+
+    function hasRole(companyId, roles) {
+      return isCompanyMember(companyId)
+        && get(membershipPath(companyId)).data.role in roles;
+    }
+
+    function canManageCompany(companyId) {
+      return hasRole(companyId, ["super_admin", "admin"]);
+    }
+
+    function canManageAccounting(companyId) {
+      return hasRole(
+        companyId,
+        ["super_admin", "admin", "financial_manager", "accountant", "assistant_accountant"],
+      );
+    }
+
+    function canManageCommercial(companyId) {
+      return hasRole(
+        companyId,
+        [
+          "super_admin",
+          "admin",
+          "financial_manager",
+          "accountant",
+          "assistant_accountant",
+          "finance_officer",
+          "bookkeeper",
+          "cashier",
+        ],
+      );
+    }
+
+    function canManagePayroll(companyId) {
+      return hasRole(
+        companyId,
+        ["super_admin", "admin", "financial_manager", "accountant", "hr_manager"],
+      );
+    }
+
+    function canManageProjects(companyId) {
+      return hasRole(
+        companyId,
+        ["super_admin", "admin", "financial_manager", "accountant", "project_manager"],
+      );
+    }
+
+    function canManageInventory(companyId) {
+      return hasRole(
+        companyId,
+        [
+          "super_admin",
+          "admin",
+          "financial_manager",
+          "accountant",
+          "assistant_accountant",
+          "inventory_manager",
+          "bookkeeper",
+        ],
+      );
+    }
+
+    function canViewAudit(companyId) {
+      return hasRole(companyId, ["super_admin", "admin", "financial_manager", "auditor"]);
+    }
+
+    function validAccountRange(accountType, accountCode) {
+      return (accountType == "Asset" && accountCode >= 1000 && accountCode <= 1999)
+        || (accountType == "Liability" && accountCode >= 2000 && accountCode <= 2999)
+        || (accountType == "Equity" && accountCode >= 3000 && accountCode <= 3999)
+        || (accountType == "Income" && accountCode >= 4000 && accountCode <= 4999)
+        || (accountType == "Expense" && accountCode >= 5000 && accountCode <= 5999);
+    }
+
+    match /users/{uid} {
+      allow read, write: if isSignedIn() && request.auth.uid == uid;
+    }
+
+    match /companies/{companyId} {
+      allow read: if isCompanyMember(companyId);
+      allow create: if isSignedIn();
+      allow update: if canManageCompany(companyId);
+      allow delete: if false;
+    }
+
+    match /companySettings/{companyId} {
+      allow read: if isCompanyMember(companyId);
+      allow create, update: if canManageCompany(companyId)
+        && request.resource.data.companyId == companyId;
+      allow delete: if false;
+    }
+
+    match /companyUsers/{membershipId} {
+      allow read: if isSignedIn()
+        && (
+          resource.data.userId == request.auth.uid
+          || isCompanyMember(resource.data.companyId)
+        );
+      allow create, update, delete: if false;
+    }
+
+    match /userRoles/{roleId} {
+      allow read: if isSignedIn()
+        && (
+          resource.data.userId == request.auth.uid
+          || (
+            resource.data.companyId is string
+            && isCompanyMember(resource.data.companyId)
+          )
+        );
+      allow create, update, delete: if false;
+    }
+
+    match /invitations/{invitationId} {
+      allow read: if false;
+      allow create, update, delete: if false;
+    }
+
+    match /chartOfAccounts/{accountId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create: if canManageAccounting(request.resource.data.companyId)
+        && request.resource.data.accountCode is int
+        && validAccountRange(request.resource.data.accountType, request.resource.data.accountCode);
+      allow update: if canManageAccounting(resource.data.companyId)
+        && request.resource.data.companyId == resource.data.companyId
+        && request.resource.data.accountCode is int
+        && validAccountRange(request.resource.data.accountType, request.resource.data.accountCode);
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /journalEntries/{entryId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create, update, delete: if false;
+    }
+
+    match /journalLines/{lineId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create, update, delete: if false;
+    }
+
+    match /auditLogs/{logId} {
+      allow read: if canViewAudit(resource.data.companyId);
+      allow create, update, delete: if false;
+    }
+
+    match /financialYears/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create: if canManageAccounting(request.resource.data.companyId);
+      allow update: if canManageAccounting(resource.data.companyId)
+        && request.resource.data.companyId == resource.data.companyId;
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /financialPeriods/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create: if canManageAccounting(request.resource.data.companyId);
+      allow update: if canManageAccounting(resource.data.companyId)
+        && request.resource.data.companyId == resource.data.companyId;
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /periodLocks/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create, update: if canManageAccounting(request.resource.data.companyId);
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /invoices/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create: if canManageCommercial(request.resource.data.companyId);
+      allow update: if canManageCommercial(resource.data.companyId)
+        && request.resource.data.companyId == resource.data.companyId;
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /bills/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create: if canManageCommercial(request.resource.data.companyId);
+      allow update: if canManageCommercial(resource.data.companyId)
+        && request.resource.data.companyId == resource.data.companyId;
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /expenses/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create: if canManageCommercial(request.resource.data.companyId);
+      allow update: if canManageCommercial(resource.data.companyId)
+        && request.resource.data.companyId == resource.data.companyId;
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /customers/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create: if canManageCommercial(request.resource.data.companyId);
+      allow update: if canManageCommercial(resource.data.companyId)
+        && request.resource.data.companyId == resource.data.companyId;
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /vendors/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create: if canManageCommercial(request.resource.data.companyId);
+      allow update: if canManageCommercial(resource.data.companyId)
+        && request.resource.data.companyId == resource.data.companyId;
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /salesOrders/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create: if canManageCommercial(request.resource.data.companyId);
+      allow update: if canManageCommercial(resource.data.companyId)
+        && request.resource.data.companyId == resource.data.companyId;
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /purchaseOrders/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create: if canManageCommercial(request.resource.data.companyId);
+      allow update: if canManageCommercial(resource.data.companyId)
+        && request.resource.data.companyId == resource.data.companyId;
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /payrollRuns/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create: if canManagePayroll(request.resource.data.companyId);
+      allow update: if canManagePayroll(resource.data.companyId)
+        && request.resource.data.companyId == resource.data.companyId;
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /payrollItems/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create, update: if canManagePayroll(request.resource.data.companyId);
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /payrollAdditions/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create, update: if canManagePayroll(request.resource.data.companyId);
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /payrollJournals/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create, update: if canManagePayroll(request.resource.data.companyId);
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /payeTaxBands/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create, update: if canManagePayroll(request.resource.data.companyId);
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /payrollStatutoryRates/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create, update: if canManagePayroll(request.resource.data.companyId);
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /employees/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create: if canManagePayroll(request.resource.data.companyId);
+      allow update: if canManagePayroll(resource.data.companyId)
+        && request.resource.data.companyId == resource.data.companyId;
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /employeePayrollProfiles/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create, update: if canManagePayroll(request.resource.data.companyId);
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /employeeAllowances/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create, update: if canManagePayroll(request.resource.data.companyId);
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /advances/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create, update: if canManagePayroll(request.resource.data.companyId);
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /contractors/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create, update: if canManageProjects(request.resource.data.companyId);
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /timeEntries/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create: if isCompanyMember(request.resource.data.companyId);
+      allow update: if isCompanyMember(resource.data.companyId)
+        && request.resource.data.companyId == resource.data.companyId;
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /projects/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create: if canManageProjects(request.resource.data.companyId);
+      allow update: if canManageProjects(resource.data.companyId)
+        && request.resource.data.companyId == resource.data.companyId;
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /projectExpenses/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create: if canManageProjects(request.resource.data.companyId);
+      allow update: if canManageProjects(resource.data.companyId)
+        && request.resource.data.companyId == resource.data.companyId;
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /products/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create: if canManageInventory(request.resource.data.companyId);
+      allow update: if canManageInventory(resource.data.companyId)
+        && request.resource.data.companyId == resource.data.companyId;
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /fixedAssets/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create, update: if canManageAccounting(request.resource.data.companyId);
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /assetCategories/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create, update: if canManageAccounting(request.resource.data.companyId);
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /depreciationEntries/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create, update: if canManageAccounting(request.resource.data.companyId);
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /inventoryItems/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create: if canManageInventory(request.resource.data.companyId);
+      allow update: if canManageInventory(resource.data.companyId)
+        && request.resource.data.companyId == resource.data.companyId;
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /stockMovements/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create: if canManageInventory(request.resource.data.companyId);
+      allow update: if canManageInventory(resource.data.companyId)
+        && request.resource.data.companyId == resource.data.companyId;
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /priceLists/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create, update: if canManageInventory(request.resource.data.companyId);
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /priceListItems/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create, update: if canManageInventory(request.resource.data.companyId);
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /bankAccounts/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create, update: if canManageCommercial(request.resource.data.companyId);
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /bankTransactions/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create, update: if canManageCommercial(request.resource.data.companyId);
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /cashReconciliations/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create, update: if canManageCommercial(request.resource.data.companyId);
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /reconciliations/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create, update: if canManageCommercial(request.resource.data.companyId);
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /approvalRequests/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create, update: if canManageCommercial(request.resource.data.companyId);
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /notifications/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create, update, delete: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

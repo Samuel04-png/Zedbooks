@@ -3,7 +3,6 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { useNavigate, useParams } from "react-router-dom";
-import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -24,6 +23,11 @@ import {
 import { toast } from "sonner";
 import { ArrowLeft } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
+import { useAuth } from "@/contexts/AuthContext";
+import { companyService } from "@/services/firebase";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
+import { firestore } from "@/integrations/firebase/client";
 
 const employeeSchema = z.object({
   full_name: z.string().min(2, "Name must be at least 2 characters"),
@@ -48,22 +52,46 @@ const employeeSchema = z.object({
 
 type EmployeeFormData = z.infer<typeof employeeSchema>;
 
+const toDateInputValue = (value: unknown): string => {
+  if (!value) return "";
+  if (typeof value === "string") return value.slice(0, 10);
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  if (typeof value === "object" && value !== null && "toDate" in value) {
+    const timestamp = value as { toDate?: () => Date };
+    if (typeof timestamp.toDate === "function") {
+      return timestamp.toDate().toISOString().slice(0, 10);
+    }
+  }
+  return "";
+};
+
 export default function EditEmployee() {
   const navigate = useNavigate();
   const { id } = useParams();
+  const { user } = useAuth();
 
   const { data: employee, isLoading } = useQuery({
-    queryKey: ["employee", id],
+    queryKey: ["employee", id, user?.id],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("employees")
-        .select("*")
-        .eq("id", id)
-        .single();
+      if (!id || !user) return null;
 
-      if (error) throw error;
-      return data;
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      if (!membership?.companyId) return null;
+
+      const employeeRef = doc(firestore, COLLECTIONS.EMPLOYEES, id);
+      const employeeSnap = await getDoc(employeeRef);
+      if (!employeeSnap.exists()) return null;
+
+      const row = employeeSnap.data() as Record<string, unknown>;
+      const companyId = (row.companyId ?? row.company_id) as string | undefined;
+      if (companyId && companyId !== membership.companyId) return null;
+
+      return {
+        id: employeeSnap.id,
+        ...row,
+      } as Record<string, unknown>;
     },
+    enabled: Boolean(id && user),
   });
 
   const form = useForm<EmployeeFormData>({
@@ -73,60 +101,75 @@ export default function EditEmployee() {
   useEffect(() => {
     if (employee) {
       form.reset({
-        full_name: employee.full_name,
-        employee_number: employee.employee_number,
-        position: employee.position || "",
-        department: employee.department || "",
-        email: employee.email || "",
-        phone: employee.phone || "",
-        basic_salary: employee.basic_salary.toString(),
-        housing_allowance: employee.housing_allowance?.toString() || "0",
-        transport_allowance: employee.transport_allowance?.toString() || "0",
-        other_allowances: employee.other_allowances?.toString() || "0",
-        employment_date: employee.employment_date,
-        employment_status: employee.employment_status as "active" | "inactive" | "terminated",
-        tpin: employee.tpin || "",
-        napsa_number: employee.napsa_number || "",
-        nhima_number: employee.nhima_number || "",
-        bank_name: employee.bank_name || "",
-        bank_branch: employee.bank_branch || "",
-        bank_account_number: employee.bank_account_number || "",
+        full_name: String(employee.fullName ?? employee.full_name ?? ""),
+        employee_number: String(employee.employeeNumber ?? employee.employee_number ?? ""),
+        position: String(employee.position ?? ""),
+        department: String(employee.department ?? ""),
+        email: String(employee.email ?? ""),
+        phone: String(employee.phone ?? ""),
+        basic_salary: String(employee.basicSalary ?? employee.basic_salary ?? ""),
+        housing_allowance: String(employee.housingAllowance ?? employee.housing_allowance ?? 0),
+        transport_allowance: String(employee.transportAllowance ?? employee.transport_allowance ?? 0),
+        other_allowances: String(employee.otherAllowances ?? employee.other_allowances ?? 0),
+        employment_date: toDateInputValue(employee.employmentDate ?? employee.employment_date),
+        employment_status: String(
+          employee.employmentStatus ?? employee.employment_status ?? "active",
+        ) as "active" | "inactive" | "terminated",
+        tpin: String(employee.tpin ?? ""),
+        napsa_number: String(employee.napsaNumber ?? employee.napsa_number ?? ""),
+        nhima_number: String(employee.nhimaNumber ?? employee.nhima_number ?? ""),
+        bank_name: String(employee.bankName ?? employee.bank_name ?? ""),
+        bank_branch: String(employee.bankBranch ?? employee.bank_branch ?? ""),
+        bank_account_number: String(
+          employee.bankAccountNumber ?? employee.bank_account_number ?? "",
+        ),
       });
     }
   }, [employee, form]);
 
   const onSubmit = async (data: EmployeeFormData) => {
     try {
-      const { error } = await supabase
-        .from("employees")
-        .update({
-          full_name: data.full_name,
-          employee_number: data.employee_number,
+      if (!id || !user) {
+        toast.error("You must be logged in");
+        return;
+      }
+
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      if (!membership?.companyId) {
+        toast.error("No company profile found for your account");
+        return;
+      }
+
+      await setDoc(
+        doc(firestore, COLLECTIONS.EMPLOYEES, id),
+        {
+          companyId: membership.companyId,
+          employeeNumber: data.employee_number,
+          fullName: data.full_name,
           position: data.position || null,
           department: data.department || null,
           email: data.email || null,
           phone: data.phone || null,
-          basic_salary: parseFloat(data.basic_salary),
-          housing_allowance: data.housing_allowance ? parseFloat(data.housing_allowance) : 0,
-          transport_allowance: data.transport_allowance ? parseFloat(data.transport_allowance) : 0,
-          other_allowances: data.other_allowances ? parseFloat(data.other_allowances) : 0,
-          employment_date: data.employment_date,
-          employment_status: data.employment_status,
+          basicSalary: Number(data.basic_salary),
+          housingAllowance: data.housing_allowance ? Number(data.housing_allowance) : 0,
+          transportAllowance: data.transport_allowance ? Number(data.transport_allowance) : 0,
+          otherAllowances: data.other_allowances ? Number(data.other_allowances) : 0,
+          employmentDate: data.employment_date,
+          employmentStatus: data.employment_status,
           tpin: data.tpin || null,
-          napsa_number: data.napsa_number || null,
-          nhima_number: data.nhima_number || null,
-          bank_name: data.bank_name || null,
-          bank_branch: data.bank_branch || null,
-          bank_account_number: data.bank_account_number || null,
-        })
-        .eq("id", id);
-
-      if (error) throw error;
+          napsaNumber: data.napsa_number || null,
+          nhimaNumber: data.nhima_number || null,
+          bankName: data.bank_name || null,
+          bankBranch: data.bank_branch || null,
+          bankAccountNumber: data.bank_account_number || null,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true },
+      );
 
       toast.success("Employee updated successfully");
       navigate("/employees");
     } catch (error) {
-      console.error(error);
       toast.error("Failed to update employee");
     }
   };

@@ -1,21 +1,21 @@
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/contexts/AuthContext";
+import { companyService } from "@/services/firebase";
+import { isFirebaseConfigured } from "@/integrations/firebase/client";
 
 export function useCompanySettings() {
+  const { user, isAuthenticated } = useAuth();
+
   return useQuery({
-    queryKey: ["company-settings"],
+    queryKey: ["company-settings", user?.id],
     queryFn: async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return null;
+      if (!user || !isFirebaseConfigured) return null;
 
-      const { data, error } = await supabase
-        .from("company_settings")
-        .select("*")
-        .eq("user_id", user.id)
-        .maybeSingle();
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      if (!membership) return null;
 
-      if (error) throw error;
-      return data;
+      return companyService.getCompanySettings(membership.companyId);
     },
+    enabled: isAuthenticated && Boolean(user),
   });
 }

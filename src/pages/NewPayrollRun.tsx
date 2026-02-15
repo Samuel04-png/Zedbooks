@@ -3,7 +3,6 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { useNavigate } from "react-router-dom";
-import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -16,13 +15,26 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { toast } from "sonner";
-import { ArrowLeft, Save, Play, AlertCircle } from "lucide-react";
+import { ArrowLeft, Save, AlertCircle } from "lucide-react";
 import { calculatePayroll, formatZMW } from "@/utils/zambianTaxCalculations";
 import { useQuery } from "@tanstack/react-query";
 import { PayrollAdditionsDialog } from "@/components/payroll/PayrollAdditionsDialog";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { useAuth } from "@/contexts/AuthContext";
+import { companyService } from "@/services/firebase";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { firestore } from "@/integrations/firebase/client";
+import {
+  addDoc,
+  collection,
+  getDocs,
+  query,
+  serverTimestamp,
+  updateDoc,
+  where,
+} from "firebase/firestore";
 
 const payrollSchema = z.object({
   period_start: z.string().min(1, "Start date is required"),
@@ -44,7 +56,28 @@ interface PayrollAddition {
   monthly_deduction?: number;
 }
 
+interface EmployeeRecord {
+  id: string;
+  full_name: string;
+  employee_number: string;
+  basic_salary: number;
+  housing_allowance: number;
+  transport_allowance: number;
+  other_allowances: number;
+}
+
+interface AdvanceRecord {
+  id: string;
+  employee_id: string;
+  status: string;
+  date_to_deduct: string | null;
+  monthly_deduction: number | null;
+  remaining_balance: number | null;
+  amount: number;
+}
+
 export default function NewPayrollRun() {
+  const { user } = useAuth();
   const navigate = useNavigate();
   const [isProcessing, setIsProcessing] = useState(false);
   const [additions, setAdditions] = useState<PayrollAddition[]>([]);
@@ -64,46 +97,88 @@ export default function NewPayrollRun() {
     },
   });
 
-  const { data: employees } = useQuery({
-    queryKey: ["employees"],
+  const { data: companyId } = useQuery({
+    queryKey: ["new-payroll-company", user?.id],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("employees")
-        .select("*")
-        .eq("employment_status", "active");
-
-      if (error) throw error;
-      return data;
+      if (!user) return null;
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      return membership?.companyId ?? null;
     },
+    enabled: Boolean(user),
+  });
+
+  const { data: employees } = useQuery({
+    queryKey: ["employees", companyId],
+    queryFn: async () => {
+      if (!companyId) return [] as EmployeeRecord[];
+
+      const employeesRef = collection(firestore, COLLECTIONS.EMPLOYEES);
+      const snapshot = await getDocs(
+        query(employeesRef, where("companyId", "==", companyId), where("employmentStatus", "==", "active")),
+      );
+
+      if (snapshot.empty) {
+        const legacySnapshot = await getDocs(
+          query(employeesRef, where("companyId", "==", companyId), where("employment_status", "==", "active")),
+        );
+
+        return legacySnapshot.docs.map((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          return {
+            id: docSnap.id,
+            full_name: String(row.fullName ?? row.full_name ?? ""),
+            employee_number: String(row.employeeNumber ?? row.employee_number ?? ""),
+            basic_salary: Number(row.basicSalary ?? row.basic_salary ?? 0),
+            housing_allowance: Number(row.housingAllowance ?? row.housing_allowance ?? 0),
+            transport_allowance: Number(row.transportAllowance ?? row.transport_allowance ?? 0),
+            other_allowances: Number(row.otherAllowances ?? row.other_allowances ?? 0),
+          } satisfies EmployeeRecord;
+        });
+      }
+
+      return snapshot.docs.map((docSnap) => {
+        const row = docSnap.data() as Record<string, unknown>;
+        return {
+          id: docSnap.id,
+          full_name: String(row.fullName ?? row.full_name ?? ""),
+          employee_number: String(row.employeeNumber ?? row.employee_number ?? ""),
+          basic_salary: Number(row.basicSalary ?? row.basic_salary ?? 0),
+          housing_allowance: Number(row.housingAllowance ?? row.housing_allowance ?? 0),
+          transport_allowance: Number(row.transportAllowance ?? row.transport_allowance ?? 0),
+          other_allowances: Number(row.otherAllowances ?? row.other_allowances ?? 0),
+        } satisfies EmployeeRecord;
+      });
+    },
+    enabled: Boolean(companyId),
   });
 
   // Check for open financial period
   const { data: openPeriod } = useQuery({
-    queryKey: ["open-payroll-period"],
+    queryKey: ["open-payroll-period", companyId],
     queryFn: async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return null;
+      if (!companyId) return null;
 
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("company_id")
-        .eq("id", user.id)
-        .single();
+      const periodsRef = collection(firestore, COLLECTIONS.FINANCIAL_PERIODS);
+      const snapshot = await getDocs(
+        query(periodsRef, where("companyId", "==", companyId), where("status", "==", "open")),
+      );
 
-      if (!profile?.company_id) return null;
+      if (snapshot.empty) return null;
 
-      const { data, error } = await supabase
-        .from("financial_periods")
-        .select("*")
-        .eq("company_id", profile.company_id)
-        .eq("status", "open")
-        .order("start_date", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      const periods = snapshot.docs.map((docSnap) => {
+        const row = docSnap.data() as Record<string, unknown>;
+        return {
+          id: docSnap.id,
+          startDate: String(row.startDate ?? row.start_date ?? ""),
+          endDate: String(row.endDate ?? row.end_date ?? ""),
+          periodName: String(row.periodName ?? row.period_name ?? ""),
+        };
+      });
 
-      if (error) return null;
-      return data;
+      periods.sort((a, b) => b.startDate.localeCompare(a.startDate));
+      return periods[0];
     },
+    enabled: Boolean(companyId),
   });
 
   const onSubmit = async (data: PayrollFormData) => {
@@ -115,58 +190,67 @@ export default function NewPayrollRun() {
     setIsProcessing(true);
 
     try {
-      const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Not authenticated");
+      if (!companyId) throw new Error("Company not found");
 
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("company_id")
-        .eq("id", user.id)
-        .single();
+      const runsSnapshot = await getDocs(
+        query(collection(firestore, COLLECTIONS.PAYROLL_RUNS), where("companyId", "==", companyId)),
+      );
 
-      // Generate payroll number
       const year = new Date().getFullYear();
-      const { count } = await supabase
-        .from("payroll_runs")
-        .select("*", { count: "exact", head: true })
-        .eq("company_id", profile?.company_id);
+      const payrollNumber = `PAY-${year}-${String(runsSnapshot.size + 1).padStart(4, "0")}`;
 
-      const payrollNumber = `PAY-${year}-${String((count || 0) + 1).padStart(4, "0")}`;
+      const payrollRunRef = await addDoc(collection(firestore, COLLECTIONS.PAYROLL_RUNS), {
+        companyId,
+        userId: user.id,
+        periodStart: data.period_start,
+        periodEnd: data.period_end,
+        runDate: data.run_date,
+        notes: data.notes || null,
+        status: "draft",
+        payrollStatus: "draft",
+        payrollNumber,
+        totalGross: 0,
+        totalDeductions: 0,
+        totalNet: 0,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
 
-      // Create payroll run in DRAFT status
-      const { data: payrollRun, error: runError } = await supabase
-        .from("payroll_runs")
-        .insert([{
-          period_start: data.period_start,
-          period_end: data.period_end,
-          run_date: data.run_date,
-          notes: data.notes || null,
-          user_id: user.id,
-          company_id: profile?.company_id,
-          status: "draft",
-          payroll_status: "draft",
-          payroll_number: payrollNumber,
-        }])
-        .select()
-        .single();
-
-      if (runError) throw runError;
-
-      // Calculate and create payroll items for each employee (preview only, no GL posting)
       let totalGross = 0;
       let totalDeductions = 0;
       let totalNet = 0;
 
-      // Get pending/partial advances for each employee
-      const { data: advances } = await supabase
-        .from("advances")
-        .select("*")
-        .in("status", ["pending", "partial"])
-        .lte("date_to_deduct", data.period_end)
-        .in("employee_id", employees.map(e => e.id));
+      const advanceSnapshot = await getDocs(
+        query(
+          collection(firestore, COLLECTIONS.ADVANCES),
+          where("companyId", "==", companyId),
+          where("status", "in", ["pending", "partial"]),
+        ),
+      );
+
+      const advances = advanceSnapshot.docs
+        .map((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          return {
+            id: docSnap.id,
+            employee_id: String(row.employeeId ?? row.employee_id ?? ""),
+            status: String(row.status ?? ""),
+            date_to_deduct: (row.dateToDeduct as string | null) ?? (row.date_to_deduct as string | null) ?? null,
+            monthly_deduction: Number(row.monthlyDeduction ?? row.monthly_deduction ?? 0) || null,
+            remaining_balance: Number(row.remainingBalance ?? row.remaining_balance ?? 0) || null,
+            amount: Number(row.amount ?? 0),
+          } satisfies AdvanceRecord;
+        })
+        .filter((advance) => {
+          if (!advance.employee_id) return false;
+          if (!employees.some((employee) => employee.id === advance.employee_id)) return false;
+          if (!advance.date_to_deduct) return true;
+          return advance.date_to_deduct <= data.period_end;
+        });
 
       const payrollItems = employees.map((employee) => {
-        const employeeAdvances = advances?.filter(a => a.employee_id === employee.id) || [];
+        const employeeAdvances = advances.filter((advance) => advance.employee_id === employee.id);
         let totalAdvanceDeduction = 0;
 
         employeeAdvances.forEach((adv) => {
@@ -189,60 +273,61 @@ export default function NewPayrollRun() {
         totalNet += calculation.netSalary;
 
         return {
-          payroll_run_id: payrollRun.id,
-          employee_id: employee.id,
-          basic_salary: calculation.basicSalary,
-          housing_allowance: calculation.housingAllowance,
-          transport_allowance: calculation.transportAllowance,
-          other_allowances: calculation.otherAllowances,
-          gross_salary: calculation.grossSalary,
+          companyId,
+          payrollRunId: payrollRunRef.id,
+          employeeId: employee.id,
+          basicSalary: calculation.basicSalary,
+          housingAllowance: calculation.housingAllowance,
+          transportAllowance: calculation.transportAllowance,
+          otherAllowances: calculation.otherAllowances,
+          grossSalary: calculation.grossSalary,
           paye: calculation.paye,
-          napsa_employee: calculation.napsaEmployee,
-          napsa_employer: calculation.napsaEmployer,
-          nhima_employee: calculation.nhimaEmployee,
-          nhima_employer: calculation.nhimaEmployer,
-          advances_deducted: totalAdvanceDeduction,
-          total_deductions: calculation.totalDeductions,
-          net_salary: calculation.netSalary,
+          napsaEmployee: calculation.napsaEmployee,
+          napsaEmployer: calculation.napsaEmployer,
+          nhimaEmployee: calculation.nhimaEmployee,
+          nhimaEmployer: calculation.nhimaEmployer,
+          advancesDeducted: totalAdvanceDeduction,
+          totalDeductions: calculation.totalDeductions,
+          netSalary: calculation.netSalary,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
         };
       });
 
-      const { error: itemsError } = await supabase
-        .from("payroll_items")
-        .insert(payrollItems);
+      await Promise.all(
+        payrollItems.map((item) => addDoc(collection(firestore, COLLECTIONS.PAYROLL_ITEMS), item)),
+      );
 
-      if (itemsError) throw itemsError;
-
-      // Save payroll additions (not yet applied)
       if (additions.length > 0) {
-        const additionsData = additions.map((a) => ({
-          payroll_run_id: payrollRun.id,
-          employee_id: a.employee_id,
-          type: a.type,
-          name: a.name,
-          amount: a.amount,
-          total_amount: a.total_amount,
-          months_to_pay: a.months_to_pay,
-          monthly_deduction: a.monthly_deduction,
-        }));
-
-        await supabase.from("payroll_additions").insert(additionsData);
+        await Promise.all(
+          additions.map((a) =>
+            addDoc(collection(firestore, COLLECTIONS.PAYROLL_ADDITIONS), {
+              companyId,
+              payrollRunId: payrollRunRef.id,
+              employeeId: a.employee_id,
+              type: a.type,
+              name: a.name,
+              amount: a.amount,
+              totalAmount: a.total_amount ?? null,
+              monthsToPay: a.months_to_pay ?? null,
+              monthlyDeduction: a.monthly_deduction ?? null,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            }),
+          ),
+        );
       }
 
-      // Update payroll run totals
-      await supabase
-        .from("payroll_runs")
-        .update({
-          total_gross: totalGross,
-          total_deductions: totalDeductions,
-          total_net: totalNet,
-        })
-        .eq("id", payrollRun.id);
+      await updateDoc(doc(firestore, COLLECTIONS.PAYROLL_RUNS, payrollRunRef.id), {
+        totalGross,
+        totalDeductions,
+        totalNet,
+        updatedAt: serverTimestamp(),
+      });
 
       toast.success("Payroll draft created successfully");
-      navigate(`/payroll/${payrollRun.id}`);
-    } catch (error) {
-      console.error(error);
+      navigate(`/payroll/${payrollRunRef.id}`);
+    } catch {
       toast.error("Failed to create payroll run");
     } finally {
       setIsProcessing(false);
@@ -276,6 +361,12 @@ export default function NewPayrollRun() {
           Final payrolls are locked and post journals to the General Ledger.
         </AlertDescription>
       </Alert>
+
+      {openPeriod && (
+        <p className="text-sm text-muted-foreground">
+          Open financial period: {openPeriod.periodName || `${openPeriod.startDate} to ${openPeriod.endDate}`}
+        </p>
+      )}
 
       <Form {...form}>
         <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">

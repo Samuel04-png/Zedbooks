@@ -1,6 +1,10 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/contexts/AuthContext";
+import { companyService } from "@/services/firebase";
+import { firestore } from "@/integrations/firebase/client";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { addDoc, collection, deleteDoc, doc, getDocs, query, serverTimestamp, setDoc, where } from "firebase/firestore";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -54,6 +58,7 @@ interface Vendor {
 }
 
 export default function Bills() {
+  const { user } = useAuth();
   const queryClient = useQueryClient();
   const [searchQuery, setSearchQuery] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -68,43 +73,71 @@ export default function Bills() {
     description: "",
   });
 
-  const { data: bills, isLoading } = useQuery({
-    queryKey: ["bills"],
+  const { data: companyId } = useQuery({
+    queryKey: ["bills-company-id", user?.id],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("bills")
-        .select(`
-          *,
-          vendors (name)
-        `)
-        .order("bill_date", { ascending: false });
-      if (error) throw error;
-      return data as unknown as Bill[];
+      if (!user) return null;
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      return membership?.companyId ?? null;
     },
+    enabled: Boolean(user),
+  });
+
+  const { data: bills, isLoading } = useQuery({
+    queryKey: ["bills", companyId],
+    queryFn: async () => {
+      if (!companyId) return [] as Bill[];
+      const [billsSnapshot, vendorsSnapshot] = await Promise.all([
+        getDocs(query(collection(firestore, COLLECTIONS.BILLS), where("companyId", "==", companyId))),
+        getDocs(query(collection(firestore, COLLECTIONS.VENDORS), where("companyId", "==", companyId))),
+      ]);
+
+      const vendorMap = new Map<string, string>();
+      vendorsSnapshot.docs.forEach((docSnap) => {
+        const row = docSnap.data() as Record<string, unknown>;
+        vendorMap.set(docSnap.id, String(row.name ?? ""));
+      });
+
+      return billsSnapshot.docs
+        .map((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          const vendorId = (row.vendorId ?? row.vendor_id ?? null) as string | null;
+          return {
+            id: docSnap.id,
+            bill_number: String(row.billNumber ?? row.bill_number ?? ""),
+            bill_date: String(row.billDate ?? row.bill_date ?? ""),
+            due_date: (row.dueDate ?? row.due_date ?? null) as string | null,
+            subtotal: Number(row.subtotal ?? 0),
+            vat_amount: Number(row.vatAmount ?? row.vat_amount ?? 0),
+            total: Number(row.total ?? 0),
+            status: (row.status ?? "pending") as string | null,
+            description: (row.description ?? null) as string | null,
+            vendor_id: vendorId,
+            vendors: vendorId ? { name: vendorMap.get(vendorId) || "Unknown Vendor" } : null,
+          } satisfies Bill;
+        })
+        .sort((a, b) => b.bill_date.localeCompare(a.bill_date));
+    },
+    enabled: Boolean(companyId),
   });
 
   const { data: vendors } = useQuery({
-    queryKey: ["vendors"],
+    queryKey: ["vendors", companyId],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("vendors")
-        .select("id, name")
-        .order("name");
-      if (error) throw error;
-      return data as unknown as Vendor[];
+      if (!companyId) return [] as Vendor[];
+      const snapshot = await getDocs(query(collection(firestore, COLLECTIONS.VENDORS), where("companyId", "==", companyId)));
+      return snapshot.docs
+        .map((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          return { id: docSnap.id, name: String(row.name ?? "") } satisfies Vendor;
+        })
+        .sort((a, b) => a.name.localeCompare(b.name));
     },
+    enabled: Boolean(companyId),
   });
 
-  const { data: user } = useQuery({
-    queryKey: ["current-user"],
-    queryFn: async () => {
-      const { data } = await supabase.auth.getUser();
-      return data.user;
-    },
-  });
-
-  const isVatRegistered = settings?.is_vat_registered || false;
-  const vatRate = settings?.vat_rate || 16;
+  const isVatRegistered = settings?.isVatRegistered || false;
+  const vatRate = settings?.vatRate || 16;
 
   const subtotal = parseFloat(formData.amount) || 0;
   const vatAmount = isVatRegistered ? subtotal * (vatRate / 100) : 0;
@@ -112,17 +145,26 @@ export default function Bills() {
 
   const createMutation = useMutation({
     mutationFn: async (data: typeof formData) => {
-      const { error } = await supabase.from("bills").insert({
-        ...data,
+      if (!companyId || !user) throw new Error("Not authenticated");
+
+      await addDoc(collection(firestore, COLLECTIONS.BILLS), {
+        companyId,
+        vendorId: data.vendor_id || null,
+        billNumber: data.bill_number,
+        billDate: data.bill_date,
+        dueDate: data.due_date || null,
+        description: data.description || null,
         subtotal,
-        vat_amount: vatAmount,
+        vatAmount,
         total,
-        user_id: user?.id,
-      } as any);
-      if (error) throw error;
+        status: "pending",
+        createdBy: user.id,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["bills"] });
+      queryClient.invalidateQueries({ queryKey: ["bills", companyId] });
       toast.success("Bill created successfully");
       setIsDialogOpen(false);
       setFormData({
@@ -141,14 +183,14 @@ export default function Bills() {
 
   const markPaidMutation = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase
-        .from("bills")
-        .update({ status: "paid", paid_date: new Date().toISOString() } as any)
-        .eq("id", id);
-      if (error) throw error;
+      await setDoc(doc(firestore, COLLECTIONS.BILLS, id), {
+        status: "paid",
+        paidDate: new Date().toISOString(),
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["bills"] });
+      queryClient.invalidateQueries({ queryKey: ["bills", companyId] });
       toast.success("Bill marked as paid");
     },
     onError: (error) => {
@@ -158,11 +200,10 @@ export default function Bills() {
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.from("bills").delete().eq("id", id);
-      if (error) throw error;
+      await deleteDoc(doc(firestore, COLLECTIONS.BILLS, id));
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["bills"] });
+      queryClient.invalidateQueries({ queryKey: ["bills", companyId] });
       toast.success("Bill deleted successfully");
     },
     onError: (error) => {

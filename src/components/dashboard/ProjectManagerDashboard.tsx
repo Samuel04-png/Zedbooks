@@ -1,37 +1,60 @@
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import { BriefcaseIcon, DollarSign, Clock, AlertCircle, TrendingUp, Users } from "lucide-react";
+import { BriefcaseIcon, DollarSign, Clock, AlertCircle, TrendingUp } from "lucide-react";
 import { formatZMW } from "@/utils/zambianTaxCalculations";
+import { useAuth } from "@/contexts/AuthContext";
+import { dashboardService } from "@/services/firebase";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { readNumber, readString } from "@/components/dashboard/dashboardDataUtils";
+
+type DashboardProject = Record<string, unknown>;
 
 export function ProjectManagerDashboard() {
-  const { data: stats } = useQuery({
-    queryKey: ["project-manager-dashboard-stats"],
-    queryFn: async () => {
-      const [projects, projectExpenses, timeEntries] = await Promise.all([
-        supabase.from("projects").select("*"),
-        supabase.from("project_expenses").select("amount, project_id"),
-        supabase.from("time_entries").select("hours_worked, total_amount, status"),
-      ]);
+  const { user } = useAuth();
 
-      const activeProjects = projects.data?.filter(p => p.status === 'active') || [];
-      const completedProjects = projects.data?.filter(p => p.status === 'completed') || [];
-      
-      const totalBudget = activeProjects.reduce((s, p) => s + (p.budget || 0), 0);
-      const totalSpent = activeProjects.reduce((s, p) => s + (p.spent || 0), 0);
-      
-      const projectsNearBudget = activeProjects.filter(p => {
-        const budget = p.budget || 0;
-        const spent = p.spent || 0;
-        return budget > 0 && (spent / budget) >= 0.8;
+  const { data: stats } = useQuery({
+    queryKey: ["project-manager-dashboard-stats", user?.id],
+    enabled: Boolean(user),
+    queryFn: async () => {
+      if (!user) {
+        return {
+          totalProjects: 0,
+          activeProjects: 0,
+          completedProjects: 0,
+          totalBudget: 0,
+          totalSpent: 0,
+          budgetUtilization: 0,
+          projectsNearBudget: [] as DashboardProject[],
+          pendingTimeEntries: 0,
+          totalHoursLogged: 0,
+          topProjects: [] as DashboardProject[],
+        };
+      }
+
+      const { projects, timeEntries } = await dashboardService.runQueries(user.id, {
+        projects: { collectionName: COLLECTIONS.PROJECTS },
+        projectExpenses: { collectionName: COLLECTIONS.PROJECT_EXPENSES },
+        timeEntries: { collectionName: COLLECTIONS.TIME_ENTRIES },
       });
 
-      const pendingTimeEntries = timeEntries.data?.filter(t => t.status === 'pending') || [];
-      const totalHours = timeEntries.data?.reduce((s, t) => s + (t.hours_worked || 0), 0) || 0;
+      const activeProjects = projects.filter((project) => readString(project, ["status"]) === "active");
+      const completedProjects = projects.filter((project) => readString(project, ["status"]) === "completed");
+
+      const totalBudget = activeProjects.reduce((sum, project) => sum + readNumber(project, ["budget"]), 0);
+      const totalSpent = activeProjects.reduce((sum, project) => sum + readNumber(project, ["spent"]), 0);
+
+      const projectsNearBudget = activeProjects.filter((project) => {
+        const budget = readNumber(project, ["budget"]);
+        const spent = readNumber(project, ["spent"]);
+        return budget > 0 && spent / budget >= 0.8;
+      });
+
+      const pendingTimeEntries = timeEntries.filter((entry) => readString(entry, ["status"]) === "pending");
+      const totalHours = timeEntries.reduce((sum, entry) => sum + readNumber(entry, ["hoursWorked", "hours_worked"]), 0);
 
       return {
-        totalProjects: projects.data?.length || 0,
+        totalProjects: projects.length,
         activeProjects: activeProjects.length,
         completedProjects: completedProjects.length,
         totalBudget,
@@ -48,7 +71,7 @@ export function ProjectManagerDashboard() {
   const metrics = [
     { title: "Active Projects", value: stats?.activeProjects || 0, icon: BriefcaseIcon, color: "text-primary" },
     { title: "Total Budget", value: formatZMW(stats?.totalBudget || 0), icon: DollarSign, color: "text-green-500" },
-    { title: "Total Spent", value: formatZMW(stats?.totalSpent || 0), icon: TrendingUp, color: "text-orange-500" },
+    { title: "Total Spent", value: formatZMW(stats?.totalSpent || 0), icon: TrendingUp, color: "text-blue-500" },
     { title: "Hours Logged", value: stats?.totalHoursLogged?.toFixed(1) || "0", icon: Clock, color: "text-blue-500" },
   ];
 
@@ -96,7 +119,7 @@ export function ProjectManagerDashboard() {
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Spent to Date</span>
-                <span className="font-medium text-orange-500">{formatZMW(stats?.totalSpent || 0)}</span>
+                <span className="font-medium text-blue-500">{formatZMW(stats?.totalSpent || 0)}</span>
               </div>
               <div className="flex justify-between border-t pt-3">
                 <span className="font-semibold">Remaining</span>
@@ -118,23 +141,25 @@ export function ProjectManagerDashboard() {
           <CardContent>
             {stats?.projectsNearBudget && stats.projectsNearBudget.length > 0 ? (
               <div className="space-y-4">
-                {stats.projectsNearBudget.map((project: any) => {
-                  const utilization = project.budget > 0 ? (project.spent / project.budget) * 100 : 0;
+                {stats.projectsNearBudget.map((project: DashboardProject) => {
+                  const budget = readNumber(project, ["budget"]);
+                  const spent = readNumber(project, ["spent"]);
+                  const utilization = budget > 0 ? (spent / budget) * 100 : 0;
                   return (
-                    <div key={project.id} className="space-y-2">
+                    <div key={readString(project, ["id"], "project")} className="space-y-2">
                       <div className="flex justify-between text-sm">
-                        <span className="font-medium truncate max-w-[200px]">{project.name}</span>
+                        <span className="font-medium truncate max-w-[200px]">{readString(project, ["name"], "Unnamed Project")}</span>
                         <span className={utilization >= 100 ? "text-destructive" : "text-warning"}>
                           {utilization.toFixed(0)}%
                         </span>
                       </div>
-                      <Progress 
-                        value={Math.min(utilization, 100)} 
-                        className={`h-2 ${utilization >= 100 ? '[&>div]:bg-destructive' : '[&>div]:bg-warning'}`}
+                      <Progress
+                        value={Math.min(utilization, 100)}
+                        className={`h-2 ${utilization >= 100 ? "[&>div]:bg-destructive" : "[&>div]:bg-warning"}`}
                       />
                       <div className="flex justify-between text-xs text-muted-foreground">
-                        <span>{formatZMW(project.spent || 0)} spent</span>
-                        <span>{formatZMW(project.budget || 0)} budget</span>
+                        <span>{formatZMW(spent)} spent</span>
+                        <span>{formatZMW(budget)} budget</span>
                       </div>
                     </div>
                   );
@@ -157,19 +182,21 @@ export function ProjectManagerDashboard() {
         <CardContent>
           {stats?.topProjects && stats.topProjects.length > 0 ? (
             <div className="space-y-4">
-              {stats.topProjects.map((project: any) => {
-                const utilization = project.budget > 0 ? (project.spent / project.budget) * 100 : 0;
+              {stats.topProjects.map((project: DashboardProject) => {
+                const budget = readNumber(project, ["budget"]);
+                const spent = readNumber(project, ["spent"]);
+                const utilization = budget > 0 ? (spent / budget) * 100 : 0;
                 return (
-                  <div key={project.id} className="flex items-center justify-between p-3 rounded-lg bg-muted/30">
+                  <div key={readString(project, ["id"], "project")} className="flex items-center justify-between p-3 rounded-lg bg-muted/30">
                     <div className="space-y-1">
-                      <p className="font-medium">{project.name}</p>
+                      <p className="font-medium">{readString(project, ["name"], "Unnamed Project")}</p>
                       <p className="text-xs text-muted-foreground">
-                        {project.donor_name || 'No donor'} • {project.grant_reference || 'No reference'}
+                        {readString(project, ["donorName", "donor_name"], "No donor")} - {readString(project, ["grantReference", "grant_reference"], "No reference")}
                       </p>
                     </div>
                     <div className="text-right space-y-1">
-                      <p className="font-medium">{formatZMW(project.spent || 0)}</p>
-                      <p className="text-xs text-muted-foreground">of {formatZMW(project.budget || 0)}</p>
+                      <p className="font-medium">{formatZMW(spent)}</p>
+                      <p className="text-xs text-muted-foreground">of {formatZMW(budget)}</p>
                     </div>
                     <div className="w-20">
                       <Progress value={Math.min(utilization, 100)} className="h-2" />

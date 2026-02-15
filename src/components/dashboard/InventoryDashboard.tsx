@@ -1,31 +1,71 @@
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Package, AlertTriangle, TrendingUp, DollarSign } from "lucide-react";
 import { formatZMW } from "@/utils/zambianTaxCalculations";
+import { useAuth } from "@/contexts/AuthContext";
+import { dashboardService } from "@/services/firebase";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { readNumber, readString } from "@/components/dashboard/dashboardDataUtils";
 
 export function InventoryDashboard() {
-  const { data: stats } = useQuery({
-    queryKey: ["inventory-dashboard-stats"],
-    queryFn: async () => {
-      const [items, movements] = await Promise.all([
-        supabase.from("inventory_items").select("*"),
-        supabase.from("stock_movements").select("quantity, movement_type").order("created_at", { ascending: false }).limit(100),
-      ]);
+  const { user } = useAuth();
 
-      const inventoryItems = items.data || [];
-      const lowStockItems = inventoryItems.filter(i => (i.quantity_on_hand || 0) <= (i.reorder_point || 0));
-      const totalValue = inventoryItems.reduce((s, i) => s + ((i.quantity_on_hand || 0) * (i.unit_cost || 0)), 0);
+  const { data: stats } = useQuery({
+    queryKey: ["inventory-dashboard-stats", user?.id],
+    enabled: Boolean(user),
+    queryFn: async () => {
+      if (!user) {
+        return {
+          totalItems: 0,
+          lowStockCount: 0,
+          lowStockItems: [] as Array<Record<string, unknown>>,
+          totalValue: 0,
+          categories: 0,
+          recentMovements: 0,
+          inMovements: 0,
+          outMovements: 0,
+        };
+      }
+
+      const { items, movements } = await dashboardService.runQueries(user.id, {
+        items: { collectionName: COLLECTIONS.INVENTORY_ITEMS },
+        movements: {
+          collectionName: COLLECTIONS.STOCK_MOVEMENTS,
+          orderByField: "createdAt",
+          orderDirection: "desc",
+          limitCount: 100,
+        },
+      });
+
+      const lowStockItems = items.filter((item) => {
+        const qty = readNumber(item, ["quantityOnHand", "quantity_on_hand"]);
+        const reorder = readNumber(item, ["reorderPoint", "reorder_point"]);
+        return qty <= reorder;
+      });
+
+      const totalValue = items.reduce((sum, item) => {
+        const qty = readNumber(item, ["quantityOnHand", "quantity_on_hand"]);
+        const cost = readNumber(item, ["unitCost", "unit_cost"]);
+        return sum + qty * cost;
+      }, 0);
+
+      const categoryCount = new Set(
+        items.map((item) => readString(item, ["category"])).filter((category) => Boolean(category)),
+      ).size;
 
       return {
-        totalItems: inventoryItems.length,
+        totalItems: items.length,
         lowStockCount: lowStockItems.length,
         lowStockItems: lowStockItems.slice(0, 5),
         totalValue,
-        categories: [...new Set(inventoryItems.map(i => i.category).filter(Boolean))].length,
-        recentMovements: movements.data?.length || 0,
-        inMovements: movements.data?.filter(m => m.movement_type === 'in').reduce((s, m) => s + (m.quantity || 0), 0) || 0,
-        outMovements: movements.data?.filter(m => m.movement_type === 'out').reduce((s, m) => s + (m.quantity || 0), 0) || 0,
+        categories: categoryCount,
+        recentMovements: movements.length,
+        inMovements: movements
+          .filter((movement) => readString(movement, ["movementType", "movement_type"]) === "in")
+          .reduce((sum, movement) => sum + readNumber(movement, ["quantity"]), 0),
+        outMovements: movements
+          .filter((movement) => readString(movement, ["movementType", "movement_type"]) === "out")
+          .reduce((sum, movement) => sum + readNumber(movement, ["quantity"]), 0),
       };
     },
   });
@@ -68,11 +108,11 @@ export function InventoryDashboard() {
           </CardHeader>
           <CardContent>
             <div className="space-y-3">
-              {stats?.lowStockItems?.map((item: { name: string; quantity_on_hand: number; reorder_point: number }) => (
-                <div key={item.name} className="flex justify-between items-center">
-                  <span className="text-muted-foreground">{item.name}</span>
+              {stats?.lowStockItems?.map((item: Record<string, unknown>) => (
+                <div key={readString(item, ["id", "name"], "inventory-item")} className="flex justify-between items-center">
+                  <span className="text-muted-foreground">{readString(item, ["name"], "Unnamed Item")}</span>
                   <span className="font-medium text-destructive">
-                    {item.quantity_on_hand || 0} / {item.reorder_point || 0}
+                    {readNumber(item, ["quantityOnHand", "quantity_on_hand"])} / {readNumber(item, ["reorderPoint", "reorder_point"])}
                   </span>
                 </div>
               ))}

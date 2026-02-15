@@ -1,0 +1,48 @@
+rules_version = "2";
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function membershipPath(companyId) {
+      return /databases/(default)/documents/companyUsers/$(companyId + "_" + request.auth.uid);
+    }
+
+    function isCompanyMember(companyId) {
+      return isSignedIn()
+        && firestore.exists(membershipPath(companyId))
+        && firestore.get(membershipPath(companyId)).data.status == "active";
+    }
+
+    function isCompanyAdmin(companyId) {
+      return isCompanyMember(companyId)
+        && firestore.get(membershipPath(companyId)).data.role in ["super_admin", "admin"];
+    }
+
+    match /company-logos/{companyId}/{fileName} {
+      allow read: if isCompanyMember(companyId);
+      allow write: if isCompanyAdmin(companyId);
+    }
+
+    match /employee-files/{companyId}/{filePath=**} {
+      allow read: if isCompanyMember(companyId);
+      allow write: if isCompanyAdmin(companyId);
+    }
+
+    match /payslips/{companyId}/{filePath=**} {
+      allow read: if isCompanyMember(companyId);
+      allow write: if isCompanyAdmin(companyId);
+    }
+
+    match /attachments/{companyId}/{filePath=**} {
+      allow read: if isCompanyMember(companyId);
+      allow write: if isCompanyMember(companyId);
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -23,20 +22,42 @@ import {
 } from "@/components/ui/select";
 import { Download, Search, Shield, Clock } from "lucide-react";
 import { format } from "date-fns";
+import { useAuth } from "@/contexts/AuthContext";
+import { companyService } from "@/services/firebase";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { collection, getDocs, limit, query, where } from "firebase/firestore";
+import { firestore } from "@/integrations/firebase/client";
 
 interface AuditLog {
   id: string;
-  user_id: string | null;
+  userId: string | null;
   action: string;
-  table_name: string;
-  record_id: string | null;
-  old_values: Record<string, unknown> | null;
-  new_values: Record<string, unknown> | null;
-  ip_address: string | null;
-  created_at: string;
+  tableName: string;
+  recordId: string | null;
+  oldValues: Record<string, unknown> | null;
+  newValues: Record<string, unknown> | null;
+  ipAddress: string | null;
+  createdAt: string;
 }
 
+const toDateTimeString = (value: unknown): string => {
+  if (!value) return new Date(0).toISOString();
+  if (typeof value === "string") {
+    const asDate = new Date(value);
+    return Number.isNaN(asDate.getTime()) ? new Date(0).toISOString() : asDate.toISOString();
+  }
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === "object" && value !== null && "toDate" in value) {
+    const timestamp = value as { toDate?: () => Date };
+    if (typeof timestamp.toDate === "function") {
+      return timestamp.toDate().toISOString();
+    }
+  }
+  return new Date(0).toISOString();
+};
+
 export default function AuditLogs() {
+  const { user } = useAuth();
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedTable, setSelectedTable] = useState<string>("all");
   const [selectedAction, setSelectedAction] = useState<string>("all");
@@ -48,54 +69,76 @@ export default function AuditLogs() {
   const [endDate, setEndDate] = useState(new Date().toISOString().split("T")[0]);
 
   const { data: logs = [], isLoading } = useQuery({
-    queryKey: ["audit-logs", startDate, endDate, selectedTable, selectedAction],
+    queryKey: ["audit-logs", user?.id],
     queryFn: async () => {
-      let query = supabase
-        .from("audit_logs")
-        .select("*")
-        .gte("created_at", startDate)
-        .lte("created_at", endDate + "T23:59:59")
-        .order("created_at", { ascending: false })
-        .limit(500);
+      if (!user) return [] as AuditLog[];
 
-      if (selectedTable !== "all") {
-        query = query.eq("table_name", selectedTable);
-      }
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      if (!membership?.companyId) return [] as AuditLog[];
 
-      if (selectedAction !== "all") {
-        query = query.eq("action", selectedAction);
-      }
+      const logsRef = collection(firestore, COLLECTIONS.AUDIT_LOGS);
+      const snapshot = await getDocs(
+        query(logsRef, where("companyId", "==", membership.companyId), limit(1000)),
+      );
 
-      const { data, error } = await query;
-      if (error) throw error;
-      return data as AuditLog[];
+      return snapshot.docs
+        .map((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          const details = (row.details as Record<string, unknown> | null) || null;
+
+          return {
+            id: docSnap.id,
+            userId: (row.actorUid ?? row.userId ?? row.user_id ?? null) as string | null,
+            action: String(row.action ?? "unknown"),
+            tableName: String(
+              row.tableName ??
+                row.table_name ??
+                details?.sourceCollection ??
+                details?.sourceType ??
+                "-",
+            ),
+            recordId: (row.recordId ?? row.record_id ?? details?.sourceId ?? null) as string | null,
+            oldValues: (row.oldValues ?? row.old_values ?? null) as Record<string, unknown> | null,
+            newValues: (row.newValues ?? row.new_values ?? details ?? null) as Record<string, unknown> | null,
+            ipAddress: (row.ipAddress ?? row.ip_address ?? null) as string | null,
+            createdAt: toDateTimeString(row.createdAt ?? row.created_at),
+          } satisfies AuditLog;
+        })
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     },
+    enabled: Boolean(user),
   });
 
   const filteredLogs = logs.filter((log) => {
+    const createdDate = log.createdAt.slice(0, 10);
+    if (createdDate < startDate || createdDate > endDate) return false;
+    if (selectedTable !== "all" && log.tableName !== selectedTable) return false;
+    if (selectedAction !== "all" && log.action !== selectedAction) return false;
+
     if (!searchTerm) return true;
     const searchLower = searchTerm.toLowerCase();
+
     return (
       log.action.toLowerCase().includes(searchLower) ||
-      log.table_name.toLowerCase().includes(searchLower) ||
-      log.record_id?.toLowerCase().includes(searchLower)
+      log.tableName.toLowerCase().includes(searchLower) ||
+      log.recordId?.toLowerCase().includes(searchLower)
     );
   });
 
-  const uniqueTables = Array.from(new Set(logs.map((l) => l.table_name)));
-  const uniqueActions = Array.from(new Set(logs.map((l) => l.action)));
+  const uniqueTables = Array.from(new Set(logs.map((l) => l.tableName))).sort();
+  const uniqueActions = Array.from(new Set(logs.map((l) => l.action))).sort();
 
   const getActionBadgeVariant = (action: string) => {
     switch (action.toLowerCase()) {
       case "create":
       case "insert":
-        return "default";
+        return "default" as const;
       case "update":
-        return "secondary";
+        return "secondary" as const;
       case "delete":
-        return "destructive";
+        return "destructive" as const;
       default:
-        return "outline";
+        return "outline" as const;
     }
   };
 
@@ -104,11 +147,11 @@ export default function AuditLogs() {
 
     const headers = ["Timestamp", "Action", "Table", "Record ID", "User ID"];
     const rows = filteredLogs.map((log) => [
-      format(new Date(log.created_at), "yyyy-MM-dd HH:mm:ss"),
+      format(new Date(log.createdAt), "yyyy-MM-dd HH:mm:ss"),
       log.action,
-      log.table_name,
-      log.record_id || "",
-      log.user_id || "",
+      log.tableName,
+      log.recordId || "",
+      log.userId || "",
     ]);
 
     const csv = [headers, ...rows].map((row) => row.join(",")).join("\n");
@@ -118,6 +161,7 @@ export default function AuditLogs() {
     a.href = url;
     a.download = `audit-logs-${startDate}-to-${endDate}.csv`;
     a.click();
+    window.URL.revokeObjectURL(url);
   };
 
   if (isLoading) {
@@ -191,19 +235,11 @@ export default function AuditLogs() {
             </div>
             <div className="space-y-2">
               <Label>Start Date</Label>
-              <Input
-                type="date"
-                value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
-              />
+              <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
             </div>
             <div className="space-y-2">
               <Label>End Date</Label>
-              <Input
-                type="date"
-                value={endDate}
-                onChange={(e) => setEndDate(e.target.value)}
-              />
+              <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
             </div>
           </div>
         </CardContent>
@@ -234,25 +270,21 @@ export default function AuditLogs() {
               {filteredLogs.map((log) => (
                 <TableRow key={log.id}>
                   <TableCell className="whitespace-nowrap">
-                    {format(new Date(log.created_at), "yyyy-MM-dd HH:mm:ss")}
+                    {format(new Date(log.createdAt), "yyyy-MM-dd HH:mm:ss")}
                   </TableCell>
                   <TableCell>
-                    <Badge variant={getActionBadgeVariant(log.action)}>
-                      {log.action.toUpperCase()}
-                    </Badge>
+                    <Badge variant={getActionBadgeVariant(log.action)}>{log.action.toUpperCase()}</Badge>
                   </TableCell>
-                  <TableCell className="font-mono text-sm">{log.table_name}</TableCell>
+                  <TableCell className="font-mono text-sm">{log.tableName}</TableCell>
                   <TableCell className="font-mono text-xs text-muted-foreground">
-                    {log.record_id?.slice(0, 8)}...
+                    {log.recordId ? `${log.recordId.slice(0, 8)}...` : "-"}
                   </TableCell>
                   <TableCell className="max-w-xs">
-                    {log.new_values && (
+                    {log.newValues && (
                       <details className="cursor-pointer">
-                        <summary className="text-sm text-muted-foreground">
-                          View changes
-                        </summary>
+                        <summary className="text-sm text-muted-foreground">View changes</summary>
                         <pre className="text-xs mt-2 p-2 bg-muted rounded overflow-auto max-h-32">
-                          {JSON.stringify(log.new_values, null, 2)}
+                          {JSON.stringify(log.newValues, null, 2)}
                         </pre>
                       </details>
                     )}

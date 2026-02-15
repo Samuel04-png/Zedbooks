@@ -1,29 +1,56 @@
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DollarSign, FileText, TrendingUp, TrendingDown, CreditCard, Building } from "lucide-react";
 import { formatZMW } from "@/utils/zambianTaxCalculations";
+import { useAuth } from "@/contexts/AuthContext";
+import { dashboardService } from "@/services/firebase";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { readNumber, readString } from "@/components/dashboard/dashboardDataUtils";
 
 export function AccountantDashboard() {
+  const { user } = useAuth();
+
   const { data: stats } = useQuery({
-    queryKey: ["accountant-dashboard-stats"],
+    queryKey: ["accountant-dashboard-stats", user?.id],
+    enabled: Boolean(user),
     queryFn: async () => {
-      const [invoices, expenses, bills, bankAccounts] = await Promise.all([
-        supabase.from("invoices").select("total, status, vat_amount"),
-        supabase.from("expenses").select("amount, category"),
-        supabase.from("bills").select("total, status"),
-        supabase.from("bank_accounts").select("current_balance, account_name"),
-      ]);
+      if (!user) {
+        return {
+          totalRevenue: 0,
+          outstandingReceivables: 0,
+          vatCollected: 0,
+          totalExpenses: 0,
+          unpaidBills: 0,
+          cashBalance: 0,
+          pendingInvoices: 0,
+          bankAccounts: [] as Array<Record<string, unknown>>,
+        };
+      }
+
+      const { invoices, expenses, bills, bankAccounts } = await dashboardService.runQueries(user.id, {
+        invoices: { collectionName: COLLECTIONS.INVOICES },
+        expenses: { collectionName: COLLECTIONS.EXPENSES },
+        bills: { collectionName: COLLECTIONS.BILLS },
+        bankAccounts: { collectionName: COLLECTIONS.BANK_ACCOUNTS },
+      });
 
       return {
-        totalRevenue: invoices.data?.filter(i => i.status === 'paid').reduce((s, i) => s + (i.total || 0), 0) || 0,
-        outstandingReceivables: invoices.data?.filter(i => i.status !== 'paid').reduce((s, i) => s + (i.total || 0), 0) || 0,
-        vatCollected: invoices.data?.filter(i => i.status === 'paid').reduce((s, i) => s + (i.vat_amount || 0), 0) || 0,
-        totalExpenses: expenses.data?.reduce((s, e) => s + (e.amount || 0), 0) || 0,
-        unpaidBills: bills.data?.filter(b => b.status !== 'paid').reduce((s, b) => s + (b.total || 0), 0) || 0,
-        cashBalance: bankAccounts.data?.reduce((s, a) => s + (a.current_balance || 0), 0) || 0,
-        pendingInvoices: invoices.data?.filter(i => i.status === 'pending').length || 0,
-        bankAccounts: bankAccounts.data || [],
+        totalRevenue: invoices
+          .filter((i) => readString(i, ["status"]) === "paid")
+          .reduce((sum, i) => sum + readNumber(i, ["total", "grandTotal", "amount"]), 0),
+        outstandingReceivables: invoices
+          .filter((i) => readString(i, ["status"]) !== "paid")
+          .reduce((sum, i) => sum + readNumber(i, ["total", "grandTotal", "amount"]), 0),
+        vatCollected: invoices
+          .filter((i) => readString(i, ["status"]) === "paid")
+          .reduce((sum, i) => sum + readNumber(i, ["vatAmount", "vat_amount"]), 0),
+        totalExpenses: expenses.reduce((sum, e) => sum + readNumber(e, ["amount", "total"]), 0),
+        unpaidBills: bills
+          .filter((b) => readString(b, ["status"]) !== "paid")
+          .reduce((sum, b) => sum + readNumber(b, ["total", "amount"]), 0),
+        cashBalance: bankAccounts.reduce((sum, a) => sum + readNumber(a, ["currentBalance", "current_balance"]), 0),
+        pendingInvoices: invoices.filter((i) => readString(i, ["status"]) === "pending").length,
+        bankAccounts,
       };
     },
   });
@@ -96,10 +123,10 @@ export function AccountantDashboard() {
           </CardHeader>
           <CardContent>
             <div className="space-y-3">
-              {stats?.bankAccounts?.map((account: { account_name: string; current_balance: number }) => (
-                <div key={account.account_name} className="flex justify-between items-center">
-                  <span className="text-muted-foreground">{account.account_name}</span>
-                  <span className="font-medium">{formatZMW(account.current_balance || 0)}</span>
+              {stats?.bankAccounts?.map((account: Record<string, unknown>) => (
+                <div key={readString(account, ["accountName", "account_name", "id"], "bank-account")} className="flex justify-between items-center">
+                  <span className="text-muted-foreground">{readString(account, ["accountName", "account_name"], "Bank Account")}</span>
+                  <span className="font-medium">{formatZMW(readNumber(account, ["currentBalance", "current_balance"]))}</span>
                 </div>
               ))}
               {(!stats?.bankAccounts || stats.bankAccounts.length === 0) && (

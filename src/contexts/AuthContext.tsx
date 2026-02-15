@@ -1,12 +1,28 @@
 import { createContext, useContext, useEffect, useState, useCallback, ReactNode } from "react";
-import { Session, User, AuthError } from "@supabase/supabase-js";
-import { supabase } from "@/integrations/supabase/client";
-import { useNavigate } from "react-router-dom";
+import type { User as FirebaseUser } from "firebase/auth";
 import { toast } from "sonner";
+import { isFirebaseConfigured } from "@/integrations/firebase/client";
+import { authService } from "@/services/firebase/authService";
+
+export interface AuthSession {
+  userId: string;
+  email: string | null;
+  emailVerified: boolean;
+  idToken: string | null;
+}
+
+export interface AuthUser {
+  id: string;
+  uid: string;
+  email: string | null;
+  displayName: string | null;
+  phoneNumber: string | null;
+  emailVerified: boolean;
+}
 
 interface AuthContextType {
-  session: Session | null;
-  user: User | null;
+  session: AuthSession | null;
+  user: AuthUser | null;
   isLoading: boolean;
   isAuthenticated: boolean;
   signOut: () => Promise<void>;
@@ -19,132 +35,125 @@ interface AuthProviderProps {
   children: ReactNode;
 }
 
+const mapFirebaseUser = (user: FirebaseUser): AuthUser => ({
+  id: user.uid,
+  uid: user.uid,
+  email: user.email,
+  displayName: user.displayName,
+  phoneNumber: user.phoneNumber,
+  emailVerified: user.emailVerified,
+});
+
+const buildSession = async (user: FirebaseUser): Promise<AuthSession> => ({
+  userId: user.uid,
+  email: user.email,
+  emailVerified: user.emailVerified,
+  idToken: await user.getIdToken(),
+});
+
 export function AuthProvider({ children }: AuthProviderProps) {
-  const [session, setSession] = useState<Session | null>(null);
-  const [user, setUser] = useState<User | null>(null);
+  const [session, setSession] = useState<AuthSession | null>(null);
+  const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  const handleAuthError = useCallback((error: AuthError) => {
-    console.error("Auth error:", error);
-    
-    // Handle specific error types
-    if (error.message?.includes("refresh_token_not_found") || 
-        error.message?.includes("Invalid Refresh Token") ||
-        error.status === 401) {
-      // Token expired or invalid - sign out cleanly
-      setSession(null);
-      setUser(null);
-      toast.error("Session expired. Please sign in again.");
-    }
+  const clearAuthState = useCallback(() => {
+    setSession(null);
+    setUser(null);
   }, []);
 
   const refreshSession = useCallback(async () => {
+    if (!isFirebaseConfigured) {
+      clearAuthState();
+      return;
+    }
+
     try {
-      const { data, error } = await supabase.auth.refreshSession();
-      
-      if (error) {
-        handleAuthError(error);
+      const currentUser = authService.getCurrentUser();
+      if (!currentUser) {
+        clearAuthState();
         return;
       }
-      
-      if (data.session) {
-        setSession(data.session);
-        setUser(data.session.user);
+
+      await currentUser.reload();
+      const refreshedUser = authService.getCurrentUser();
+
+      if (!refreshedUser) {
+        clearAuthState();
+        return;
       }
+
+      setUser(mapFirebaseUser(refreshedUser));
+      setSession(await buildSession(refreshedUser));
     } catch (error) {
-      console.error("Failed to refresh session:", error);
+      clearAuthState();
+      console.error("Failed to refresh Firebase session:", error);
     }
-  }, [handleAuthError]);
+  }, [clearAuthState]);
 
   const signOut = useCallback(async () => {
     try {
-      const { error } = await supabase.auth.signOut();
-      if (error) throw error;
-      
-      setSession(null);
-      setUser(null);
-      toast.success("Signed out successfully");
+      if (isFirebaseConfigured) {
+        await authService.logout();
+      }
     } catch (error) {
-      console.error("Sign out error:", error);
-      // Force clear local state even if API fails
-      setSession(null);
-      setUser(null);
+      console.error("Firebase sign out failed:", error);
+    } finally {
+      clearAuthState();
+      toast.success("Signed out successfully");
     }
-  }, []);
+  }, [clearAuthState]);
 
   useEffect(() => {
     let mounted = true;
-    
-    // Set up auth state listener FIRST (before getSession)
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, currentSession) => {
-        if (!mounted) return;
-        
-        switch (event) {
-          case "SIGNED_IN":
-          case "TOKEN_REFRESHED":
-            setSession(currentSession);
-            setUser(currentSession?.user ?? null);
-            break;
-            
-          case "SIGNED_OUT":
-            setSession(null);
-            setUser(null);
-            break;
-            
-          case "USER_UPDATED":
-            setUser(currentSession?.user ?? null);
-            break;
-            
-          case "PASSWORD_RECOVERY":
-            // Handle password recovery event
-            break;
-            
-          default:
-            if (currentSession) {
-              setSession(currentSession);
-              setUser(currentSession.user);
-            }
-        }
-        
-        setIsLoading(false);
-      }
-    );
 
-    // Then get initial session
-    supabase.auth.getSession().then(({ data: { session: initialSession }, error }) => {
+    if (!isFirebaseConfigured) {
+      setIsLoading(false);
+      return;
+    }
+
+    const initialUser = authService.getCurrentUser();
+    if (initialUser) {
+      setUser(mapFirebaseUser(initialUser));
+      buildSession(initialUser)
+        .then((nextSession) => {
+          if (mounted) {
+            setSession(nextSession);
+          }
+        })
+        .finally(() => {
+          if (mounted) {
+            setIsLoading(false);
+          }
+        });
+    } else {
+      setIsLoading(false);
+    }
+
+    const subscription = authService.onAuthStateChanged(async (nextUser) => {
       if (!mounted) return;
-      
-      if (error) {
-        handleAuthError(error);
+
+      if (!nextUser) {
+        clearAuthState();
         setIsLoading(false);
         return;
       }
-      
-      setSession(initialSession);
-      setUser(initialSession?.user ?? null);
+
+      setUser(mapFirebaseUser(nextUser));
+      setSession(await buildSession(nextUser));
       setIsLoading(false);
     });
-
-    // Set up token refresh interval (every 4 minutes for 5-min token lifetime)
-    const refreshInterval = setInterval(() => {
-      if (session) {
-        refreshSession();
-      }
-    }, 4 * 60 * 1000);
 
     return () => {
       mounted = false;
       subscription.unsubscribe();
-      clearInterval(refreshInterval);
     };
-  }, [handleAuthError, refreshSession]);
+  }, [clearAuthState]);
 
   const value: AuthContextType = {
     session,
     user,
     isLoading,
-    isAuthenticated: !!session,
+    isAuthenticated: Boolean(session && user),
     signOut,
     refreshSession,
   };

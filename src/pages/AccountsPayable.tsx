@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -19,8 +18,46 @@ import { format, differenceInDays, isPast } from "date-fns";
 import { exportToCSV } from "@/utils/exportToExcel";
 import { ImportDialog } from "@/components/shared/ImportDialog";
 import { toast } from "sonner";
+import { useAuth } from "@/contexts/AuthContext";
+import { companyService } from "@/services/firebase";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { addDoc, collection, documentId, getDocs, query, serverTimestamp, where } from "firebase/firestore";
+import { firestore } from "@/integrations/firebase/client";
+
+interface BillRecord {
+  id: string;
+  bill_number: string;
+  bill_date: string;
+  due_date: string | null;
+  total: number;
+  status: string;
+  vendor_id: string | null;
+  vendors: { name: string } | null;
+}
+
+const chunk = <T,>(items: T[], size: number): T[][] => {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+};
+
+const toDateString = (value: unknown): string => {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  if (typeof value === "object" && value !== null && "toDate" in value) {
+    const ts = value as { toDate?: () => Date };
+    if (typeof ts.toDate === "function") {
+      return ts.toDate().toISOString().slice(0, 10);
+    }
+  }
+  return "";
+};
 
 export default function AccountsPayable() {
+  const { user } = useAuth();
   const [startDate, setStartDate] = useState(() => {
     const date = new Date();
     date.setMonth(date.getMonth() - 3);
@@ -29,30 +66,61 @@ export default function AccountsPayable() {
   const [endDate, setEndDate] = useState(new Date().toISOString().split("T")[0]);
   const [showImportDialog, setShowImportDialog] = useState(false);
 
-  const { data: user } = useQuery({
-    queryKey: ["current-user"],
-    queryFn: async () => {
-      const { data } = await supabase.auth.getUser();
-      return data.user;
-    },
-  });
-
   const { data: bills = [], isLoading, refetch } = useQuery({
-    queryKey: ["accounts-payable", startDate, endDate],
+    queryKey: ["accounts-payable", startDate, endDate, user?.id],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("bills")
-        .select(`
-          *,
-          vendors (name)
-        `)
-        .gte("bill_date", startDate)
-        .lte("bill_date", endDate)
-        .order("due_date", { ascending: true });
-      if (error) throw error;
-      return data;
+      if (!user) return [] as BillRecord[];
+
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      if (!membership?.companyId) return [] as BillRecord[];
+
+      const billsRef = collection(firestore, COLLECTIONS.BILLS);
+      const billSnapshot = await getDocs(
+        query(billsRef, where("companyId", "==", membership.companyId)),
+      );
+
+      const mappedBills = billSnapshot.docs
+        .map((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          return {
+            id: docSnap.id,
+            bill_number: String(row.billNumber ?? row.bill_number ?? ""),
+            bill_date: toDateString(row.billDate ?? row.bill_date),
+            due_date: toDateString(row.dueDate ?? row.due_date) || null,
+            total: Number(row.total ?? 0),
+            status: String(row.status ?? "pending"),
+            vendor_id: (row.vendorId ?? row.vendor_id ?? null) as string | null,
+            vendors: null,
+          } satisfies BillRecord;
+        })
+        .filter((bill) => bill.bill_date >= startDate && bill.bill_date <= endDate);
+
+      const vendorIds = Array.from(new Set(mappedBills.map((bill) => bill.vendor_id).filter(Boolean))) as string[];
+      const vendorNameById = new Map<string, string>();
+
+      if (vendorIds.length > 0) {
+        const vendorsRef = collection(firestore, COLLECTIONS.VENDORS);
+        const vendorChunks = chunk(vendorIds, 30);
+        const snapshots = await Promise.all(
+          vendorChunks.map((ids) => getDocs(query(vendorsRef, where(documentId(), "in", ids)))),
+        );
+
+        snapshots.forEach((snapshot) => {
+          snapshot.docs.forEach((docSnap) => {
+            const row = docSnap.data() as Record<string, unknown>;
+            vendorNameById.set(docSnap.id, String(row.name ?? "-"));
+          });
+        });
+      }
+
+      return mappedBills
+        .map((bill) => ({
+          ...bill,
+          vendors: bill.vendor_id ? { name: vendorNameById.get(bill.vendor_id) || "-" } : null,
+        }))
+        .sort((a, b) => String(a.due_date || "").localeCompare(String(b.due_date || "")));
     },
-    enabled: !!user,
+    enabled: Boolean(user),
   });
 
   const formatCurrency = (amount: number) => {
@@ -62,19 +130,18 @@ export default function AccountsPayable() {
     }).format(amount);
   };
 
-  // Categorize bills
-  const unpaidBills = bills.filter((b: any) => b.status !== "paid");
-  const overdueBills = unpaidBills.filter((b: any) => b.due_date && isPast(new Date(b.due_date)));
-  const dueSoon = unpaidBills.filter((b: any) => {
+  const unpaidBills = bills.filter((b) => b.status !== "paid");
+  const overdueBills = unpaidBills.filter((b) => b.due_date && isPast(new Date(b.due_date)));
+  const dueSoon = unpaidBills.filter((b) => {
     if (!b.due_date) return false;
     const days = differenceInDays(new Date(b.due_date), new Date());
     return days >= 0 && days <= 7;
   });
-  const paidBills = bills.filter((b: any) => b.status === "paid");
+  const paidBills = bills.filter((b) => b.status === "paid");
 
-  const totalOutstanding = unpaidBills.reduce((sum: number, b: any) => sum + (b.total || 0), 0);
-  const totalOverdue = overdueBills.reduce((sum: number, b: any) => sum + (b.total || 0), 0);
-  const totalPaid = paidBills.reduce((sum: number, b: any) => sum + (b.total || 0), 0);
+  const totalOutstanding = unpaidBills.reduce((sum, b) => sum + (b.total || 0), 0);
+  const totalOverdue = overdueBills.reduce((sum, b) => sum + (b.total || 0), 0);
+  const totalPaid = paidBills.reduce((sum, b) => sum + (b.total || 0), 0);
 
   const exportReport = () => {
     const columns = [
@@ -82,9 +149,9 @@ export default function AccountsPayable() {
       { header: "Bill Date", key: "bill_date" },
       { header: "Due Date", key: "due_date" },
       { header: "Amount", key: "total" },
-      { header: "Status", key: "status" }
+      { header: "Status", key: "status" },
     ];
-    exportToCSV(bills as any, columns, `accounts-payable-${startDate}-to-${endDate}`);
+    exportToCSV(bills as Record<string, unknown>[], columns, `accounts-payable-${startDate}-to-${endDate}`);
   };
 
   const importColumns = [
@@ -93,23 +160,31 @@ export default function AccountsPayable() {
     { key: "bill_date", header: "Bill Date (YYYY-MM-DD)", required: true },
     { key: "due_date", header: "Due Date (YYYY-MM-DD)", required: false },
     { key: "amount", header: "Amount", required: true },
-    { key: "description", header: "Description", required: false }
+    { key: "description", header: "Description", required: false },
   ];
 
-  const handleImport = async (data: any[]) => {
+  const handleImport = async (data: Record<string, unknown>[]) => {
+    if (!user) throw new Error("You must be logged in");
+
+    const membership = await companyService.getPrimaryMembershipByUser(user.id);
+    if (!membership?.companyId) throw new Error("No company profile found for your account");
+
     for (const row of data) {
-      const { error } = await supabase.from("bills").insert({
-        bill_number: row.bill_number,
-        bill_date: row.bill_date,
-        due_date: row.due_date || null,
-        subtotal: parseFloat(row.amount) || 0,
-        total: parseFloat(row.amount) || 0,
-        description: row.description || null,
+      await addDoc(collection(firestore, COLLECTIONS.BILLS), {
+        companyId: membership.companyId,
+        userId: user.id,
+        billNumber: String(row.bill_number || ""),
+        billDate: String(row.bill_date || ""),
+        dueDate: (row.due_date as string) || null,
+        subtotal: Number(row.amount) || 0,
+        total: Number(row.amount) || 0,
+        description: (row.description as string) || null,
         status: "pending",
-        user_id: user?.id,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
       });
-      if (error) throw error;
     }
+
     refetch();
     toast.success("Bills imported successfully");
   };
@@ -145,19 +220,11 @@ export default function AccountsPayable() {
           <div className="flex gap-4 items-end">
             <div className="space-y-2">
               <Label>Start Date</Label>
-              <Input
-                type="date"
-                value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
-              />
+              <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
             </div>
             <div className="space-y-2">
               <Label>End Date</Label>
-              <Input
-                type="date"
-                value={endDate}
-                onChange={(e) => setEndDate(e.target.value)}
-              />
+              <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
             </div>
           </div>
         </CardContent>
@@ -213,7 +280,6 @@ export default function AccountsPayable() {
         </Card>
       </div>
 
-      {/* Aging Summary */}
       <Card>
         <CardHeader>
           <CardTitle>Aging Summary</CardTitle>
@@ -231,13 +297,13 @@ export default function AccountsPayable() {
               <TableRow>
                 <TableCell>Current (not due)</TableCell>
                 <TableCell className="text-right">
-                  {unpaidBills.filter((b: any) => !b.due_date || differenceInDays(new Date(b.due_date), new Date()) > 7).length}
+                  {unpaidBills.filter((b) => !b.due_date || differenceInDays(new Date(b.due_date), new Date()) > 7).length}
                 </TableCell>
                 <TableCell className="text-right">
                   {formatCurrency(
                     unpaidBills
-                      .filter((b: any) => !b.due_date || differenceInDays(new Date(b.due_date), new Date()) > 7)
-                      .reduce((sum: number, b: any) => sum + (b.total || 0), 0)
+                      .filter((b) => !b.due_date || differenceInDays(new Date(b.due_date), new Date()) > 7)
+                      .reduce((sum, b) => sum + (b.total || 0), 0),
                   )}
                 </TableCell>
               </TableRow>
@@ -245,32 +311,32 @@ export default function AccountsPayable() {
                 <TableCell>Due within 7 days</TableCell>
                 <TableCell className="text-right">{dueSoon.length}</TableCell>
                 <TableCell className="text-right text-warning">
-                  {formatCurrency(dueSoon.reduce((sum: number, b: any) => sum + (b.total || 0), 0))}
+                  {formatCurrency(dueSoon.reduce((sum, b) => sum + (b.total || 0), 0))}
                 </TableCell>
               </TableRow>
               <TableRow>
                 <TableCell>1-30 days overdue</TableCell>
                 <TableCell className="text-right">
-                  {overdueBills.filter((b: any) => differenceInDays(new Date(), new Date(b.due_date)) <= 30).length}
+                  {overdueBills.filter((b) => differenceInDays(new Date(), new Date(b.due_date || "")) <= 30).length}
                 </TableCell>
                 <TableCell className="text-right text-destructive">
                   {formatCurrency(
                     overdueBills
-                      .filter((b: any) => differenceInDays(new Date(), new Date(b.due_date)) <= 30)
-                      .reduce((sum: number, b: any) => sum + (b.total || 0), 0)
+                      .filter((b) => differenceInDays(new Date(), new Date(b.due_date || "")) <= 30)
+                      .reduce((sum, b) => sum + (b.total || 0), 0),
                   )}
                 </TableCell>
               </TableRow>
               <TableRow>
                 <TableCell>Over 30 days overdue</TableCell>
                 <TableCell className="text-right">
-                  {overdueBills.filter((b: any) => differenceInDays(new Date(), new Date(b.due_date)) > 30).length}
+                  {overdueBills.filter((b) => differenceInDays(new Date(), new Date(b.due_date || "")) > 30).length}
                 </TableCell>
                 <TableCell className="text-right text-destructive font-bold">
                   {formatCurrency(
                     overdueBills
-                      .filter((b: any) => differenceInDays(new Date(), new Date(b.due_date)) > 30)
-                      .reduce((sum: number, b: any) => sum + (b.total || 0), 0)
+                      .filter((b) => differenceInDays(new Date(), new Date(b.due_date || "")) > 30)
+                      .reduce((sum, b) => sum + (b.total || 0), 0),
                   )}
                 </TableCell>
               </TableRow>
@@ -279,7 +345,6 @@ export default function AccountsPayable() {
         </CardContent>
       </Card>
 
-      {/* Detail Table */}
       <Card>
         <CardHeader>
           <CardTitle>All Bills</CardTitle>
@@ -298,18 +363,17 @@ export default function AccountsPayable() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {bills.map((bill: any) => {
-                const daysOverdue = bill.due_date && bill.status !== "paid"
-                  ? Math.max(0, differenceInDays(new Date(), new Date(bill.due_date)))
-                  : 0;
+              {bills.map((bill) => {
+                const daysOverdue =
+                  bill.due_date && bill.status !== "paid"
+                    ? Math.max(0, differenceInDays(new Date(), new Date(bill.due_date)))
+                    : 0;
                 return (
                   <TableRow key={bill.id}>
                     <TableCell className="font-medium">{bill.bill_number}</TableCell>
                     <TableCell>{bill.vendors?.name || "-"}</TableCell>
                     <TableCell>{format(new Date(bill.bill_date), "dd MMM yyyy")}</TableCell>
-                    <TableCell>
-                      {bill.due_date ? format(new Date(bill.due_date), "dd MMM yyyy") : "-"}
-                    </TableCell>
+                    <TableCell>{bill.due_date ? format(new Date(bill.due_date), "dd MMM yyyy") : "-"}</TableCell>
                     <TableCell className="text-right">{formatCurrency(bill.total)}</TableCell>
                     <TableCell>
                       <Badge
@@ -317,18 +381,14 @@ export default function AccountsPayable() {
                           bill.status === "paid"
                             ? "default"
                             : daysOverdue > 0
-                            ? "destructive"
-                            : "secondary"
+                              ? "destructive"
+                              : "secondary"
                         }
                       >
                         {bill.status}
                       </Badge>
                     </TableCell>
-                    <TableCell>
-                      {daysOverdue > 0 && (
-                        <span className="text-destructive font-medium">{daysOverdue} days</span>
-                      )}
-                    </TableCell>
+                    <TableCell>{bill.status === "paid" ? "-" : daysOverdue > 0 ? `${daysOverdue} days` : "Current"}</TableCell>
                   </TableRow>
                 );
               })}

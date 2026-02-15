@@ -1,61 +1,92 @@
-import { useState, useRef } from "react";
-import { supabase } from "@/integrations/supabase/client";
+import { useEffect, useState, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { Upload, Building2, Loader2 } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useAuth } from "@/contexts/AuthContext";
+import { companyService, storageService } from "@/services/firebase";
+import { isFirebaseConfigured } from "@/integrations/firebase/client";
 
-export function CompanyLogoUpload() {
+interface CompanyLogoUploadProps {
+  onUploaded?: (logoUrl: string | null) => void;
+}
+
+interface CompanyLogoSettings {
+  companyId: string;
+  companyName: string;
+  logoUrl: string | null;
+}
+
+export function CompanyLogoUpload({ onUploaded }: CompanyLogoUploadProps) {
   const [isUploading, setIsUploading] = useState(false);
+  const [companyNameInput, setCompanyNameInput] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const queryClient = useQueryClient();
+  const { user } = useAuth();
 
   const { data: settings } = useQuery({
-    queryKey: ["company-settings"],
-    queryFn: async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return null;
+    queryKey: ["company-settings", user?.id],
+    queryFn: async (): Promise<CompanyLogoSettings | null> => {
+      if (!user || !isFirebaseConfigured) return null;
 
-      const { data, error } = await supabase
-        .from("company_settings")
-        .select("*")
-        .eq("user_id", user.id)
-        .maybeSingle();
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      if (!membership) return null;
 
-      if (error) throw error;
-      return data;
+      const [company, companySettings] = await Promise.all([
+        companyService.getCompanyById(membership.companyId),
+        companyService.getCompanySettings(membership.companyId),
+      ]);
+
+      return {
+        companyId: membership.companyId,
+        companyName: companySettings?.companyName || company?.name || "My Organization",
+        logoUrl: companySettings?.logoUrl || company?.logoUrl || null,
+      };
     },
+    enabled: Boolean(user),
   });
 
   const updateMutation = useMutation({
-    mutationFn: async ({ logoUrl, companyName }: { logoUrl?: string; companyName?: string }) => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("Not authenticated");
+    mutationFn: async ({ logoUrl, companyName }: { logoUrl?: string | null; companyName?: string }) => {
+      if (!settings) throw new Error("No company linked to current user.");
 
-      const { error } = await supabase
-        .from("company_settings")
-        .upsert({
-          user_id: user.id,
-          logo_url: logoUrl || settings?.logo_url,
-          company_name: companyName || settings?.company_name || "My Organization",
-        });
-
-      if (error) throw error;
+      await companyService.updateCompanyBasics({
+        companyId: settings.companyId,
+        logoUrl,
+        name: companyName,
+      });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["company-settings"] });
+      queryClient.invalidateQueries({ queryKey: ["company"] });
       toast.success("Settings updated successfully");
     },
-    onError: () => {
-      toast.error("Failed to update settings");
+    onError: (error) => {
+      const message = error instanceof Error ? error.message : "Failed to update settings";
+      toast.error(message);
     },
   });
+
+  useEffect(() => {
+    if (onUploaded) {
+      onUploaded(settings?.logoUrl || null);
+    }
+  }, [onUploaded, settings?.logoUrl]);
+
+  useEffect(() => {
+    setCompanyNameInput(settings?.companyName || "");
+  }, [settings?.companyName]);
 
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
+
+    if (!settings) {
+      toast.error("No company linked to this user.");
+      return;
+    }
 
     if (!file.type.startsWith("image/")) {
       toast.error("Please upload an image file");
@@ -70,41 +101,29 @@ export function CompanyLogoUpload() {
     setIsUploading(true);
 
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("Not authenticated");
-
-      const fileExt = file.name.split(".").pop();
-      const fileName = `${user.id}/logo.${fileExt}`;
-
-      const { error: uploadError } = await supabase.storage
-        .from("company-logos")
-        .upload(fileName, file, { upsert: true });
-
-      if (uploadError) throw uploadError;
-
-      const { data: { publicUrl } } = supabase.storage
-        .from("company-logos")
-        .getPublicUrl(fileName);
-
-      await updateMutation.mutateAsync({ logoUrl: `${publicUrl}?t=${Date.now()}` });
+      const logoUrl = await storageService.uploadCompanyLogo(settings.companyId, file);
+      await updateMutation.mutateAsync({ logoUrl });
+      onUploaded?.(logoUrl);
     } catch (error) {
-      console.error(error);
-      toast.error("Failed to upload logo");
+      const message = error instanceof Error ? error.message : "Failed to upload logo";
+      toast.error(message);
     } finally {
       setIsUploading(false);
     }
+  };
+
+  const handleCompanyNameBlur = () => {
+    const trimmed = companyNameInput.trim();
+    if (!trimmed || !settings || trimmed === settings.companyName) return;
+    updateMutation.mutate({ companyName: trimmed });
   };
 
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-4">
         <div className="h-20 w-20 rounded-lg border-2 border-dashed border-border flex items-center justify-center overflow-hidden bg-muted">
-          {settings?.logo_url ? (
-            <img
-              src={settings.logo_url}
-              alt="Company Logo"
-              className="h-full w-full object-contain"
-            />
+          {settings?.logoUrl ? (
+            <img src={settings.logoUrl} alt="Company Logo" className="h-full w-full object-contain" />
           ) : (
             <Building2 className="h-8 w-8 text-muted-foreground" />
           )}
@@ -122,7 +141,7 @@ export function CompanyLogoUpload() {
             variant="outline"
             size="sm"
             onClick={() => fileInputRef.current?.click()}
-            disabled={isUploading}
+            disabled={isUploading || !settings}
           >
             {isUploading ? (
               <>
@@ -141,13 +160,11 @@ export function CompanyLogoUpload() {
       <div className="space-y-2">
         <Label>Company Name</Label>
         <Input
-          defaultValue={settings?.company_name || ""}
+          value={companyNameInput}
           placeholder="Enter company name"
-          onBlur={(e) => {
-            if (e.target.value && e.target.value !== settings?.company_name) {
-              updateMutation.mutate({ companyName: e.target.value });
-            }
-          }}
+          onChange={(e) => setCompanyNameInput(e.target.value)}
+          onBlur={handleCompanyNameBlur}
+          disabled={!settings}
         />
       </div>
     </div>

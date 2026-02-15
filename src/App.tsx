@@ -2,9 +2,11 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { Suspense, lazy } from "react";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { LoadingState } from "@/components/ui/LoadingState";
 import { AppLayout } from "./components/layout/AppLayout";
 import { ProtectedRoute } from "./components/layout/ProtectedRoute";
 import { RoleProtectedRoute } from "./components/layout/RoleProtectedRoute";
@@ -22,7 +24,6 @@ import PayrollDetail from "./pages/PayrollDetail";
 import Payslip from "./pages/Payslip";
 import PayrollApproval from "./pages/PayrollApproval";
 import Advances from "./pages/Advances";
-import PayrollReports from "./pages/PayrollReports";
 import ZRACompliance from "./pages/ZRACompliance";
 import TaxCalculator from "./pages/TaxCalculator";
 import Customers from "./pages/Customers";
@@ -40,11 +41,9 @@ import Inventory from "./pages/Inventory";
 import BankAccounts from "./pages/BankAccounts";
 import Reconciliation from "./pages/Reconciliation";
 import TimeTracking from "./pages/TimeTracking";
-import FinancialReports from "./pages/FinancialReports";
 import UserManagement from "./pages/UserManagement";
 import Projects from "./pages/Projects";
 import ProjectExpenses from "./pages/ProjectExpenses";
-import AuditLogs from "./pages/AuditLogs";
 import CompanySetup from "./pages/CompanySetup";
 import Landing from "./pages/Landing";
 import Donors from "./pages/Donors";
@@ -53,11 +52,15 @@ import AccountsReceivable from "./pages/AccountsReceivable";
 import FixedAssets from "./pages/FixedAssets";
 import AssetDepreciation from "./pages/AssetDepreciation";
 import FinancialPeriods from "./pages/FinancialPeriods";
-import JournalEntries from "./pages/JournalEntries";
-import ChartOfAccounts from "./pages/ChartOfAccounts";
 import EmployeePayrollSetupPage from "./pages/EmployeePayrollSetupPage";
 import PayrollSettings from "./pages/PayrollSettings";
 import Products from "./pages/Products";
+
+const FinancialReports = lazy(() => import("./pages/FinancialReports"));
+const PayrollReports = lazy(() => import("./pages/PayrollReports"));
+const AuditLogs = lazy(() => import("./pages/AuditLogs"));
+const JournalEntries = lazy(() => import("./pages/JournalEntries"));
+const ChartOfAccounts = lazy(() => import("./pages/ChartOfAccounts"));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -71,6 +74,12 @@ const queryClient = new QueryClient({
     },
   },
 });
+
+const lazyPageFallback = (
+  <div className="py-10">
+    <LoadingState message="Loading page..." />
+  </div>
+);
 
 const App = () => (
   <ErrorBoundary>
@@ -119,19 +128,19 @@ const App = () => (
               <Route path="/accounts-payable" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><AccountsPayable /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/accounts-receivable" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><AccountsReceivable /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/company-settings" element={<ProtectedRoute><AppLayout><RoleProtectedRoute allowedRoles={["super_admin", "admin"]}><CompanySettings /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
-              <Route path="/reports" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><FinancialReports /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
-              <Route path="/payroll-reports" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><PayrollReports /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+              <Route path="/reports" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><Suspense fallback={lazyPageFallback}><FinancialReports /></Suspense></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+              <Route path="/payroll-reports" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><Suspense fallback={lazyPageFallback}><PayrollReports /></Suspense></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/zra-compliance" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><ZRACompliance /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/tax-calculator" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><TaxCalculator /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/payroll-settings" element={<ProtectedRoute><AppLayout><RoleProtectedRoute allowedRoles={["super_admin", "admin"]}><PayrollSettings /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/settings" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><CompanySettings /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/users" element={<ProtectedRoute><AppLayout><RoleProtectedRoute allowedRoles={["super_admin", "admin"]}><UserManagement /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
-              <Route path="/audit-logs" element={<ProtectedRoute><AppLayout><RoleProtectedRoute allowedRoles={["super_admin", "admin", "auditor"]}><AuditLogs /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+              <Route path="/audit-logs" element={<ProtectedRoute><AppLayout><RoleProtectedRoute allowedRoles={["super_admin", "admin", "auditor"]}><Suspense fallback={lazyPageFallback}><AuditLogs /></Suspense></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/fixed-assets" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><FixedAssets /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/asset-depreciation" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><AssetDepreciation /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/financial-periods" element={<ProtectedRoute><AppLayout><RoleProtectedRoute allowedRoles={["super_admin", "admin", "accountant"]}><FinancialPeriods /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
-              <Route path="/journal-entries" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><JournalEntries /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
-              <Route path="/chart-of-accounts" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><ChartOfAccounts /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+              <Route path="/journal-entries" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><Suspense fallback={lazyPageFallback}><JournalEntries /></Suspense></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+              <Route path="/chart-of-accounts" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><Suspense fallback={lazyPageFallback}><ChartOfAccounts /></Suspense></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               
               {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
               <Route path="*" element={<NotFound />} />

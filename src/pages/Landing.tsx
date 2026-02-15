@@ -4,128 +4,94 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
   Users,
-  FileText,
-  DollarSign,
+  Briefcase,
+  Shield,
+  BarChart3,
   Check,
   ArrowRight,
-  Building2,
-  Calculator,
-  Shield,
-  Briefcase,
-  BarChart3,
-  ChevronRight,
   Play,
   Star,
+  Download,
+  Smartphone,
+  Laptop
 } from "lucide-react";
+import { useEffect, useState } from "react";
 
 const features = [
   {
     icon: Users,
-    title: "Employee Benefits",
-    description: "Comprehensive employee management with benefits tracking and compliance.",
-    color: "bg-orange-100 text-orange-600",
+    title: "Employee Management",
+    description: "Complete database with role-based access control and history tracking.",
+    className: "border-l-4 border-blue-500",
   },
   {
     icon: Briefcase,
-    title: "HR Admin and Payroll",
-    description: "Streamlined HR operations with integrated payroll processing.",
-    color: "bg-blue-100 text-blue-600",
+    title: "Payroll Processing",
+    description: "Automated calculations for PAYE, NAPSA, and NHIMA with one-click rendering.",
+    className: "border-l-4 border-indigo-500",
   },
   {
     icon: Shield,
-    title: "Risk Management",
-    description: "Built-in compliance and audit trails for peace of mind.",
-    color: "bg-green-100 text-green-600",
+    title: "Compliance & Audit",
+    description: "Built-in ZRA compliance rules and detailed audit logs for every action.",
+    className: "border-l-4 border-slate-500",
   },
   {
     icon: BarChart3,
-    title: "HR Support and Technology",
-    description: "Advanced reporting and analytics for data-driven decisions.",
-    color: "bg-purple-100 text-purple-600",
+    title: "Real-time Analytics",
+    description: "Live financial dashboards and customizable reports for better decision making.",
+    className: "border-l-4 border-sky-500",
   },
-];
-
-const pricingPlans = [
-  {
-    name: "Basic Plan",
-    description: "Suitable for starter business",
-    price: "K299",
-    period: "/month",
-    features: [
-      "Up to 5 employees",
-      "Basic payroll processing",
-      "Invoicing & estimates",
-      "Email support",
-    ],
-    popular: false,
-    buttonText: "Choose Plan",
-    buttonStyle: "outline" as const,
-  },
-  {
-    name: "Enterprise Plan",
-    description: "Best plan for mid-sized businesses",
-    price: "K799",
-    period: "/month",
-    features: [
-      "Got a Basic Plans",
-      "Access All Features",
-      "Get 1 TB Cloud Storage",
-      "Priority support",
-    ],
-    popular: true,
-    buttonText: "Choose Plan",
-    buttonStyle: "default" as const,
-  },
-];
-
-const stats = [
-  { value: "500+", label: "Active Businesses" },
-  { value: "50K+", label: "Employees Managed" },
-  { value: "99.9%", label: "Uptime" },
-  { value: "24/7", label: "Support" },
 ];
 
 export default function Landing() {
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+
+  useEffect(() => {
+    window.addEventListener("beforeinstallprompt", (e) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+    });
+  }, []);
+
+  const handleInstallClick = () => {
+    if (deferredPrompt) {
+      deferredPrompt.prompt();
+      deferredPrompt.userChoice.then((choiceResult: any) => {
+        if (choiceResult.outcome === "accepted") {
+          console.log("User accepted the install prompt");
+        }
+        setDeferredPrompt(null);
+      });
+    }
+  };
+
   return (
-    <div className="min-h-screen bg-white">
+    <div className="min-h-screen bg-[#F8FAFC] font-sans text-slate-900 selection:bg-blue-100 selection:text-blue-900 overflow-x-hidden">
       {/* Navigation */}
-      <header className="sticky top-0 z-50 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/60 border-b border-gray-100">
-        <div className="container mx-auto px-4 flex items-center justify-between h-16">
-          <Link to="/" className="flex items-center gap-2">
-            <div className="h-8 w-8 rounded-lg bg-gradient-to-r from-orange-500 to-orange-600 flex items-center justify-center">
-              <Building2 className="h-5 w-5 text-white" />
+      <header className="sticky top-0 z-50 bg-white/80 backdrop-blur-xl border-b border-slate-200/60">
+        <div className="container mx-auto px-4 lg:px-6 flex items-center justify-between h-20">
+          <Link to="/" className="flex items-center gap-3">
+            <div className="h-10 w-10 relative flex items-center justify-center">
+              <img src="/logo_new.png" alt="ZedBooks" className="h-9 w-auto object-contain" />
             </div>
-            <span className="font-bold text-xl text-gray-900">ZedBooks</span>
+            <span className="font-bold text-xl tracking-tight text-slate-900">ZedBooks</span>
           </Link>
 
-          <nav className="hidden md:flex items-center gap-8">
-            <Link to="/" className="text-gray-600 hover:text-orange-500 font-medium transition-colors">
-              HR Solutions
-            </Link>
-            <Link to="/" className="text-gray-600 hover:text-orange-500 font-medium transition-colors">
-              About Us
-            </Link>
-            <Link to="/" className="text-gray-600 hover:text-orange-500 font-medium transition-colors">
-              Resources
-            </Link>
-            <Link to="/" className="text-gray-600 hover:text-orange-500 font-medium transition-colors">
-              Who We Serve
-            </Link>
+          <nav className="hidden md:flex items-center gap-8 text-sm font-medium text-slate-600">
+            <a href="#features" className="hover:text-blue-700 transition-colors">Features</a>
+            <a href="#pricing" className="hover:text-blue-700 transition-colors">Pricing</a>
+            <a href="#compliance" className="hover:text-blue-700 transition-colors">Compliance</a>
           </nav>
 
-          <div className="flex items-center gap-3">
-            <a href="mailto:hello@byteandberry.com">
-              <Button variant="ghost" className="text-gray-600 hover:text-orange-500">
-                Contact Sales
-              </Button>
-            </a>
+          <div className="flex items-center gap-4">
             <Link to="/auth">
-              <Button variant="ghost" className="text-gray-600 hover:text-orange-500">
+              <Button variant="ghost" className="hidden sm:inline-flex text-slate-600 hover:text-blue-700 hover:bg-blue-50">
                 Sign In
               </Button>
             </Link>
             <Link to="/auth">
-              <Button className="rounded-full bg-orange-500 hover:bg-orange-600">
+              <Button className="rounded-full bg-slate-900 hover:bg-slate-800 text-white shadow-lg shadow-slate-900/20 px-6 transition-all hover:scale-105">
                 Get Started
               </Button>
             </Link>
@@ -134,343 +100,242 @@ export default function Landing() {
       </header>
 
       {/* Hero Section */}
-      <section className="relative overflow-hidden">
-        <div className="absolute top-0 left-0 w-full h-full">
-          <div className="absolute top-20 left-0 w-96 h-96 bg-orange-100 rounded-full opacity-50 -translate-x-1/2" />
-          <div className="absolute top-40 left-20 w-32 h-32 bg-orange-200 rounded-full opacity-40" />
-        </div>
+      <section className="relative pt-20 pb-32 lg:pt-32 lg:pb-48 overflow-hidden">
+        {/* Background Blobs */}
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[1000px] h-[600px] bg-blue-100/40 rounded-[100%] blur-[100px] -z-10 pointer-events-none opacity-60" />
+        <div className="absolute top-40 right-0 w-[500px] h-[500px] bg-indigo-100/40 rounded-full blur-[80px] -z-10 pointer-events-none opacity-50" />
 
-        <div className="container mx-auto px-4 py-20 relative">
-          <div className="grid lg:grid-cols-2 gap-12 items-center">
-            <div className="space-y-8">
-              <div>
-                <h1 className="text-5xl lg:text-6xl font-bold text-gray-900 leading-tight">
-                  <span className="text-orange-500">HR Solutions</span>
-                  <br />
-                  That Scale With
-                  <br />
-                  Your Business
-                </h1>
-                <p className="mt-6 text-lg text-gray-600 max-w-xl">
-                  Streamlining your business operations is crucial for efficiency, and one way to achieve this is by managing your HR and payroll in a single system.
-                </p>
+        <div className="container mx-auto px-4 lg:px-6 relative z-10 text-center">
+          <Badge variant="outline" className="mb-8 px-4 py-1.5 rounded-full bg-blue-50/50 text-blue-700 border-blue-200 backdrop-blur-sm animate-fade-in-up">
+            <span className="relative flex h-2 w-2 mr-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500"></span>
+            </span>
+            New: Automated ZRA Tax Submission
+          </Badge>
+
+          <h1 className="text-5xl lg:text-7xl font-bold tracking-tight text-slate-900 mb-8 max-w-4xl mx-auto leading-[1.1]">
+            The Financial Operating System for <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-700 to-indigo-600">Zambian NGOs</span>
+          </h1>
+
+          <p className="text-xl text-slate-600 mb-12 max-w-2xl mx-auto leading-relaxed">
+            Manage your finances, payroll, and compliance in one unified secure platform.
+            Designed for purpose-driven organizations.
+          </p>
+
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-20">
+            <Link to="/auth">
+              <Button size="lg" className="h-14 px-10 rounded-full bg-blue-600 hover:bg-blue-700 text-white shadow-xl shadow-blue-600/20 text-lg transition-all hover:scale-105">
+                Start Free Trial
+              </Button>
+            </Link>
+            {deferredPrompt && (
+              <Button
+                size="lg"
+                variant="outline"
+                onClick={handleInstallClick}
+                className="h-14 px-10 rounded-full border-slate-200 hover:bg-white hover:text-blue-700 hover:border-blue-200 text-lg shadow-sm transition-all"
+              >
+                <Download className="mr-2 h-5 w-5" />
+                Install App
+              </Button>
+            )}
+            {!deferredPrompt && (
+              <Button
+                size="lg"
+                variant="outline"
+                className="h-14 px-10 rounded-full border-slate-200 hover:bg-white hover:text-slate-900 text-lg shadow-sm transition-all opacity-50 cursor-not-allowed"
+              >
+                <Laptop className="mr-2 h-5 w-5" />
+                Web Version
+              </Button>
+            )}
+          </div>
+
+          {/* Floated UI Mockup */}
+          <div className="relative max-w-5xl mx-auto">
+            {/* Main Window */}
+            <div className="relative bg-white rounded-2xl shadow-2xl border border-slate-200/60 overflow-hidden backdrop-blur-sm">
+              <div className="h-12 bg-slate-50 border-b border-slate-100 flex items-center px-4 gap-2">
+                <div className="flex gap-2">
+                  <div className="w-3 h-3 rounded-full bg-red-400/80" />
+                  <div className="w-3 h-3 rounded-full bg-amber-400/80" />
+                  <div className="w-3 h-3 rounded-full bg-emerald-400/80" />
+                </div>
+                <div className="mx-auto bg-slate-200/50 h-6 w-64 rounded-md text-[10px] flex items-center justify-center text-slate-400 font-mono">
+                  app.zedbooks.com/dashboard
+                </div>
               </div>
+              <div className="p-1 bg-slate-50/50">
+                <div className="grid grid-cols-12 gap-1 p-4 h-[400px] lg:h-[600px] bg-white rounded-xl overflow-hidden relative">
+                  {/* Simulated Content */}
+                  <div className="col-span-2 hidden lg:flex flex-col gap-3 border-r border-slate-50 pr-4">
+                    <div className="h-8 w-full bg-slate-100 rounded-lg" />
+                    <div className="h-8 w-3/4 bg-slate-50 rounded-lg" />
+                    <div className="h-8 w-full bg-slate-50 rounded-lg" />
+                    <div className="h-8 w-5/6 bg-slate-50 rounded-lg" />
+                  </div>
+                  <div className="col-span-12 lg:col-span-10 flex flex-col gap-6 pl-0 lg:pl-6 pt-2">
+                    <div className="flex justify-between items-end">
+                      <div className="space-y-2">
+                        <div className="h-4 w-32 bg-slate-100 rounded" />
+                        <div className="h-8 w-64 bg-slate-900 rounded-lg" />
+                      </div>
+                      <div className="h-10 w-32 bg-blue-600 rounded-lg" />
+                    </div>
+                    <div className="grid grid-cols-3 gap-4">
+                      <div className="h-32 bg-blue-50 rounded-2xl border border-blue-100 p-4 space-y-3">
+                        <div className="h-8 w-8 bg-blue-200 rounded-lg" />
+                        <div className="h-6 w-24 bg-blue-200/50 rounded" />
+                      </div>
+                      <div className="h-32 bg-slate-50 rounded-2xl border border-slate-100 p-4 space-y-3">
+                        <div className="h-8 w-8 bg-slate-200 rounded-lg" />
+                        <div className="h-6 w-24 bg-slate-200/50 rounded" />
+                      </div>
+                      <div className="h-32 bg-slate-50 rounded-2xl border border-slate-100 p-4 space-y-3">
+                        <div className="h-8 w-8 bg-slate-200 rounded-lg" />
+                        <div className="h-6 w-24 bg-slate-200/50 rounded" />
+                      </div>
+                    </div>
+                    <div className="flex-1 bg-slate-50 rounded-2xl border border-slate-100 p-6 flex items-center justify-center">
+                      <div className="text-slate-300 font-medium">Interactive Financial Ledger Mockup</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
 
+            {/* Floating Card 1 */}
+            <div className="absolute -left-12 bottom-20 bg-white p-6 rounded-2xl shadow-xl border border-slate-100 hidden lg:block animate-float">
+              <div className="flex items-center gap-4 mb-4">
+                <div className="h-10 w-10 bg-green-100 rounded-full flex items-center justify-center text-green-600">
+                  <Shield className="h-5 w-5" />
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-slate-900">Compliance Status</p>
+                  <p className="text-xs text-slate-500">Last checked today</p>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <Badge variant="secondary" className="bg-green-50 text-green-700">NAPSA Verified</Badge>
+                <Badge variant="secondary" className="bg-green-50 text-green-700">ZRA Compliant</Badge>
+              </div>
+            </div>
+
+            {/* Floating Card 2 */}
+            <div className="absolute -right-8 top-20 bg-white p-5 rounded-2xl shadow-xl border border-slate-100 hidden lg:block animate-float-delayed">
+              <p className="text-xs text-slate-500 uppercase font-semibold mb-3">Recent Transactions</p>
+              <div className="space-y-3">
+                <div className="flex items-center gap-3">
+                  <div className="h-8 w-8 rounded-full bg-slate-100 flex items-center justify-center text-xs font-bold">JD</div>
+                  <div>
+                    <p className="text-sm font-medium text-slate-700">Payroll Run</p>
+                    <p className="text-xs text-slate-400">Just now</p>
+                  </div>
+                  <span className="text-sm font-medium text-slate-900 ml-4">- K45,200</span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="h-8 w-8 rounded-full bg-blue-100 flex items-center justify-center text-xs font-bold text-blue-700">IN</div>
+                  <div>
+                    <p className="text-sm font-medium text-slate-700">Grant Deposit</p>
+                    <p className="text-xs text-slate-400">2h ago</p>
+                  </div>
+                  <span className="text-sm font-medium text-green-600 ml-4">+ K150,000</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Features Grid */}
+      <section id="features" className="py-24 bg-white relative">
+        <div className="container mx-auto px-4 lg:px-6">
+          <div className="text-center mb-16 max-w-2xl mx-auto">
+            <h2 className="text-3xl font-bold text-slate-900 mb-4">Everything you need to run your NGO</h2>
+            <p className="text-slate-600">Robust features designed specifically for the unique compliance and reporting needs of Zambian non-profits.</p>
+          </div>
+
+          <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-8">
+            {features.map((feature, i) => (
+              <Card key={i} className={`shadow-sm hover:shadow-lg transition-all border-slate-200 bg-white ${feature.className}`}>
+                <CardContent className="p-8">
+                  <div className="h-12 w-12 rounded-xl bg-slate-50 flex items-center justify-center mb-6">
+                    <feature.icon className="h-6 w-6 text-slate-700" />
+                  </div>
+                  <h3 className="font-bold text-lg text-slate-900 mb-3">{feature.title}</h3>
+                  <p className="text-sm text-slate-500 leading-relaxed">{feature.description}</p>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* App Download / Compliance */}
+      <section id="compliance" className="py-24 bg-slate-900 text-white overflow-hidden relative">
+        <div className="absolute top-0 right-0 w-[600px] h-[600px] bg-blue-600/10 rounded-full blur-[120px] translate-x-1/2 -translate-y-1/2" />
+
+        <div className="container mx-auto px-4 lg:px-6 relative z-10">
+          <div className="grid lg:grid-cols-2 gap-16 items-center">
+            <div>
+              <h2 className="text-4xl font-bold mb-6">Fully Compliant with Zambian Regulation</h2>
+              <p className="text-slate-300 text-lg mb-8">
+                Stay ahead of regulatory requirements with automated updates for domestic tax laws and labor regulations.
+              </p>
+              <div className="flex flex-wrap gap-4 mb-8">
+                {['ZRA Smart Invoice', 'NAPSA e-Returns', 'NHIMA Compliant', 'PACRA Returns'].map((badge) => (
+                  <div key={badge} className="flex items-center gap-2 px-4 py-2 rounded-full bg-slate-800 border border-slate-700 text-sm font-medium text-slate-200">
+                    <Check className="h-4 w-4 text-green-400" />
+                    {badge}
+                  </div>
+                ))}
+              </div>
               <Link to="/auth">
-                <Button size="lg" className="rounded-full bg-orange-500 hover:bg-orange-600 px-8">
-                  Contact Sales
+                <Button className="rounded-full bg-white text-slate-900 hover:bg-slate-100 px-8 h-12 shadow-md">
+                  Get Compliant Today
                 </Button>
               </Link>
             </div>
-
             <div className="relative">
-              <div className="absolute -top-10 -right-10 w-64 h-64 bg-orange-100 rounded-full opacity-50" />
-              <div className="absolute -bottom-10 -left-10 w-48 h-48 bg-blue-100 rounded-full opacity-50" />
-              <div className="relative bg-gradient-to-br from-blue-600 to-blue-700 rounded-3xl p-8 text-white">
-                <div className="absolute -top-4 -right-4 bg-orange-400 rounded-full p-3">
-                  <Play className="h-6 w-6" />
+              <div className="bg-gradient-to-br from-slate-800 to-slate-900 p-8 rounded-3xl border border-slate-700 shadow-2xl">
+                <div className="flex items-center gap-4 mb-8 border-b border-slate-700 pb-8">
+                  <div className="h-14 w-14 bg-blue-600 rounded-2xl flex items-center justify-center">
+                    <Shield className="h-8 w-8 text-white" />
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-bold">Compliance Monitor</h3>
+                    <p className="text-slate-400 text-sm">Real-time status tracking</p>
+                  </div>
                 </div>
                 <div className="space-y-4">
-                  <div className="flex items-center gap-3">
-                    <div className="h-12 w-12 rounded-full bg-white/20 flex items-center justify-center">
-                      <Users className="h-6 w-6" />
-                    </div>
-                    <div>
-                      <p className="font-semibold">500+ Businesses</p>
-                      <p className="text-sm text-blue-200">Trust ZedBooks</p>
-                    </div>
+                  <div className="flex items-center justify-between p-4 rounded-xl bg-slate-800/50 border border-slate-700">
+                    <span className="text-slate-200 font-medium">TPIN Verification</span>
+                    <Badge className="bg-green-500/20 text-green-400 hover:bg-green-500/20 border-green-500/20">Verified</Badge>
                   </div>
-                  <div className="pt-4 border-t border-white/20">
-                    <p className="text-sm text-blue-200">Complete HR & Payroll Solution</p>
-                    <p className="font-semibold text-lg">ZRA Compliant</p>
+                  <div className="flex items-center justify-between p-4 rounded-xl bg-slate-800/50 border border-slate-700">
+                    <span className="text-slate-200 font-medium">Tax Clearance</span>
+                    <Badge className="bg-green-500/20 text-green-400 hover:bg-green-500/20 border-green-500/20">Valid</Badge>
                   </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Features Section */}
-      <section className="py-20 bg-gray-50">
-        <div className="container mx-auto px-4">
-          <div className="text-center mb-16">
-            <h2 className="text-4xl font-bold text-gray-900 mb-4">
-              Our Full-Service HR <span className="text-orange-500">Solution</span>
-              <br />
-              Delivers
-            </h2>
-          </div>
-
-          <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
-            {features.map((feature, index) => (
-              <Card key={index} className="border-0 shadow-lg hover:shadow-xl transition-shadow group cursor-pointer">
-                <CardContent className="p-6 text-center">
-                  <div className={`inline-flex items-center justify-center w-16 h-16 rounded-2xl ${feature.color} mb-4 group-hover:scale-110 transition-transform`}>
-                    <feature.icon className="h-8 w-8" />
-                  </div>
-                  <h3 className="font-semibold text-gray-900 mb-2">{feature.title}</h3>
-                  <p className="text-sm text-gray-500">{feature.description}</p>
-                </CardContent>
-              </Card>
-            ))}
-            <Card className="border-0 shadow-lg bg-orange-500 text-white hover:bg-orange-600 transition-colors cursor-pointer">
-              <CardContent className="p-6 text-center flex flex-col items-center justify-center h-full">
-                <div className="w-16 h-16 rounded-full bg-white/20 flex items-center justify-center mb-4">
-                  <ArrowRight className="h-8 w-8" />
-                </div>
-                <p className="font-semibold">Browse All</p>
-              </CardContent>
-            </Card>
-          </div>
-        </div>
-      </section>
-
-      {/* Support Section */}
-      <section className="py-20">
-        <div className="container mx-auto px-4">
-          <div className="grid lg:grid-cols-2 gap-12 items-center">
-            <div className="relative">
-              <div className="bg-gray-100 rounded-3xl p-8">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="bg-white rounded-2xl p-6 shadow-md">
-                    <div className="flex items-center gap-2 mb-2">
-                      <Star className="h-5 w-5 text-yellow-500 fill-current" />
-                      <Star className="h-5 w-5 text-yellow-500 fill-current" />
-                      <Star className="h-5 w-5 text-yellow-500 fill-current" />
-                      <Star className="h-5 w-5 text-yellow-500 fill-current" />
-                      <Star className="h-5 w-5 text-yellow-500 fill-current" />
-                    </div>
-                    <p className="text-sm text-gray-600">Overall satisfaction rating</p>
-                  </div>
-                  <div className="bg-teal-600 rounded-2xl p-6 text-white">
-                    <p className="text-3xl font-bold">90+</p>
-                    <p className="text-sm">Locations nationwide</p>
-                  </div>
-                </div>
-                <div className="mt-4 bg-amber-100 rounded-2xl p-4 text-center">
-                  <Badge className="bg-amber-200 text-amber-800 font-semibold">
-                    ZRA Accredited
-                  </Badge>
-                </div>
-              </div>
-            </div>
-
-            <div className="space-y-6">
-              <h2 className="text-4xl font-bold text-gray-900">
-                Support Your Business With
-                <br />
-                <span className="text-orange-500">Award-Winning Expertise</span>
-              </h2>
-              <p className="text-gray-600">
-                Your employees are your most valuable resource. When you have better HR support, you will have a designed our HR support services to lighten your administrative load and maximize your productivity while managing risks.
-              </p>
-              <Link to="/auth">
-                <Button className="rounded-full bg-orange-500 hover:bg-orange-600 px-8">
-                  Learn More About ZedBooks
-                </Button>
-              </Link>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Unbeatable Support Section */}
-      <section className="py-20 bg-gray-50">
-        <div className="container mx-auto px-4">
-          <div className="grid lg:grid-cols-2 gap-12 items-center">
-            <div className="order-2 lg:order-1">
-              <div className="relative">
-                <div className="absolute -top-4 -left-4 w-24 h-24 bg-orange-200 rounded-full opacity-50" />
-                <div className="relative bg-white rounded-3xl p-6 shadow-xl">
-                  <div className="flex items-center gap-4 mb-4">
-                    <div className="flex -space-x-2">
-                      <div className="w-10 h-10 rounded-full bg-orange-400" />
-                      <div className="w-10 h-10 rounded-full bg-blue-400" />
-                      <div className="w-10 h-10 rounded-full bg-green-400" />
-                    </div>
-                    <div>
-                      <p className="font-semibold text-gray-900">Team Collaboration</p>
-                      <p className="text-sm text-gray-500">Work together seamlessly</p>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-3 gap-4">
-                    <div className="bg-orange-50 rounded-xl p-4 text-center">
-                      <DollarSign className="h-6 w-6 text-orange-500 mx-auto mb-2" />
-                      <p className="text-xs text-gray-600">Payroll</p>
-                    </div>
-                    <div className="bg-blue-50 rounded-xl p-4 text-center">
-                      <Calculator className="h-6 w-6 text-blue-500 mx-auto mb-2" />
-                      <p className="text-xs text-gray-600">Accounting</p>
-                    </div>
-                    <div className="bg-green-50 rounded-xl p-4 text-center">
-                      <FileText className="h-6 w-6 text-green-500 mx-auto mb-2" />
-                      <p className="text-xs text-gray-600">Reports</p>
-                    </div>
+                  <div className="flex items-center justify-between p-4 rounded-xl bg-slate-800/50 border border-slate-700">
+                    <span className="text-slate-200 font-medium">Annual Returns</span>
+                    <Badge className="bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/20 border-yellow-500/20">Due in 5 days</Badge>
                   </div>
                 </div>
               </div>
             </div>
-
-            <div className="order-1 lg:order-2 space-y-6">
-              <h2 className="text-4xl font-bold text-gray-900">
-                Unbeatable Support
-                <br />
-                Meets <span className="text-orange-500">Innovative</span>
-                <br />
-                Technology
-              </h2>
-              <p className="text-gray-600">
-                Unmatched Support: At ZedBooks, we believe that exceptional customer support is the cornerstone of a successful business. Our dedicated team of professionals...
-              </p>
-              <div className="flex gap-4">
-                <Link to="/auth">
-                  <Button className="rounded-full bg-orange-500 hover:bg-orange-600">
-                    Small Businesses
-                  </Button>
-                </Link>
-                <Button variant="outline" className="rounded-full border-orange-500 text-orange-500 hover:bg-orange-50">
-                  Midsize Businesses
-                </Button>
-              </div>
-            </div>
           </div>
-        </div>
-      </section>
-
-      {/* Pricing Section */}
-      <section className="py-20">
-        <div className="container mx-auto px-4">
-          <div className="text-center mb-16">
-            <h2 className="text-4xl font-bold text-gray-900 mb-4">
-              Simple, Transparent <span className="text-orange-500">Pricing</span>
-            </h2>
-            <p className="text-gray-600 max-w-2xl mx-auto">
-              Choose the plan that fits your business. All plans include a 14-day free trial.
-            </p>
-          </div>
-
-          <div className="grid md:grid-cols-2 gap-8 max-w-4xl mx-auto">
-            {pricingPlans.map((plan, index) => (
-              <Card key={index} className={`relative border-2 ${plan.popular ? 'border-orange-500 shadow-xl' : 'border-gray-100'}`}>
-                {plan.popular && (
-                  <div className="absolute -top-3 left-1/2 -translate-x-1/2">
-                    <Badge className="bg-orange-500 text-white">Most Popular</Badge>
-                  </div>
-                )}
-                <CardContent className="p-8">
-                  <div className="flex justify-between items-start mb-6">
-                    <div>
-                      <h3 className="text-xl font-bold text-gray-900">{plan.name}</h3>
-                      <p className="text-sm text-gray-500">{plan.description}</p>
-                    </div>
-                    <Button variant="ghost" size="icon">
-                      <ChevronRight className="h-5 w-5" />
-                    </Button>
-                  </div>
-
-                  <div className="mb-6">
-                    <span className="text-4xl font-bold text-gray-900">{plan.price}</span>
-                    <span className="text-gray-500">{plan.period}</span>
-                  </div>
-
-                  <ul className="space-y-3 mb-8">
-                    {plan.features.map((feature, featureIndex) => (
-                      <li key={featureIndex} className="flex items-center gap-3">
-                        <div className={`w-5 h-5 rounded-full flex items-center justify-center ${plan.popular ? 'bg-orange-100' : 'bg-gray-100'}`}>
-                          <Check className={`h-3 w-3 ${plan.popular ? 'text-orange-500' : 'text-gray-500'}`} />
-                        </div>
-                        <span className="text-gray-600">{feature}</span>
-                      </li>
-                    ))}
-                  </ul>
-
-                  <Link to="/auth" className="block">
-                    <Button
-                      className={`w-full rounded-full ${plan.popular ? 'bg-orange-500 hover:bg-orange-600' : ''}`}
-                      variant={plan.buttonStyle}
-                    >
-                      {plan.buttonText}
-                    </Button>
-                  </Link>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* Success Stories */}
-      <section className="py-20 bg-gray-50">
-        <div className="container mx-auto px-4">
-          <div className="text-center mb-16">
-            <h2 className="text-4xl font-bold text-gray-900 mb-4">
-              ZedBooks Customers Are
-              <br />
-              Finding <span className="text-orange-500">Success</span>
-            </h2>
-            <p className="text-gray-600 max-w-2xl mx-auto">
-              Human resources and business performance solutions, has a track record of helping us in various ways. One of the key factors contributing to this success is ZedBooks commitment to providing tailored HR solutions and support.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
-            {stats.map((stat, index) => (
-              <div key={index} className="text-center">
-                <p className="text-4xl font-bold text-orange-500 mb-2">{stat.value}</p>
-                <p className="text-gray-600">{stat.label}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* CTA Section */}
-      <section className="py-20">
-        <div className="container mx-auto px-4">
-          <Card className="bg-gradient-to-r from-orange-500 to-orange-600 border-0">
-            <CardContent className="p-12 text-center text-white">
-              <h2 className="text-3xl font-bold mb-4">Ready to Transform Your Business?</h2>
-              <p className="mb-8 text-white/80 max-w-2xl mx-auto">
-                Join hundreds of Zambian businesses already using ZedBooks to streamline their operations.
-              </p>
-              <Link to="/auth">
-                <Button size="lg" variant="secondary" className="rounded-full gap-2">
-                  Get Started Now <ArrowRight className="h-4 w-4" />
-                </Button>
-              </Link>
-            </CardContent>
-          </Card>
         </div>
       </section>
 
       {/* Footer */}
-      <footer className="border-t py-12 bg-white">
-        <div className="container mx-auto px-4">
-          <div className="flex flex-col md:flex-row items-center justify-between gap-6">
-            <div className="flex items-center gap-2">
-              <div className="h-8 w-8 rounded-lg bg-gradient-to-r from-orange-500 to-orange-600 flex items-center justify-center">
-                <Building2 className="h-5 w-5 text-white" />
-              </div>
-              <span className="font-bold text-xl">ZedBooks</span>
-            </div>
-            <div className="flex items-center gap-6 text-sm text-gray-500">
-              <a href="#" className="hover:text-orange-500 transition-colors">Privacy Policy</a>
-              <a href="#" className="hover:text-orange-500 transition-colors">Terms of Service</a>
-              <a href="#" className="hover:text-orange-500 transition-colors">Contact</a>
-            </div>
-            <a
-              href="https://www.byteandberry.com"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 rounded-full bg-orange-50 px-4 py-2 text-sm font-medium text-orange-600 hover:bg-orange-100 transition-colors"
-            >
-              Powered by byte&berry
-            </a>
+      <footer className="py-12 bg-white border-t border-slate-200">
+        <div className="container mx-auto px-4 text-center">
+          <div className="flex items-center justify-center gap-2 mb-4">
+            <img src="/logo_new.png" alt="ZedBooks" className="h-8 w-auto opacity-50 grayscale hover:grayscale-0 transition-all" />
+            <span className="font-bold text-lg text-slate-400">ZedBooks</span>
           </div>
-          <div className="mt-8 text-center text-sm text-gray-500">
-            © {new Date().getFullYear()} ZedBooks. All rights reserved.
-          </div>
+          <p className="text-slate-500 text-sm">© {new Date().getFullYear()} Byte & Berry. All rights reserved.</p>
         </div>
       </footer>
     </div>

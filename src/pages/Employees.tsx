@@ -1,6 +1,4 @@
-import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Plus, Upload, Pencil, Trash2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
@@ -14,35 +12,67 @@ import {
 } from "@/components/ui/table";
 import { formatZMW } from "@/utils/zambianTaxCalculations";
 import { toast } from "sonner";
+import { useAuth } from "@/contexts/AuthContext";
+import { companyService } from "@/services/firebase";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { collection, deleteDoc, doc, getDocs, query, where } from "firebase/firestore";
+import { firestore } from "@/integrations/firebase/client";
+
+interface EmployeeRecord {
+  id: string;
+  employeeNumber: string;
+  fullName: string;
+  position: string | null;
+  department: string | null;
+  basicSalary: number;
+  employmentStatus: string;
+}
 
 export default function Employees() {
   const navigate = useNavigate();
+  const { user } = useAuth();
 
   const { data: employees, isLoading, refetch } = useQuery({
-    queryKey: ["employees"],
+    queryKey: ["employees", user?.id],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("employees")
-        .select("*")
-        .order("full_name");
+      if (!user) return [] as EmployeeRecord[];
 
-      if (error) throw error;
-      return data;
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      if (!membership?.companyId) return [] as EmployeeRecord[];
+
+      const employeesRef = collection(firestore, COLLECTIONS.EMPLOYEES);
+      const snapshot = await getDocs(query(employeesRef, where("companyId", "==", membership.companyId)));
+
+      const rows = snapshot.docs.map((docSnap) => {
+        const row = docSnap.data() as Record<string, unknown>;
+
+        return {
+          id: docSnap.id,
+          employeeNumber: String(row.employeeNumber ?? row.employee_number ?? ""),
+          fullName: String(row.fullName ?? row.full_name ?? ""),
+          position: (row.position as string | null) ?? null,
+          department: (row.department as string | null) ?? null,
+          basicSalary: Number(row.basicSalary ?? row.basic_salary ?? 0),
+          employmentStatus: String(row.employmentStatus ?? row.employment_status ?? "active"),
+        } satisfies EmployeeRecord;
+      });
+
+      rows.sort((a, b) => a.fullName.localeCompare(b.fullName));
+      return rows;
     },
+    enabled: Boolean(user),
   });
 
   const handleDelete = async (id: string) => {
     if (!confirm("Are you sure you want to delete this employee?")) return;
 
-    const { error } = await supabase.from("employees").delete().eq("id", id);
-
-    if (error) {
+    try {
+      await deleteDoc(doc(firestore, COLLECTIONS.EMPLOYEES, id));
+      toast.success("Employee deleted successfully");
+      refetch();
+    } catch (error) {
       toast.error("Failed to delete employee");
-      return;
     }
-
-    toast.success("Employee deleted successfully");
-    refetch();
   };
 
   return (
@@ -83,20 +113,20 @@ export default function Employees() {
             <TableBody>
               {employees?.map((employee) => (
                 <TableRow key={employee.id}>
-                  <TableCell className="font-medium">
-                    {employee.employee_number}
-                  </TableCell>
-                  <TableCell>{employee.full_name}</TableCell>
-                  <TableCell>{employee.position || "—"}</TableCell>
-                  <TableCell>{employee.department || "—"}</TableCell>
-                  <TableCell>{formatZMW(Number(employee.basic_salary))}</TableCell>
+                  <TableCell className="font-medium">{employee.employeeNumber}</TableCell>
+                  <TableCell>{employee.fullName}</TableCell>
+                  <TableCell>{employee.position || "-"}</TableCell>
+                  <TableCell>{employee.department || "-"}</TableCell>
+                  <TableCell>{formatZMW(employee.basicSalary)}</TableCell>
                   <TableCell>
-                    <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
-                      employee.employment_status === 'active' 
-                        ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' 
-                        : 'bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200'
-                    }`}>
-                      {employee.employment_status}
+                    <span
+                      className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                        employee.employmentStatus === "active"
+                          ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"
+                          : "bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200"
+                      }`}
+                    >
+                      {employee.employmentStatus}
                     </span>
                   </TableCell>
                   <TableCell className="text-right">
@@ -107,11 +137,7 @@ export default function Employees() {
                     >
                       <Pencil className="h-4 w-4" />
                     </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handleDelete(employee.id)}
-                    >
+                    <Button variant="ghost" size="sm" onClick={() => handleDelete(employee.id)}>
                       <Trash2 className="h-4 w-4" />
                     </Button>
                   </TableCell>

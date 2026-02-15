@@ -1,6 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,18 +9,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { UserPlus, Shield, Users, Edit2, Trash2 } from "lucide-react";
-import type { Database } from "@/integrations/supabase/types";
-
-type AppRole = Database["public"]["Enums"]["app_role"];
-
-interface UserWithRole {
-  user_id: string;
-  role: AppRole;
-  email: string;
-  full_name: string | null;
-  created_at: string;
-}
+import { UserPlus, Shield, Users, Edit2, Trash2, Loader2 } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
+import { companyService, type CompanyUserSummary } from "@/services/firebase/companyService";
+import { authService } from "@/services/firebase/authService";
+import { useUserRole } from "@/hooks/useUserRole";
+import type { AppRole } from "@/services/firebase/types";
 
 const ROLE_DESCRIPTIONS: Record<AppRole, { label: string; description: string; color: string }> = {
   super_admin: { label: "Super Admin", description: "Full system access, can manage all users and settings", color: "bg-red-500" },
@@ -58,99 +51,121 @@ const ROLE_ORDER: AppRole[] = [
 ];
 
 export default function UserManagement() {
+  const { user } = useAuth();
+  const { data: currentUserRole } = useUserRole();
   const [isInviteOpen, setIsInviteOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
-  const [inviteRole, setInviteRole] = useState<AppRole>("read_only");
-  const [editingUser, setEditingUser] = useState<UserWithRole | null>(null);
-  const [currentUserRole, setCurrentUserRole] = useState<AppRole | null>(null);
+  const [inviteName, setInviteName] = useState("");
+  const [inviteRole, setInviteRole] = useState<AppRole>("finance_officer");
+  const [editingUser, setEditingUser] = useState<CompanyUserSummary | null>(null);
+
+  // We need to fetch the current user's primary company ID to list users
+  const { data: primaryMembership } = useQuery({
+    queryKey: ["primary-membership", user?.uid],
+    queryFn: () => user ? companyService.getPrimaryMembershipByUser(user.uid) : null,
+    enabled: !!user,
+  });
+
+  const companyId = primaryMembership?.companyId;
   const queryClient = useQueryClient();
 
-  // Check current user's role
-  useEffect(() => {
-    const checkUserRole = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        const { data } = await supabase
-          .from("user_roles")
-          .select("role")
-          .eq("user_id", user.id)
-          .single();
-        if (data) {
-          setCurrentUserRole(data.role as AppRole);
-        }
-      }
-    };
-    checkUserRole();
-  }, []);
-
   // Fetch all users with roles
-  const { data: users, isLoading } = useQuery({
-    queryKey: ["users-with-roles"],
+  const { data: users, isLoading, error } = useQuery({
+    queryKey: ["company-users", companyId],
     queryFn: async () => {
-      const { data: roles, error: rolesError } = await supabase
-        .from("user_roles")
-        .select("user_id, role, created_at");
-
-      if (rolesError) throw rolesError;
-
-      const { data: profiles, error: profilesError } = await supabase
-        .from("profiles")
-        .select("id, full_name");
-
-      if (profilesError) throw profilesError;
-
-      // Get auth users info via edge function or profiles
-      const usersWithRoles: UserWithRole[] = roles.map((role) => {
-        const profile = profiles.find((p) => p.id === role.user_id);
-        return {
-          user_id: role.user_id,
-          role: role.role as AppRole,
-          email: profile?.full_name || "Unknown",
-          full_name: profile?.full_name,
-          created_at: role.created_at,
-        };
-      });
-
-      return usersWithRoles;
+      if (!companyId) return [];
+      return companyService.listCompanyUsers(companyId);
     },
+    enabled: !!companyId,
   });
 
   // Update role mutation
   const updateRoleMutation = useMutation({
     mutationFn: async ({ userId, newRole }: { userId: string; newRole: AppRole }) => {
-      const { error } = await supabase
-        .from("user_roles")
-        .update({ role: newRole })
-        .eq("user_id", userId);
-
-      if (error) throw error;
+      if (!companyId) throw new Error("No company ID found");
+      await companyService.updateUserRole({ companyId, userId, newRole });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["users-with-roles"] });
+      queryClient.invalidateQueries({ queryKey: ["company-users", companyId] });
       toast.success("User role updated successfully");
       setEditingUser(null);
     },
     onError: (error) => {
-      toast.error("Failed to update role: " + error.message);
+      toast.error("Failed to update role: " + (error instanceof Error ? error.message : "Unknown error"));
     },
   });
 
-  // Delete user role mutation
-  const deleteRoleMutation = useMutation({
+  // Remove user mutation
+  const removeUserMutation = useMutation({
     mutationFn: async (userId: string) => {
-      const { error } = await supabase
-        .from("user_roles")
-        .delete()
-        .eq("user_id", userId);
-
-      if (error) throw error;
+      if (!companyId) throw new Error("No company ID found");
+      await companyService.removeCompanyUser({ companyId, userId });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["users-with-roles"] });
+      queryClient.invalidateQueries({ queryKey: ["company-users", companyId] });
       toast.success("User removed successfully");
     },
     onError: (error) => {
-      toast.error("Failed to remove user: " + error.message);
+      toast.error("Failed to remove user: " + (error instanceof Error ? error.message : "Unknown error"));
+    },
+  });
+
+  // Suspend/Reactivate mutation
+  const toggleStatusMutation = useMutation({
+    mutationFn: async ({ userId, action }: { userId: string; action: 'suspend' | 'reactivate' }) => {
+      if (!companyId) throw new Error("No company ID found");
+      if (action === 'suspend') {
+        await companyService.suspendUser({ companyId, userId });
+      } else {
+        await companyService.reactivateUser({ companyId, userId });
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["company-users", companyId] });
+      toast.success("User status updated successfully");
+    },
+    onError: (error) => {
+      toast.error("Failed to update status: " + (error instanceof Error ? error.message : "Unknown error"));
+    },
+  });
+
+  // Revoke invitation
+  const revokeMutation = useMutation({
+    mutationFn: async (invitationId: string) => {
+      if (!companyId) throw new Error("No company ID found");
+      await companyService.revokeInvitation({ companyId, invitationId });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["company-users", companyId] });
+      toast.success("Invitation revoked");
+    },
+    onError: (error) => {
+      toast.error("Failed to revoke: " + (error instanceof Error ? error.message : "Unknown error"));
+    },
+  });
+
+  const inviteMutation = useMutation({
+    mutationFn: async () => {
+      if (!inviteEmail) throw new Error("Email is required");
+      if (!companyId) throw new Error("No company ID found");
+
+      await authService.sendInvitation({
+        email: inviteEmail,
+        role: inviteRole,
+        inviteeName: inviteName,
+        companyId,
+        loginUrl: `${window.location.origin}/auth`,
+      });
+    },
+    onSuccess: () => {
+      toast.success("Invitation sent successfully");
+      setInviteEmail("");
+      setInviteName("");
+      setInviteRole("finance_officer");
+      setIsInviteOpen(false);
+    },
+    onError: (error) => {
+      toast.error("Failed to send invite: " + (error instanceof Error ? error.message : "Unknown error"));
     },
   });
 
@@ -159,11 +174,23 @@ export default function UserManagement() {
   const getRoleBadge = (role: AppRole) => {
     const roleInfo = ROLE_DESCRIPTIONS[role];
     return (
-      <Badge className={`${roleInfo.color} text-white`}>
+      <Badge className={`${roleInfo.color} text-white hover:${roleInfo.color}`}>
         {roleInfo.label}
       </Badge>
     );
   };
+
+  const displayName = (user: CompanyUserSummary) => {
+    return user.fullName || user.email || user.userId || "Unknown User";
+  };
+
+  if (!user || (!companyId && !isLoading)) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -190,6 +217,16 @@ export default function UserManagement() {
                 </DialogDescription>
               </DialogHeader>
               <div className="space-y-4 py-4">
+                <div className="space-y-2">
+                  <Label htmlFor="name">Full Name</Label>
+                  <Input
+                    id="name"
+                    type="text"
+                    placeholder="Jane Doe"
+                    value={inviteName}
+                    onChange={(e) => setInviteName(e.target.value)}
+                  />
+                </div>
                 <div className="space-y-2">
                   <Label htmlFor="email">Email Address</Label>
                   <Input
@@ -225,11 +262,15 @@ export default function UserManagement() {
                 <Button variant="outline" onClick={() => setIsInviteOpen(false)}>
                   Cancel
                 </Button>
-                <Button onClick={() => {
-                  toast.info("User invitation feature coming soon. For now, users can sign up and admins can assign roles.");
-                  setIsInviteOpen(false);
-                }}>
-                  Send Invitation
+                <Button onClick={() => inviteMutation.mutate()} disabled={inviteMutation.isPending}>
+                  {inviteMutation.isPending ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Sending...
+                    </>
+                  ) : (
+                    "Send Invitation"
+                  )}
                 </Button>
               </DialogFooter>
             </DialogContent>
@@ -266,7 +307,7 @@ export default function UserManagement() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              {users?.filter((u) => u.role === "accountant" || u.role === "finance_officer" || u.role === "bookkeeper").length || 0}
+              {users?.filter((u) => ["accountant", "finance_officer", "bookkeeper"].includes(u.role)).length || 0}
             </div>
           </CardContent>
         </Card>
@@ -292,7 +333,11 @@ export default function UserManagement() {
         <CardContent>
           {isLoading ? (
             <div className="flex items-center justify-center py-8">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+              <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            </div>
+          ) : error ? (
+            <div className="p-4 text-red-500 text-center">
+              Failed to load users. Please try again.
             </div>
           ) : (
             <Table>
@@ -300,21 +345,28 @@ export default function UserManagement() {
                 <TableRow>
                   <TableHead>User</TableHead>
                   <TableHead>Role</TableHead>
+                  <TableHead>Status</TableHead>
                   <TableHead>Added</TableHead>
                   {canManageUsers && <TableHead className="text-right">Actions</TableHead>}
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {users?.map((user) => (
-                  <TableRow key={user.user_id}>
+                  <TableRow key={user.id}>
                     <TableCell>
                       <div className="flex flex-col">
-                        <span className="font-medium">{user.full_name || "Unknown User"}</span>
-                        <span className="text-sm text-muted-foreground">{user.user_id.slice(0, 8)}...</span>
+                        <span className="font-medium">{displayName(user)}</span>
+                        {user.email && (
+                          <span className="text-sm text-muted-foreground">{user.email}</span>
+                        )}
+                        {/* Show invitation marker */}
+                        {user.status === 'invited' && (
+                          <span className="text-xs text-amber-500 font-mono">Invitation Pending</span>
+                        )}
                       </div>
                     </TableCell>
                     <TableCell>
-                      {editingUser?.user_id === user.user_id ? (
+                      {editingUser?.id === user.id && user.status !== 'invited' ? (
                         <Select
                           value={editingUser.role}
                           onValueChange={(v) => setEditingUser({ ...editingUser, role: v as AppRole })}
@@ -340,17 +392,23 @@ export default function UserManagement() {
                       )}
                     </TableCell>
                     <TableCell>
-                      {new Date(user.created_at).toLocaleDateString()}
+                      <Badge variant={user.status === "active" ? "default" : user.status === "invited" ? "outline" : "destructive"}>
+                        {user.status === 'invited' ? 'Pending' : user.status}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      {user.createdAt ? new Date(user.createdAt).toLocaleDateString() : "-"}
                     </TableCell>
                     {canManageUsers && (
                       <TableCell className="text-right">
-                        {editingUser?.user_id === user.user_id ? (
+                        {editingUser?.id === user.id ? (
                           <div className="flex justify-end gap-2">
                             <Button
                               size="sm"
-                              onClick={() => updateRoleMutation.mutate({ userId: user.user_id, newRole: editingUser.role })}
+                              onClick={() => updateRoleMutation.mutate({ userId: user.userId, newRole: editingUser.role })}
+                              disabled={updateRoleMutation.isPending}
                             >
-                              Save
+                              {updateRoleMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
                             </Button>
                             <Button
                               size="sm"
@@ -362,25 +420,71 @@ export default function UserManagement() {
                           </div>
                         ) : (
                           <div className="flex justify-end gap-2">
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => setEditingUser(user)}
-                            >
-                              <Edit2 className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="destructive"
-                              onClick={() => {
-                                if (confirm("Are you sure you want to remove this user's role?")) {
-                                  deleteRoleMutation.mutate(user.user_id);
-                                }
-                              }}
-                              disabled={user.role === "super_admin"}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
+                            {/* Actions for Invites */}
+                            {user.status === 'invited' ? (
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                onClick={() => {
+                                  if (confirm("Revoke this invitation? The link will no longer work.")) {
+                                    revokeMutation.mutate(user.id);
+                                  }
+                                }}
+                                disabled={revokeMutation.isPending}
+                              >
+                                Revoke
+                              </Button>
+                            ) : (
+                              <>
+                                {/* Actions for Active/Suspended Users */}
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => setEditingUser(user)}
+                                >
+                                  <Edit2 className="h-4 w-4" />
+                                </Button>
+
+                                {user.status === 'suspended' ? (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="text-green-600 hover:text-green-700 hover:bg-green-50"
+                                    onClick={() => toggleStatusMutation.mutate({ userId: user.userId, action: 'reactivate' })}
+                                    disabled={toggleStatusMutation.isPending}
+                                  >
+                                    Activate
+                                  </Button>
+                                ) : (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="text-orange-600 hover:text-orange-700 hover:bg-orange-50"
+                                    onClick={() => {
+                                      if (confirm("Suspend this user? They will lose access immediately.")) {
+                                        toggleStatusMutation.mutate({ userId: user.userId, action: 'suspend' });
+                                      }
+                                    }}
+                                    disabled={toggleStatusMutation.isPending || user.role === 'super_admin'}
+                                  >
+                                    Suspend
+                                  </Button>
+                                )}
+
+                                <Button
+                                  size="sm"
+                                  variant="destructive"
+                                  onClick={() => {
+                                    if (confirm("Permanently remove this user? This cannot be undone.")) {
+                                      removeUserMutation.mutate(user.userId);
+                                    }
+                                  }}
+                                  disabled={user.role === "super_admin" || removeUserMutation.isPending}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </>
+                            )}
                           </div>
                         )}
                       </TableCell>
@@ -389,7 +493,7 @@ export default function UserManagement() {
                 ))}
                 {(!users || users.length === 0) && (
                   <TableRow>
-                    <TableCell colSpan={4} className="text-center py-8 text-muted-foreground">
+                    <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
                       No users found
                     </TableCell>
                   </TableRow>

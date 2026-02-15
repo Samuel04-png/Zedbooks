@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -18,68 +17,141 @@ import { toast } from "sonner";
 import { format } from "date-fns";
 import { useNavigate } from "react-router-dom";
 import { useCompanySettings } from "@/hooks/useCompanySettings";
+import { useAuth } from "@/contexts/AuthContext";
+import { companyService } from "@/services/firebase";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { collection, deleteDoc, doc, documentId, getDocs, query, where } from "firebase/firestore";
+import { firestore } from "@/integrations/firebase/client";
 
-interface Estimate {
+interface EstimateRecord {
   id: string;
-  order_number: string;
-  order_date: string;
-  order_type: string;
+  orderNumber: string;
+  orderDate: string;
+  orderType: string;
   subtotal: number;
-  vat_amount: number | null;
+  vatAmount: number;
   total: number;
-  status: string | null;
-  customer_id: string | null;
-  customers: { name: string } | null;
+  status: string;
+  customerId: string | null;
+  customerName: string;
 }
+
+const chunk = <T,>(items: T[], size: number): T[][] => {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+};
+
+const toDateString = (value: unknown): string => {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === "object" && value !== null && "toDate" in value) {
+    const ts = value as { toDate?: () => Date };
+    if (typeof ts.toDate === "function") {
+      return ts.toDate().toISOString();
+    }
+  }
+  return "";
+};
 
 export default function Estimates() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { user } = useAuth();
   const [searchQuery, setSearchQuery] = useState("");
   const { data: settings } = useCompanySettings();
 
   const { data: estimates, isLoading } = useQuery({
-    queryKey: ["estimates"],
+    queryKey: ["estimates", user?.id],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("sales_orders")
-        .select(`
-          *,
-          customers (name)
-        `)
-        .in("order_type", ["quote", "estimate"])
-        .order("order_date", { ascending: false });
-      if (error) throw error;
-      return data as unknown as Estimate[];
+      if (!user) return [] as EstimateRecord[];
+
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      if (!membership?.companyId) return [] as EstimateRecord[];
+
+      const salesOrdersRef = collection(firestore, COLLECTIONS.SALES_ORDERS);
+      const ordersSnapshot = await getDocs(
+        query(salesOrdersRef, where("companyId", "==", membership.companyId)),
+      );
+
+      const mappedEstimates = ordersSnapshot.docs
+        .map((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          return {
+            id: docSnap.id,
+            orderNumber: String(row.orderNumber ?? row.order_number ?? ""),
+            orderDate: toDateString(row.orderDate ?? row.order_date),
+            orderType: String(row.orderType ?? row.order_type ?? "sale"),
+            subtotal: Number(row.subtotal ?? 0),
+            vatAmount: Number(row.vatAmount ?? row.vat_amount ?? 0),
+            total: Number(row.total ?? 0),
+            status: String(row.status ?? "draft"),
+            customerId: (row.customerId ?? row.customer_id ?? null) as string | null,
+            customerName: "-",
+          } satisfies EstimateRecord;
+        })
+        .filter((order) => ["quote", "estimate"].includes(order.orderType));
+
+      const customerIds = Array.from(
+        new Set(mappedEstimates.map((estimate) => estimate.customerId).filter(Boolean)),
+      ) as string[];
+
+      const customerMap = new Map<string, string>();
+      if (customerIds.length > 0) {
+        const customersRef = collection(firestore, COLLECTIONS.CUSTOMERS);
+        const customerChunks = chunk(customerIds, 30);
+
+        const customerSnapshots = await Promise.all(
+          customerChunks.map((ids) =>
+            getDocs(query(customersRef, where(documentId(), "in", ids))),
+          ),
+        );
+
+        customerSnapshots.forEach((snapshot) => {
+          snapshot.docs.forEach((docSnap) => {
+            const row = docSnap.data() as Record<string, unknown>;
+            customerMap.set(docSnap.id, String(row.name ?? "-"));
+          });
+        });
+      }
+
+      return mappedEstimates
+        .map((estimate) => ({
+          ...estimate,
+          customerName: (estimate.customerId && customerMap.get(estimate.customerId)) || "-",
+        }))
+        .sort((a, b) => String(b.orderDate).localeCompare(String(a.orderDate)));
     },
+    enabled: Boolean(user),
   });
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.from("sales_orders").delete().eq("id", id);
-      if (error) throw error;
+      await deleteDoc(doc(firestore, COLLECTIONS.SALES_ORDERS, id));
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["estimates"] });
+      queryClient.invalidateQueries({ queryKey: ["estimates", user?.id] });
       toast.success("Estimate deleted successfully");
     },
     onError: (error) => {
-      toast.error("Failed to delete estimate: " + error.message);
+      toast.error("Failed to delete estimate: " + (error instanceof Error ? error.message : "Unknown error"));
     },
   });
 
   const getStatusVariant = (status: string) => {
     switch (status) {
       case "sent":
-        return "default";
       case "accepted":
-        return "default";
+        return "default" as const;
       case "draft":
-        return "secondary";
+        return "secondary" as const;
       case "rejected":
-        return "destructive";
+        return "destructive" as const;
       default:
-        return "outline";
+        return "outline" as const;
     }
   };
 
@@ -92,8 +164,8 @@ export default function Estimates() {
 
   const filteredEstimates = estimates?.filter(
     (estimate) =>
-      estimate.order_number.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      estimate.customers?.name?.toLowerCase().includes(searchQuery.toLowerCase())
+      estimate.orderNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      estimate.customerName.toLowerCase().includes(searchQuery.toLowerCase()),
   );
 
   if (isLoading) {
@@ -105,9 +177,7 @@ export default function Estimates() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold">Estimates & Quotations</h1>
-          <p className="text-muted-foreground">
-            Create and manage quotes for your customers
-          </p>
+          <p className="text-muted-foreground">Create and manage quotes for your customers</p>
         </div>
         <Button onClick={() => navigate("/quotations/new")}>
           <Plus className="mr-2 h-4 w-4" />
@@ -137,9 +207,7 @@ export default function Estimates() {
                 <TableHead>Date</TableHead>
                 <TableHead>Customer</TableHead>
                 <TableHead className="text-right">Subtotal</TableHead>
-                {settings?.is_vat_registered && (
-                  <TableHead className="text-right">VAT</TableHead>
-                )}
+                {settings?.isVatRegistered && <TableHead className="text-right">VAT</TableHead>}
                 <TableHead className="text-right">Total</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
@@ -148,37 +216,23 @@ export default function Estimates() {
             <TableBody>
               {filteredEstimates?.map((estimate) => (
                 <TableRow key={estimate.id}>
-                  <TableCell className="font-medium">
-                    {estimate.order_number}
-                  </TableCell>
-                  <TableCell>
-                    {format(new Date(estimate.order_date), "dd MMM yyyy")}
-                  </TableCell>
-                  <TableCell>{estimate.customers?.name || "-"}</TableCell>
-                  <TableCell className="text-right">
-                    {formatCurrency(Number(estimate.subtotal))}
-                  </TableCell>
-                  {settings?.is_vat_registered && (
-                    <TableCell className="text-right">
-                      {formatCurrency(Number(estimate.vat_amount))}
-                    </TableCell>
+                  <TableCell className="font-medium">{estimate.orderNumber}</TableCell>
+                  <TableCell>{estimate.orderDate ? format(new Date(estimate.orderDate), "dd MMM yyyy") : "-"}</TableCell>
+                  <TableCell>{estimate.customerName || "-"}</TableCell>
+                  <TableCell className="text-right">{formatCurrency(estimate.subtotal)}</TableCell>
+                  {settings?.isVatRegistered && (
+                    <TableCell className="text-right">{formatCurrency(estimate.vatAmount)}</TableCell>
                   )}
-                  <TableCell className="text-right">
-                    {formatCurrency(Number(estimate.total))}
-                  </TableCell>
+                  <TableCell className="text-right">{formatCurrency(estimate.total)}</TableCell>
                   <TableCell>
-                    <Badge variant={getStatusVariant(estimate.status || "draft")}>
-                      {estimate.status}
-                    </Badge>
+                    <Badge variant={getStatusVariant(estimate.status || "draft")}>{estimate.status}</Badge>
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-2">
                       <Button
                         variant="ghost"
                         size="icon"
-                        onClick={() =>
-                          navigate(`/invoices/new?customer=${estimate.customer_id}`)
-                        }
+                        onClick={() => navigate(`/invoices/new?customer=${estimate.customerId}`)}
                         title="Convert to Invoice"
                       >
                         <FileText className="h-4 w-4" />
@@ -198,7 +252,7 @@ export default function Estimates() {
               {filteredEstimates?.length === 0 && (
                 <TableRow>
                   <TableCell
-                    colSpan={settings?.is_vat_registered ? 8 : 7}
+                    colSpan={settings?.isVatRegistered ? 8 : 7}
                     className="text-center text-muted-foreground py-8"
                   >
                     No estimates found. Create your first quotation!

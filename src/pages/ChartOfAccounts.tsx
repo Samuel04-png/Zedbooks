@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -31,57 +30,89 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
-import { Plus, Search, Edit2, Trash2, ChevronRight, Folder, FileText, Filter, Download } from "lucide-react";
+import { Plus, Search, Edit2, Trash2, ChevronRight, FileText, Filter } from "lucide-react";
 import { LoadingState } from "@/components/ui/LoadingState";
+import { useAuth } from "@/contexts/AuthContext";
+import { companyService } from "@/services/firebase";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import {
+  addDoc,
+  collection,
+  deleteDoc,
+  doc,
+  getDocs,
+  query,
+  serverTimestamp,
+  setDoc,
+  where,
+  writeBatch,
+} from "firebase/firestore";
+import { firestore } from "@/integrations/firebase/client";
 
 const ACCOUNT_TYPES = [
   { value: "asset", label: "Asset", normalBalance: "Debit" },
   { value: "liability", label: "Liability", normalBalance: "Credit" },
   { value: "equity", label: "Equity", normalBalance: "Credit" },
-  { value: "revenue", label: "Revenue", normalBalance: "Credit" },
+  { value: "income", label: "Income", normalBalance: "Credit" },
   { value: "expense", label: "Expense", normalBalance: "Debit" },
-];
+] as const;
 
 const DEFAULT_ACCOUNTS = [
-  { code: "1000", name: "Cash", type: "asset", description: "Money available in bank or cash" },
-  { code: "1010", name: "Petty Cash", type: "asset", description: "Small cash for daily needs" },
-  { code: "1100", name: "Accounts Receivable", type: "asset", description: "Amount to be received from customers" },
-  { code: "1200", name: "Inventory", type: "asset", description: "Stock of goods for sale" },
-  { code: "1300", name: "Prepaid Expenses", type: "asset", description: "Advance payments for future expenses" },
-  { code: "1500", name: "Fixed Assets", type: "asset", description: "Long-term tangible assets" },
-  { code: "1510", name: "Accumulated Depreciation", type: "asset", description: "Total depreciation of fixed assets" },
-  { code: "2000", name: "Accounts Payable", type: "liability", description: "Money owed to suppliers" },
-  { code: "2100", name: "Taxes Payable", type: "liability", description: "Taxes due to government" },
-  { code: "2200", name: "Loans Payable", type: "liability", description: "Bank or other loans taken" },
-  { code: "2300", name: "NAPSA Payable", type: "liability", description: "NAPSA contributions payable" },
-  { code: "2310", name: "NHIMA Payable", type: "liability", description: "NHIMA contributions payable" },
-  { code: "2320", name: "PAYE Payable", type: "liability", description: "Pay As You Earn tax payable" },
-  { code: "3000", name: "Owner's Equity", type: "equity", description: "Owner's investment in business" },
-  { code: "3100", name: "Retained Earnings", type: "equity", description: "Accumulated profits retained" },
-  { code: "4000", name: "Sales Revenue", type: "revenue", description: "Income from sales" },
-  { code: "4100", name: "Service Revenue", type: "revenue", description: "Income from services" },
-  { code: "4200", name: "Grant Income", type: "revenue", description: "Income from grants and donations" },
-  { code: "5000", name: "Cost of Goods Sold", type: "expense", description: "Direct costs of goods sold" },
-  { code: "6000", name: "Rent Expense", type: "expense", description: "Monthly office rent" },
-  { code: "6100", name: "Office Supplies", type: "expense", description: "Supplies used in office" },
-  { code: "6200", name: "Salaries Expense", type: "expense", description: "Employee salaries" },
-  { code: "6300", name: "Utilities Expense", type: "expense", description: "Electricity, internet, water bills" },
-  { code: "6400", name: "Depreciation Expense", type: "expense", description: "Periodic asset depreciation" },
-  { code: "6500", name: "Bank Charges", type: "expense", description: "Bank fees and charges" },
-];
+  { code: 1000, name: "Cash", type: "asset", description: "Money available in bank or cash" },
+  { code: 1010, name: "Petty Cash", type: "asset", description: "Small cash for daily needs" },
+  { code: 1100, name: "Accounts Receivable", type: "asset", description: "Amount to be received from customers" },
+  { code: 1200, name: "Inventory", type: "asset", description: "Stock of goods for sale" },
+  { code: 1300, name: "Prepaid Expenses", type: "asset", description: "Advance payments for future expenses" },
+  { code: 1500, name: "Fixed Assets", type: "asset", description: "Long-term tangible assets" },
+  { code: 1510, name: "Accumulated Depreciation", type: "asset", description: "Total depreciation of fixed assets" },
+  { code: 2000, name: "Accounts Payable", type: "liability", description: "Money owed to suppliers" },
+  { code: 2100, name: "Taxes Payable", type: "liability", description: "Taxes due to government" },
+  { code: 2200, name: "Loans Payable", type: "liability", description: "Bank or other loans taken" },
+  { code: 2300, name: "NAPSA Payable", type: "liability", description: "NAPSA contributions payable" },
+  { code: 2310, name: "NHIMA Payable", type: "liability", description: "NHIMA contributions payable" },
+  { code: 2320, name: "PAYE Payable", type: "liability", description: "Pay As You Earn tax payable" },
+  { code: 3000, name: "Owner's Equity", type: "equity", description: "Owner's investment in business" },
+  { code: 3100, name: "Retained Earnings", type: "equity", description: "Accumulated profits retained" },
+  { code: 4001, name: "Sales Revenue", type: "income", description: "Income from sales" },
+  { code: 4100, name: "Service Revenue", type: "income", description: "Income from services" },
+  { code: 4200, name: "Grant Income", type: "income", description: "Income from grants and donations" },
+  { code: 5000, name: "Cost of Goods Sold", type: "expense", description: "Direct costs of goods sold" },
+  { code: 5100, name: "Rent Expense", type: "expense", description: "Monthly office rent" },
+  { code: 5200, name: "Office Supplies", type: "expense", description: "Supplies used in office" },
+  { code: 5300, name: "Salaries Expense", type: "expense", description: "Employee salaries" },
+  { code: 5400, name: "Utilities Expense", type: "expense", description: "Electricity, internet, water bills" },
+  { code: 5500, name: "Depreciation Expense", type: "expense", description: "Periodic asset depreciation" },
+  { code: 5600, name: "Bank Charges", type: "expense", description: "Bank fees and charges" },
+] as const;
 
 interface Account {
   id: string;
-  account_code: string;
-  account_name: string;
-  account_type: string;
+  companyId: string;
+  accountCode: number;
+  accountName: string;
+  accountType: string;
   description: string | null;
-  parent_account_id: string | null;
-  is_active: boolean;
+  parentAccountId: string | null;
+  status: string;
 }
+
+const normalizeType = (value: string): string => {
+  const normalized = value.toLowerCase();
+  if (normalized === "revenue") return "income";
+  return normalized;
+};
+
+const toDbType = (value: string): string => {
+  const normalized = normalizeType(value);
+  const match = ACCOUNT_TYPES.find((type) => type.value === normalized);
+  return match?.label || "Expense";
+};
+
+const toUiType = (value: string): string => normalizeType(value);
 
 export default function ChartOfAccounts() {
   const queryClient = useQueryClient();
+  const { user } = useAuth();
   const [searchTerm, setSearchTerm] = useState("");
   const [filterType, setFilterType] = useState<string>("all");
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
@@ -95,117 +126,152 @@ export default function ChartOfAccounts() {
   });
 
   const { data: accounts, isLoading } = useQuery({
-    queryKey: ["chart-of-accounts"],
+    queryKey: ["chart-of-accounts", user?.id],
     queryFn: async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("Not authenticated");
+      if (!user) return [] as Account[];
 
-      const { data, error } = await supabase
-        .from("chart_of_accounts")
-        .select("*")
-        .order("account_code", { ascending: true });
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      if (!membership?.companyId) return [] as Account[];
 
-      if (error) throw error;
-      return data as Account[];
+      const chartRef = collection(firestore, COLLECTIONS.CHART_OF_ACCOUNTS);
+      const snapshot = await getDocs(query(chartRef, where("companyId", "==", membership.companyId)));
+
+      return snapshot.docs
+        .map((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          return {
+            id: docSnap.id,
+            companyId: String(row.companyId ?? ""),
+            accountCode: Number(row.accountCode ?? row.account_code ?? 0),
+            accountName: String(row.accountName ?? row.account_name ?? ""),
+            accountType: toUiType(String(row.accountType ?? row.account_type ?? "expense")),
+            description: (row.description as string | null) ?? null,
+            parentAccountId: (row.parentAccountId ?? row.parent_account_id ?? null) as string | null,
+            status: String(row.status ?? (row.isActive === false ? "inactive" : "active")),
+          } satisfies Account;
+        })
+        .sort((a, b) => a.accountCode - b.accountCode);
     },
+    enabled: Boolean(user),
   });
 
   const createMutation = useMutation({
     mutationFn: async (data: typeof formData) => {
-      const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Not authenticated");
 
-      const { error } = await supabase.from("chart_of_accounts").insert({
-        account_code: data.account_code,
-        account_name: data.account_name,
-        account_type: data.account_type,
-        description: data.description || null,
-        parent_account_id: data.parent_account_id || null,
-        user_id: user.id,
-      });
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      if (!membership?.companyId) throw new Error("Company context not found");
 
-      if (error) throw error;
+      const accountCode = Number(data.account_code);
+      if (!Number.isFinite(accountCode)) {
+        throw new Error("Account number must be numeric");
+      }
+
+      await addDoc(collection(firestore, COLLECTIONS.CHART_OF_ACCOUNTS), {
+        companyId: membership.companyId,
+        accountCode,
+        accountName: data.account_name,
+        accountType: toDbType(data.account_type),
+        description: data.description || null,
+        parentAccountId: data.parent_account_id || null,
+        status: "active",
+        isSystem: false,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["chart-of-accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["chart-of-accounts", user?.id] });
       toast.success("Account created successfully");
       resetForm();
       setIsAddDialogOpen(false);
     },
     onError: (error) => {
-      toast.error(`Failed to create account: ${error.message}`);
+      toast.error(`Failed to create account: ${error instanceof Error ? error.message : "Unknown error"}`);
     },
   });
 
   const updateMutation = useMutation({
-    mutationFn: async (data: typeof formData & { id: string }) => {
-      const { error } = await supabase
-        .from("chart_of_accounts")
-        .update({
-          account_code: data.account_code,
-          account_name: data.account_name,
-          account_type: data.account_type,
-          description: data.description || null,
-          parent_account_id: data.parent_account_id || null,
-        })
-        .eq("id", data.id);
+    mutationFn: async (data: typeof formData & { id: string; companyId: string }) => {
+      const accountCode = Number(data.account_code);
+      if (!Number.isFinite(accountCode)) {
+        throw new Error("Account number must be numeric");
+      }
 
-      if (error) throw error;
+      await setDoc(
+        doc(firestore, COLLECTIONS.CHART_OF_ACCOUNTS, data.id),
+        {
+          companyId: data.companyId,
+          accountCode,
+          accountName: data.account_name,
+          accountType: toDbType(data.account_type),
+          description: data.description || null,
+          parentAccountId: data.parent_account_id || null,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true },
+      );
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["chart-of-accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["chart-of-accounts", user?.id] });
       toast.success("Account updated successfully");
       resetForm();
       setEditingAccount(null);
     },
     onError: (error) => {
-      toast.error(`Failed to update account: ${error.message}`);
+      toast.error(`Failed to update account: ${error instanceof Error ? error.message : "Unknown error"}`);
     },
   });
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase
-        .from("chart_of_accounts")
-        .delete()
-        .eq("id", id);
-
-      if (error) throw error;
+      await deleteDoc(doc(firestore, COLLECTIONS.CHART_OF_ACCOUNTS, id));
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["chart-of-accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["chart-of-accounts", user?.id] });
       toast.success("Account deleted successfully");
     },
     onError: (error) => {
-      toast.error(`Failed to delete account: ${error.message}`);
+      toast.error(`Failed to delete account: ${error instanceof Error ? error.message : "Unknown error"}`);
     },
   });
 
   const setupDefaultAccounts = useMutation({
     mutationFn: async () => {
-      const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Not authenticated");
 
-      const accountsToInsert = DEFAULT_ACCOUNTS.map(acc => ({
-        account_code: acc.code,
-        account_name: acc.name,
-        account_type: acc.type,
-        description: acc.description,
-        user_id: user.id,
-      }));
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      if (!membership?.companyId) throw new Error("Company context not found");
 
-      const { error } = await supabase
-        .from("chart_of_accounts")
-        .insert(accountsToInsert);
+      const batch = writeBatch(firestore);
+      DEFAULT_ACCOUNTS.forEach((account) => {
+        const ref = doc(firestore, COLLECTIONS.CHART_OF_ACCOUNTS, `${membership.companyId}_${account.code}`);
+        batch.set(
+          ref,
+          {
+            companyId: membership.companyId,
+            accountCode: account.code,
+            accountName: account.name,
+            accountType: toDbType(account.type),
+            description: account.description,
+            parentAccountId: null,
+            status: "active",
+            isSystem: true,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true },
+        );
+      });
 
-      if (error) throw error;
+      await batch.commit();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["chart-of-accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["chart-of-accounts", user?.id] });
       toast.success("Default chart of accounts created successfully");
     },
     onError: (error) => {
-      toast.error(`Failed to setup accounts: ${error.message}`);
+      toast.error(`Failed to setup accounts: ${error instanceof Error ? error.message : "Unknown error"}`);
     },
   });
 
@@ -222,11 +288,11 @@ export default function ChartOfAccounts() {
   const handleEdit = (account: Account) => {
     setEditingAccount(account);
     setFormData({
-      account_code: account.account_code,
-      account_name: account.account_name,
-      account_type: account.account_type,
+      account_code: String(account.accountCode),
+      account_name: account.accountName,
+      account_type: account.accountType,
       description: account.description || "",
-      parent_account_id: account.parent_account_id || "",
+      parent_account_id: account.parentAccountId || "",
     });
   };
 
@@ -237,43 +303,41 @@ export default function ChartOfAccounts() {
     }
 
     if (editingAccount) {
-      updateMutation.mutate({ ...formData, id: editingAccount.id });
+      updateMutation.mutate({ ...formData, id: editingAccount.id, companyId: editingAccount.companyId });
     } else {
       createMutation.mutate(formData);
     }
   };
 
   const getNormalBalance = (type: string) => {
-    const accountType = ACCOUNT_TYPES.find(t => t.value === type);
+    const accountType = ACCOUNT_TYPES.find((t) => t.value === normalizeType(type));
     return accountType?.normalBalance || "-";
   };
 
   const getTypeColor = (type: string) => {
-    switch (type) {
-      case "asset": return "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200";
-      case "liability": return "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200";
-      case "equity": return "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200";
-      case "revenue": return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200";
-      case "expense": return "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200";
-      default: return "bg-muted text-muted-foreground";
+    switch (normalizeType(type)) {
+      case "asset":
+        return "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200";
+      case "liability":
+        return "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200";
+      case "equity":
+        return "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200";
+      case "income":
+        return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200";
+      case "expense":
+        return "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200";
+      default:
+        return "bg-muted text-muted-foreground";
     }
   };
 
-  const filteredAccounts = accounts?.filter(account => {
-    const matchesSearch = 
-      account.account_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      account.account_code.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesType = filterType === "all" || account.account_type === filterType;
+  const filteredAccounts = accounts?.filter((account) => {
+    const matchesSearch =
+      account.accountName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      String(account.accountCode).includes(searchTerm);
+    const matchesType = filterType === "all" || account.accountType === filterType;
     return matchesSearch && matchesType;
   });
-
-  // Group accounts by type
-  const groupedAccounts = filteredAccounts?.reduce((groups, account) => {
-    const type = account.account_type;
-    if (!groups[type]) groups[type] = [];
-    groups[type].push(account);
-    return groups;
-  }, {} as Record<string, Account[]>);
 
   if (isLoading) {
     return <LoadingState message="Loading chart of accounts..." />;
@@ -284,9 +348,7 @@ export default function ChartOfAccounts() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Chart of Accounts</h1>
-          <p className="text-muted-foreground">
-            Manage your organization's account structure
-          </p>
+          <p className="text-muted-foreground">Manage your organization's account structure</p>
         </div>
         <div className="flex gap-2">
           {(!accounts || accounts.length === 0) && (
@@ -301,7 +363,12 @@ export default function ChartOfAccounts() {
           )}
           <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
             <DialogTrigger asChild>
-              <Button onClick={() => { resetForm(); setEditingAccount(null); }}>
+              <Button
+                onClick={() => {
+                  resetForm();
+                  setEditingAccount(null);
+                }}
+              >
                 <Plus className="h-4 w-4 mr-2" />
                 Add Account
               </Button>
@@ -353,18 +420,22 @@ export default function ChartOfAccounts() {
                   <Label htmlFor="parent_account">Parent Account (Optional)</Label>
                   <Select
                     value={formData.parent_account_id || "none"}
-                    onValueChange={(value) => setFormData({ ...formData, parent_account_id: value === "none" ? "" : value })}
+                    onValueChange={(value) =>
+                      setFormData({ ...formData, parent_account_id: value === "none" ? "" : value })
+                    }
                   >
                     <SelectTrigger>
                       <SelectValue placeholder="Select parent account" />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="none">None</SelectItem>
-                      {accounts?.filter(a => a.account_type === formData.account_type).map((account) => (
-                        <SelectItem key={account.id} value={account.id}>
-                          {account.account_code} - {account.account_name}
-                        </SelectItem>
-                      ))}
+                      {accounts
+                        ?.filter((account) => account.accountType === formData.account_type)
+                        .map((account) => (
+                          <SelectItem key={account.id} value={account.id}>
+                            {account.accountCode} - {account.accountName}
+                          </SelectItem>
+                        ))}
                     </SelectContent>
                   </Select>
                 </div>
@@ -381,7 +452,8 @@ export default function ChartOfAccounts() {
                 {formData.account_type && (
                   <div className="p-3 bg-muted rounded-lg">
                     <p className="text-sm text-muted-foreground">
-                      Normal Balance: <span className="font-medium text-foreground">{getNormalBalance(formData.account_type)}</span>
+                      Normal Balance:{" "}
+                      <span className="font-medium text-foreground">{getNormalBalance(formData.account_type)}</span>
                     </p>
                   </div>
                 )}
@@ -399,7 +471,6 @@ export default function ChartOfAccounts() {
         </div>
       </div>
 
-      {/* Search and Filter */}
       <Card>
         <CardContent className="pt-6">
           <div className="flex flex-col sm:flex-row gap-4">
@@ -430,22 +501,18 @@ export default function ChartOfAccounts() {
         </CardContent>
       </Card>
 
-      {/* Accounts Table */}
       {!filteredAccounts || filteredAccounts.length === 0 ? (
         <Card className="p-12">
           <div className="text-center">
             <FileText className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
             <h3 className="text-lg font-semibold mb-2">No accounts found</h3>
             <p className="text-muted-foreground mb-4">
-              {accounts?.length === 0 
+              {accounts?.length === 0
                 ? "Set up your chart of accounts to start tracking your finances"
-                : "No accounts match your search criteria"
-              }
+                : "No accounts match your search criteria"}
             </p>
             {accounts?.length === 0 && (
-              <Button onClick={() => setupDefaultAccounts.mutate()}>
-                Setup Default Accounts
-              </Button>
+              <Button onClick={() => setupDefaultAccounts.mutate()}>Setup Default Accounts</Button>
             )}
           </div>
         </Card>
@@ -473,40 +540,25 @@ export default function ChartOfAccounts() {
                 <TableBody>
                   {filteredAccounts.map((account) => (
                     <TableRow key={account.id} className="hover:bg-muted/50">
-                      <TableCell className="font-mono font-medium">
-                        {account.account_code}
-                      </TableCell>
+                      <TableCell className="font-mono font-medium">{account.accountCode}</TableCell>
                       <TableCell className="font-medium">
                         <div className="flex items-center gap-2">
-                          {account.parent_account_id && (
-                            <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                          )}
-                          {account.account_name}
+                          {account.parentAccountId && <ChevronRight className="h-4 w-4 text-muted-foreground" />}
+                          {account.accountName}
                         </div>
                       </TableCell>
                       <TableCell>
-                        <Badge className={getTypeColor(account.account_type)} variant="secondary">
-                          {account.account_type}
+                        <Badge className={getTypeColor(account.accountType)} variant="secondary">
+                          {account.accountType}
                         </Badge>
                       </TableCell>
                       <TableCell>
-                        <Badge variant="outline">
-                          {getNormalBalance(account.account_type)}
-                        </Badge>
+                        <Badge variant="outline">{getNormalBalance(account.accountType)}</Badge>
                       </TableCell>
-                      <TableCell className="text-muted-foreground max-w-xs truncate">
-                        {account.description || "-"}
-                      </TableCell>
+                      <TableCell className="text-muted-foreground max-w-xs truncate">{account.description || "-"}</TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-2">
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => {
-                              handleEdit(account);
-                              setIsAddDialogOpen(true);
-                            }}
-                          >
+                          <Button variant="ghost" size="icon" onClick={() => handleEdit(account)}>
                             <Edit2 className="h-4 w-4" />
                           </Button>
                           <Button
@@ -531,7 +583,6 @@ export default function ChartOfAccounts() {
         </Card>
       )}
 
-      {/* Edit Dialog */}
       <Dialog open={!!editingAccount} onOpenChange={(open) => !open && setEditingAccount(null)}>
         <DialogContent className="max-w-md">
           <DialogHeader>

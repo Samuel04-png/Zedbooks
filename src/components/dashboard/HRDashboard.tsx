@@ -1,14 +1,36 @@
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Users, DollarSign, Calendar, Clock, AlertCircle } from "lucide-react";
 import { formatZMW } from "@/utils/zambianTaxCalculations";
 import { format } from "date-fns";
+import { useAuth } from "@/contexts/AuthContext";
+import { dashboardService } from "@/services/firebase";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { readNumber, readString } from "@/components/dashboard/dashboardDataUtils";
 
 export function HRDashboard() {
+  const { user } = useAuth();
+
   const { data: stats } = useQuery({
-    queryKey: ["hr-dashboard-stats"],
+    queryKey: ["hr-dashboard-stats", user?.id],
+    enabled: Boolean(user),
     queryFn: async () => {
+      if (!user) {
+        return {
+          totalEmployees: 0,
+          activeEmployees: 0,
+          permanentEmployees: 0,
+          contractEmployees: 0,
+          departments: 0,
+          monthlyPayroll: 0,
+          pendingPayroll: 0,
+          activeAdvances: 0,
+          totalAdvanceBalance: 0,
+          hoursLogged: 0,
+          pendingTimeEntries: 0,
+        };
+      }
+
       const currentMonth = format(new Date(), "yyyy-MM");
       const startOfMonth = `${currentMonth}-01`;
       const endOfMonth = new Date(
@@ -17,25 +39,44 @@ export function HRDashboard() {
         0
       ).toISOString().split("T")[0];
 
-      const [employees, payrollRuns, advances, timeEntries] = await Promise.all([
-        supabase.from("employees").select("id, employment_status, contract_type, department"),
-        supabase.from("payroll_runs").select("total_net, total_gross, status, run_date").gte("run_date", startOfMonth).lte("run_date", endOfMonth),
-        supabase.from("advances").select("amount, status, remaining_balance"),
-        supabase.from("time_entries").select("hours_worked, status").gte("work_date", startOfMonth),
-      ]);
+      const { employees, payrollRuns, advances, timeEntries } = await dashboardService.runQueries(user.id, {
+        employees: { collectionName: COLLECTIONS.EMPLOYEES },
+        payrollRuns: {
+          collectionName: COLLECTIONS.PAYROLL_RUNS,
+          filters: [
+            { field: "runDate", op: ">=", value: startOfMonth },
+            { field: "runDate", op: "<=", value: endOfMonth },
+          ],
+        },
+        advances: { collectionName: COLLECTIONS.ADVANCES },
+        timeEntries: {
+          collectionName: COLLECTIONS.TIME_ENTRIES,
+          filters: [{ field: "workDate", op: ">=", value: startOfMonth }],
+        },
+      });
+
+      const departments = new Set(
+        employees
+          .map((e) => readString(e, ["department"]))
+          .filter((value) => Boolean(value)),
+      );
 
       return {
-        totalEmployees: employees.data?.length || 0,
-        activeEmployees: employees.data?.filter(e => e.employment_status === 'active').length || 0,
-        permanentEmployees: employees.data?.filter(e => e.contract_type === 'permanent').length || 0,
-        contractEmployees: employees.data?.filter(e => e.contract_type === 'contract').length || 0,
-        departments: [...new Set(employees.data?.map(e => e.department).filter(Boolean))].length,
-        monthlyPayroll: payrollRuns.data?.filter(p => p.status === 'approved').reduce((s, p) => s + (p.total_net || 0), 0) || 0,
-        pendingPayroll: payrollRuns.data?.filter(p => p.status === 'pending').length || 0,
-        activeAdvances: advances.data?.filter(a => a.status === 'active').length || 0,
-        totalAdvanceBalance: advances.data?.filter(a => a.status === 'active').reduce((s, a) => s + (a.remaining_balance || 0), 0) || 0,
-        hoursLogged: timeEntries.data?.reduce((s, t) => s + (t.hours_worked || 0), 0) || 0,
-        pendingTimeEntries: timeEntries.data?.filter(t => t.status === 'pending').length || 0,
+        totalEmployees: employees.length,
+        activeEmployees: employees.filter((e) => readString(e, ["employmentStatus", "employment_status"]) === "active").length,
+        permanentEmployees: employees.filter((e) => readString(e, ["contractType", "contract_type"]) === "permanent").length,
+        contractEmployees: employees.filter((e) => readString(e, ["contractType", "contract_type"]) === "contract").length,
+        departments: departments.size,
+        monthlyPayroll: payrollRuns
+          .filter((p) => readString(p, ["status", "payrollStatus", "payroll_status"]) === "approved")
+          .reduce((sum, p) => sum + readNumber(p, ["totalNet", "total_net"]), 0),
+        pendingPayroll: payrollRuns.filter((p) => readString(p, ["status", "payrollStatus", "payroll_status"]) === "pending").length,
+        activeAdvances: advances.filter((a) => readString(a, ["status"]) === "active").length,
+        totalAdvanceBalance: advances
+          .filter((a) => readString(a, ["status"]) === "active")
+          .reduce((sum, a) => sum + readNumber(a, ["remainingBalance", "remaining_balance"]), 0),
+        hoursLogged: timeEntries.reduce((sum, t) => sum + readNumber(t, ["hoursWorked", "hours_worked"]), 0),
+        pendingTimeEntries: timeEntries.filter((t) => readString(t, ["status"]) === "pending").length,
       };
     },
   });

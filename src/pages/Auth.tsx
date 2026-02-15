@@ -4,11 +4,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Checkbox } from "@/components/ui/checkbox";
-import { User, Lock, Loader2, RefreshCw, Mail, ArrowRight, Building2 } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { User, Lock, Loader2, RefreshCw, Mail, Building2 } from "lucide-react";
 import { useNavigate, Link } from "react-router-dom";
 import { toast } from "sonner";
-import { supabase } from "@/integrations/supabase/client";
 import { z } from "zod";
+import { applyActionCode, confirmPasswordReset, verifyPasswordResetCode } from "firebase/auth";
+import { firebaseAuth, isFirebaseConfigured } from "@/integrations/firebase/client";
+import { authService, companyService } from "@/services/firebase";
 
 const loginSchema = z.object({
   email: z.string().email("Invalid email address"),
@@ -20,6 +23,9 @@ const signupSchema = z.object({
   email: z.string().email("Invalid email address"),
   password: z.string().min(6, "Password must be at least 6 characters"),
   phone: z.string().min(10, "Phone number must be at least 10 digits").regex(/^\+?[0-9]+$/, "Invalid phone number format"),
+  organizationType: z.enum(["business", "non_profit"]),
+  taxClassification: z.string().min(1, "Tax classification is required"),
+  tpin: z.string().regex(/^\d{10}$/, "TPIN must be exactly 10 digits"),
 });
 
 const resetEmailSchema = z.object({
@@ -51,6 +57,9 @@ export default function Auth() {
     email: "",
     password: "",
     phone: "",
+    organizationType: "business" as "business" | "non_profit",
+    taxClassification: "",
+    tpin: "",
   });
   const [resetEmail, setResetEmail] = useState("");
   const [newPasswordForm, setNewPasswordForm] = useState({
@@ -58,6 +67,8 @@ export default function Auth() {
     confirmPassword: "",
   });
   const [pendingVerificationEmail, setPendingVerificationEmail] = useState("");
+  const [inviteToken, setInviteToken] = useState<string | null>(null);
+  const [resetActionCode, setResetActionCode] = useState<string | null>(null);
 
   useEffect(() => {
     if (resendCooldown > 0) {
@@ -68,53 +79,129 @@ export default function Auth() {
 
   const checkCompanySetupAndRedirect = useCallback(async (userId: string) => {
     try {
-      const { data: settings } = await supabase
-        .from("company_settings")
-        .select("id, company_name")
-        .eq("user_id", userId)
-        .maybeSingle();
-
-      if (!settings || !settings.company_name) {
-        navigate("/setup", { replace: true });
-      } else {
-        navigate("/dashboard", { replace: true });
+      try {
+        await authService.ensureCurrentMembership();
+      } catch {
+        // Continue with best-effort lookup below.
       }
+
+      const membership = await companyService.getPrimaryMembershipByUser(userId);
+      if (!membership) {
+        navigate("/setup", { replace: true });
+        return;
+      }
+
+      const settings = await companyService.getCompanySettings(membership.companyId);
+      if (!settings?.companyName) {
+        navigate("/setup", { replace: true });
+        return;
+      }
+
+      navigate("/dashboard", { replace: true });
     } catch (error) {
       // Default to dashboard on error
       navigate("/dashboard", { replace: true });
     }
   }, [navigate]);
 
-  useEffect(() => {
-    const hashParams = new URLSearchParams(window.location.hash.substring(1));
-    const accessToken = hashParams.get("access_token");
-    const type = hashParams.get("type");
-
-    if (accessToken && type === "recovery") {
-      setAuthView("reset-password");
-      setIsCheckingAuth(false);
+  const acceptInvitationIfPresent = useCallback(async (token: string) => {
+    try {
+      await authService.acceptInvitation(token);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to accept invitation";
+      toast.error(`Invitation link error: ${message}`);
       return;
     }
 
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session) {
-        checkCompanySetupAndRedirect(session.user.id);
-      } else {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("invite");
+    window.history.replaceState({}, "", url.toString());
+    setInviteToken(null);
+    toast.success("Invitation accepted. Your company access and role are now configured.");
+  }, []);
+
+  useEffect(() => {
+    const searchParams = new URLSearchParams(window.location.search);
+    const mode = searchParams.get("mode");
+    const oobCode = searchParams.get("oobCode");
+    const tokenFromUrl = searchParams.get("invite");
+    setInviteToken(tokenFromUrl);
+    let mounted = true;
+
+    const clearAuthQueryParams = () => {
+      const url = new URL(window.location.href);
+      ["mode", "oobCode", "apiKey", "lang", "continueUrl"].forEach((key) => url.searchParams.delete(key));
+      window.history.replaceState({}, "", url.toString());
+    };
+
+    const initializeAuthView = async () => {
+      if (!isFirebaseConfigured) {
+        setIsCheckingAuth(false);
+        return;
+      }
+
+      if (mode === "resetPassword" && oobCode) {
+        try {
+          await verifyPasswordResetCode(firebaseAuth, oobCode);
+          if (mounted) {
+            setResetActionCode(oobCode);
+            setAuthView("reset-password");
+          }
+        } catch (error) {
+          toast.error("Invalid or expired password reset link.");
+        } finally {
+          if (mounted) {
+            setIsCheckingAuth(false);
+          }
+        }
+        return;
+      }
+
+      if (mode === "verifyEmail" && oobCode) {
+        try {
+          await applyActionCode(firebaseAuth, oobCode);
+          toast.success("Email verified successfully. You can now log in.");
+          clearAuthQueryParams();
+        } catch (error) {
+          toast.error("Email verification link is invalid or expired.");
+        }
+      }
+
+      const currentUser = authService.getCurrentUser();
+      if (currentUser) {
+        if (tokenFromUrl) {
+          await acceptInvitationIfPresent(tokenFromUrl);
+        }
+        await checkCompanySetupAndRedirect(currentUser.uid);
+      } else if (mounted) {
         setIsCheckingAuth(false);
       }
-    });
+    };
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === "SIGNED_IN" && session) {
-        // Immediately redirect on sign in
-        setTimeout(() => {
-          checkCompanySetupAndRedirect(session.user.id);
-        }, 0);
+    void initializeAuthView();
+
+    const subscription = authService.onAuthStateChanged(async (authUser) => {
+      if (!mounted) return;
+
+      if (!authUser) {
+        setIsCheckingAuth(false);
+        return;
       }
+
+      if (tokenFromUrl) {
+        await acceptInvitationIfPresent(tokenFromUrl);
+      }
+
+      setTimeout(() => {
+        void checkCompanySetupAndRedirect(authUser.uid);
+      }, 0);
     });
 
-    return () => subscription.unsubscribe();
-  }, [checkCompanySetupAndRedirect]);
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  }, [acceptInvitationIfPresent, checkCompanySetupAndRedirect]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -122,22 +209,21 @@ export default function Auth() {
 
     try {
       const validated = loginSchema.parse(loginForm);
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email: validated.email,
-        password: validated.password,
-      });
-
-      if (error) {
-        toast.error(error.message);
-      } else if (data.session) {
+      const credential = await authService.signIn(validated.email, validated.password);
+      if (!credential.user.emailVerified) {
+        setPendingVerificationEmail(validated.email);
+        setAuthView("verify-email");
+        toast.error("Please verify your email before signing in.");
+        await authService.logout();
+      } else {
         toast.success("Logged in successfully");
-        // The onAuthStateChange will handle redirect
       }
     } catch (error) {
       if (error instanceof z.ZodError) {
         toast.error(error.errors[0].message);
       } else {
-        toast.error("Failed to log in");
+        const message = error instanceof Error ? error.message : "Failed to log in";
+        toast.error(message);
       }
     } finally {
       setIsLoading(false);
@@ -150,34 +236,25 @@ export default function Auth() {
 
     try {
       const validated = signupSchema.parse(signupForm);
-      const { data, error } = await supabase.auth.signUp({
+      await authService.signUp({
         email: validated.email,
         password: validated.password,
-        options: {
-          emailRedirectTo: `${window.location.origin}/auth`,
-          data: {
-            organization_name: validated.organizationName,
-            phone: validated.phone,
-          },
-        },
+        organizationName: validated.organizationName,
+        phone: validated.phone,
+        organizationType: validated.organizationType,
+        taxClassification: validated.taxClassification,
+        tpin: validated.tpin,
       });
 
-      if (error) {
-        toast.error(error.message);
-      } else if (data.user) {
-        if (data.user.identities && data.user.identities.length === 0) {
-          toast.error("An account with this email already exists");
-        } else {
-          setPendingVerificationEmail(validated.email);
-          setAuthView("verify-email");
-          toast.success("Verification email sent! Please check your inbox.");
-        }
-      }
+      setPendingVerificationEmail(validated.email);
+      setAuthView("verify-email");
+      toast.success("Verification email sent! Please check your inbox.");
     } catch (error) {
       if (error instanceof z.ZodError) {
         toast.error(error.errors[0].message);
       } else {
-        toast.error("Failed to create account");
+        const message = error instanceof Error ? error.message : "Failed to create account";
+        toast.error(message);
       }
     } finally {
       setIsLoading(false);
@@ -189,19 +266,12 @@ export default function Auth() {
 
     setIsResending(true);
     try {
-      const { error } = await supabase.auth.resend({
-        type: "signup",
-        email: pendingVerificationEmail,
-      });
-
-      if (error) {
-        toast.error(error.message);
-      } else {
-        toast.success("Verification email resent!");
-        setResendCooldown(60);
-      }
+      await authService.resendVerificationEmail();
+      toast.success("Verification email resent!");
+      setResendCooldown(60);
     } catch (error) {
-      toast.error("Failed to resend verification email");
+      const message = error instanceof Error ? error.message : "Failed to resend verification email";
+      toast.error(message);
     } finally {
       setIsResending(false);
     }
@@ -213,22 +283,16 @@ export default function Auth() {
 
     try {
       const validated = resetEmailSchema.parse({ email: resetEmail });
-      const { error } = await supabase.auth.resetPasswordForEmail(validated.email, {
-        redirectTo: `${window.location.origin}/auth`,
-      });
-
-      if (error) {
-        toast.error(error.message);
-      } else {
-        toast.success("Password reset email sent! Check your inbox.");
-        setAuthView("login");
-        setResetEmail("");
-      }
+      await authService.sendResetPasswordEmail(validated.email);
+      toast.success("Password reset email sent! Check your inbox.");
+      setAuthView("login");
+      setResetEmail("");
     } catch (error) {
       if (error instanceof z.ZodError) {
         toast.error(error.errors[0].message);
       } else {
-        toast.error("Failed to send reset email");
+        const message = error instanceof Error ? error.message : "Failed to send reset email";
+        toast.error(message);
       }
     } finally {
       setIsLoading(false);
@@ -241,22 +305,22 @@ export default function Auth() {
 
     try {
       const validated = newPasswordSchema.parse(newPasswordForm);
-      const { error } = await supabase.auth.updateUser({
-        password: validated.password,
-      });
-
-      if (error) {
-        toast.error(error.message);
-      } else {
-        toast.success("Password updated successfully!");
-        setAuthView("login");
-        setNewPasswordForm({ password: "", confirmPassword: "" });
+      if (!resetActionCode) {
+        toast.error("Invalid password reset session. Request a new reset link.");
+        return;
       }
+
+      await confirmPasswordReset(firebaseAuth, resetActionCode, validated.password);
+      toast.success("Password updated successfully!");
+      setAuthView("login");
+      setNewPasswordForm({ password: "", confirmPassword: "" });
+      setResetActionCode(null);
     } catch (error) {
       if (error instanceof z.ZodError) {
         toast.error(error.errors[0].message);
       } else {
-        toast.error("Failed to update password");
+        const message = error instanceof Error ? error.message : "Failed to update password";
+        toast.error(message);
       }
     } finally {
       setIsLoading(false);
@@ -279,22 +343,22 @@ export default function Auth() {
     return (
       <div className="min-h-screen flex">
         {/* Left side - Gradient blob design */}
-        <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden bg-gradient-to-br from-amber-400 via-orange-400 to-red-400">
-          <div className="absolute -left-32 -top-32 w-96 h-96 bg-gradient-to-br from-amber-500 to-orange-500 rounded-full opacity-80" />
-          <div className="absolute left-20 top-1/4 w-64 h-64 bg-gradient-to-br from-orange-400 to-amber-400 rounded-full opacity-70" />
-          <div className="absolute -left-16 bottom-1/4 w-80 h-80 bg-gradient-to-tr from-red-400 to-orange-400 rounded-full opacity-75" />
-          <div className="absolute right-10 bottom-10 w-48 h-48 bg-gradient-to-br from-amber-300 to-orange-300 rounded-full opacity-60" />
-          
+        <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden bg-slate-900">
+          <div className="absolute -left-32 -top-32 w-96 h-96 bg-blue-900/20 rounded-full blur-3xl opacity-20" />
+          <div className="absolute left-20 top-1/4 w-64 h-64 bg-indigo-900/20 rounded-full blur-3xl opacity-20" />
+          <div className="absolute -left-16 bottom-1/4 w-80 h-80 bg-slate-800/20 rounded-full blur-3xl opacity-20" />
+          <div className="absolute right-10 bottom-10 w-48 h-48 bg-blue-800/20 rounded-full blur-3xl opacity-20" />
+
           {/* Logo overlay */}
           <div className="absolute inset-0 flex items-center justify-center">
             <div className="text-center text-white">
               <div className="flex items-center justify-center gap-3 mb-4">
-                <div className="h-16 w-16 rounded-2xl bg-white/20 backdrop-blur flex items-center justify-center">
-                  <Building2 className="h-10 w-10 text-white" />
+                <div className="h-16 w-16 rounded-2xl bg-white/5 backdrop-blur-sm flex items-center justify-center border border-white/10">
+                  <img src="/zedbooklogo_transparent.png" alt="ZedBooks Logo" className="h-10 w-10 object-contain" />
                 </div>
               </div>
-              <h2 className="text-4xl font-bold">ZedBooks</h2>
-              <p className="text-white/80 mt-2">Accountability with Purpose</p>
+              <h2 className="text-4xl font-bold tracking-tight">ZedBooks</h2>
+              <p className="text-white/60 mt-2 font-medium">Accountability with Purpose</p>
             </div>
           </div>
         </div>
@@ -302,8 +366,8 @@ export default function Auth() {
         {/* Right side - Verification content */}
         <div className="flex-1 flex items-center justify-center p-8 bg-white">
           <div className="w-full max-w-md text-center">
-            <div className="mx-auto w-20 h-20 bg-gradient-to-r from-amber-500 to-orange-500 rounded-full flex items-center justify-center mb-6">
-              <Mail className="h-10 w-10 text-white" />
+            <div className="mx-auto w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mb-6">
+              <Mail className="h-8 w-8 text-primary" />
             </div>
             <h1 className="text-3xl font-bold text-gray-900 mb-2">Verify Your Email</h1>
             <p className="text-gray-500 mb-6">
@@ -311,15 +375,15 @@ export default function Auth() {
               <span className="font-medium text-gray-900">{pendingVerificationEmail}</span>
             </p>
 
-            <div className="bg-amber-50 p-4 rounded-xl mb-6 border border-amber-100">
-              <p className="text-sm text-amber-800">
+            <div className="bg-muted p-4 rounded-lg mb-6 border border-border">
+              <p className="text-sm text-muted-foreground">
                 Click the link in your email to verify your account. Check your spam folder if you don't see it.
               </p>
             </div>
 
             <Button
               variant="outline"
-              className="w-full mb-4 rounded-full border-orange-300 hover:bg-orange-50"
+              className="w-full mb-4 rounded-md border-input hover:bg-accent"
               onClick={handleResendVerificationEmail}
               disabled={isResending || resendCooldown > 0}
             >
@@ -359,21 +423,21 @@ export default function Auth() {
     return (
       <div className="min-h-screen flex">
         {/* Left side - Gradient blob design */}
-        <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden bg-gradient-to-br from-amber-400 via-orange-400 to-red-400">
-          <div className="absolute -left-32 -top-32 w-96 h-96 bg-gradient-to-br from-amber-500 to-orange-500 rounded-full opacity-80" />
-          <div className="absolute left-20 top-1/4 w-64 h-64 bg-gradient-to-br from-orange-400 to-amber-400 rounded-full opacity-70" />
-          <div className="absolute -left-16 bottom-1/4 w-80 h-80 bg-gradient-to-tr from-red-400 to-orange-400 rounded-full opacity-75" />
-          <div className="absolute right-10 bottom-10 w-48 h-48 bg-gradient-to-br from-amber-300 to-orange-300 rounded-full opacity-60" />
-          
+        <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden bg-slate-900">
+          <div className="absolute -left-32 -top-32 w-96 h-96 bg-blue-900/20 rounded-full blur-3xl opacity-20" />
+          <div className="absolute left-20 top-1/4 w-64 h-64 bg-indigo-900/20 rounded-full blur-3xl opacity-20" />
+          <div className="absolute -left-16 bottom-1/4 w-80 h-80 bg-slate-800/20 rounded-full blur-3xl opacity-20" />
+          <div className="absolute right-10 bottom-10 w-48 h-48 bg-blue-800/20 rounded-full blur-3xl opacity-20" />
+
           <div className="absolute inset-0 flex items-center justify-center">
             <div className="text-center text-white">
               <div className="flex items-center justify-center gap-3 mb-4">
-                <div className="h-16 w-16 rounded-2xl bg-white/20 backdrop-blur flex items-center justify-center">
+                <div className="h-16 w-16 rounded-2xl bg-white/5 backdrop-blur-sm flex items-center justify-center border border-white/10">
                   <Building2 className="h-10 w-10 text-white" />
                 </div>
               </div>
-              <h2 className="text-4xl font-bold">ZedBooks</h2>
-              <p className="text-white/80 mt-2">Accountability with Purpose</p>
+              <h2 className="text-4xl font-bold tracking-tight">ZedBooks</h2>
+              <p className="text-white/60 mt-2 font-medium">Accountability with Purpose</p>
             </div>
           </div>
         </div>
@@ -394,13 +458,13 @@ export default function Auth() {
                   placeholder="Email Address"
                   value={resetEmail}
                   onChange={(e) => setResetEmail(e.target.value)}
-                  className="pl-12 h-12 rounded-full border-gray-200 focus:border-orange-400 focus:ring-orange-400"
+                  className="pl-12 h-11 rounded-md border-input focus:ring-2 focus:ring-primary/20"
                 />
               </div>
 
               <Button
                 type="submit"
-                className="w-full h-12 rounded-full bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-semibold"
+                className="w-full h-11 rounded-md bg-primary hover:bg-primary/90 text-primary-foreground font-semibold shadow-sm transition-all"
                 disabled={isLoading}
               >
                 {isLoading ? (
@@ -430,12 +494,12 @@ export default function Auth() {
     return (
       <div className="min-h-screen flex">
         {/* Left side - Gradient blob design */}
-        <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden bg-gradient-to-br from-amber-400 via-orange-400 to-red-400">
-          <div className="absolute -left-32 -top-32 w-96 h-96 bg-gradient-to-br from-amber-500 to-orange-500 rounded-full opacity-80" />
-          <div className="absolute left-20 top-1/4 w-64 h-64 bg-gradient-to-br from-orange-400 to-amber-400 rounded-full opacity-70" />
-          <div className="absolute -left-16 bottom-1/4 w-80 h-80 bg-gradient-to-tr from-red-400 to-orange-400 rounded-full opacity-75" />
-          <div className="absolute right-10 bottom-10 w-48 h-48 bg-gradient-to-br from-amber-300 to-orange-300 rounded-full opacity-60" />
-          
+        <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden bg-slate-900">
+          <div className="absolute -left-32 -top-32 w-96 h-96 bg-blue-900/20 rounded-full blur-3xl opacity-20" />
+          <div className="absolute left-20 top-1/4 w-64 h-64 bg-indigo-900/20 rounded-full blur-3xl opacity-20" />
+          <div className="absolute -left-16 bottom-1/4 w-80 h-80 bg-slate-800/20 rounded-full blur-3xl opacity-20" />
+          <div className="absolute right-10 bottom-10 w-48 h-48 bg-blue-800/20 rounded-full blur-3xl opacity-20" />
+
           <div className="absolute inset-0 flex items-center justify-center">
             <div className="text-center text-white">
               <div className="flex items-center justify-center gap-3 mb-4">
@@ -465,7 +529,7 @@ export default function Auth() {
                   placeholder="New Password"
                   value={newPasswordForm.password}
                   onChange={(e) => setNewPasswordForm({ ...newPasswordForm, password: e.target.value })}
-                  className="pl-12 h-12 rounded-full border-gray-200 focus:border-orange-400 focus:ring-orange-400"
+                  className="pl-12 h-11 rounded-md border-input focus:ring-2 focus:ring-primary/20"
                 />
               </div>
 
@@ -476,13 +540,13 @@ export default function Auth() {
                   placeholder="Confirm Password"
                   value={newPasswordForm.confirmPassword}
                   onChange={(e) => setNewPasswordForm({ ...newPasswordForm, confirmPassword: e.target.value })}
-                  className="pl-12 h-12 rounded-full border-gray-200 focus:border-orange-400 focus:ring-orange-400"
+                  className="pl-12 h-11 rounded-md border-input focus:ring-2 focus:ring-primary/20"
                 />
               </div>
 
               <Button
                 type="submit"
-                className="w-full h-12 rounded-full bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-semibold"
+                className="w-full h-11 rounded-md bg-primary hover:bg-primary/90 text-primary-foreground font-semibold shadow-sm transition-all"
                 disabled={isLoading}
               >
                 {isLoading ? (
@@ -502,22 +566,22 @@ export default function Auth() {
   return (
     <div className="min-h-screen flex">
       {/* Left side - Gradient blob design */}
-      <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden bg-gradient-to-br from-amber-400 via-orange-400 to-red-400">
-        <div className="absolute -left-32 -top-32 w-96 h-96 bg-gradient-to-br from-amber-500 to-orange-500 rounded-full opacity-80" />
-        <div className="absolute left-20 top-1/4 w-64 h-64 bg-gradient-to-br from-orange-400 to-amber-400 rounded-full opacity-70" />
-        <div className="absolute -left-16 bottom-1/4 w-80 h-80 bg-gradient-to-tr from-red-400 to-orange-400 rounded-full opacity-75" />
-        <div className="absolute right-10 bottom-10 w-48 h-48 bg-gradient-to-br from-amber-300 to-orange-300 rounded-full opacity-60" />
-        
+      <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden bg-slate-900">
+        <div className="absolute -left-32 -top-32 w-96 h-96 bg-blue-900/20 rounded-full blur-3xl opacity-20" />
+        <div className="absolute left-20 top-1/4 w-64 h-64 bg-indigo-900/20 rounded-full blur-3xl opacity-20" />
+        <div className="absolute -left-16 bottom-1/4 w-80 h-80 bg-slate-800/20 rounded-full blur-3xl opacity-20" />
+        <div className="absolute right-10 bottom-10 w-48 h-48 bg-blue-800/20 rounded-full blur-3xl opacity-20" />
+
         {/* Logo overlay */}
         <div className="absolute inset-0 flex items-center justify-center">
           <div className="text-center text-white">
             <div className="flex items-center justify-center gap-3 mb-4">
-              <div className="h-16 w-16 rounded-2xl bg-white/20 backdrop-blur flex items-center justify-center">
-                <Building2 className="h-10 w-10 text-white" />
+              <div className="h-16 w-16 rounded-2xl bg-white/5 backdrop-blur-sm flex items-center justify-center border border-white/10">
+                <img src="/logo_new.png" alt="ZedBooks Logo" className="h-12 w-auto object-contain" />
               </div>
             </div>
-            <h2 className="text-4xl font-bold">ZedBooks</h2>
-            <p className="text-white/80 mt-2">Accountability with Purpose</p>
+            <h2 className="text-4xl font-bold tracking-tight">ZedBooks</h2>
+            <p className="text-white/60 mt-2 font-medium">Accountability with Purpose</p>
           </div>
         </div>
       </div>
@@ -527,18 +591,18 @@ export default function Auth() {
         <div className="w-full max-w-md">
           {/* Mobile logo */}
           <div className="lg:hidden flex items-center justify-center gap-2 mb-8">
-            <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-amber-500 to-orange-500 flex items-center justify-center">
-              <Building2 className="h-6 w-6 text-white" />
+            <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center">
+              <img src="/logo_new.png" alt="ZedBooks Logo" className="h-8 w-auto object-contain" />
             </div>
             <span className="text-xl font-bold">ZedBooks</span>
           </div>
 
           <Tabs defaultValue="login" className="w-full">
-            <TabsList className="grid w-full grid-cols-2 mb-8 rounded-full bg-gray-100 p-1">
-              <TabsTrigger value="login" className="rounded-full data-[state=active]:bg-white data-[state=active]:shadow-sm">
+            <TabsList className="grid w-full grid-cols-2 mb-8 rounded-lg bg-muted p-1">
+              <TabsTrigger value="login" className="rounded-md data-[state=active]:bg-background data-[state=active]:shadow-sm data-[state=active]:text-foreground">
                 Login
               </TabsTrigger>
-              <TabsTrigger value="signup" className="rounded-full data-[state=active]:bg-white data-[state=active]:shadow-sm">
+              <TabsTrigger value="signup" className="rounded-md data-[state=active]:bg-background data-[state=active]:shadow-sm data-[state=active]:text-foreground">
                 Sign Up
               </TabsTrigger>
             </TabsList>
@@ -557,7 +621,7 @@ export default function Auth() {
                     placeholder="Email"
                     value={loginForm.email}
                     onChange={(e) => setLoginForm({ ...loginForm, email: e.target.value })}
-                    className="pl-12 h-12 rounded-full border-gray-200 focus:border-orange-400 focus:ring-orange-400"
+                    className="pl-12 h-11 rounded-md border-input focus:ring-2 focus:ring-primary/20"
                   />
                 </div>
 
@@ -568,7 +632,7 @@ export default function Auth() {
                     placeholder="Password"
                     value={loginForm.password}
                     onChange={(e) => setLoginForm({ ...loginForm, password: e.target.value })}
-                    className="pl-12 h-12 rounded-full border-gray-200 focus:border-orange-400 focus:ring-orange-400"
+                    className="pl-12 h-11 rounded-md border-input focus:ring-2 focus:ring-primary/20"
                   />
                 </div>
 
@@ -586,7 +650,7 @@ export default function Auth() {
                   <button
                     type="button"
                     onClick={() => setAuthView("forgot-password")}
-                    className="text-sm text-orange-500 hover:text-orange-600"
+                    className="text-sm text-primary hover:text-primary/80 font-medium"
                   >
                     Forgot Password?
                   </button>
@@ -594,7 +658,7 @@ export default function Auth() {
 
                 <Button
                   type="submit"
-                  className="w-full h-12 rounded-full bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-semibold shadow-lg"
+                  className="w-full h-11 rounded-md bg-primary hover:bg-primary/90 text-primary-foreground font-semibold shadow-sm transition-all"
                   disabled={isLoading}
                 >
                   {isLoading ? (
@@ -612,6 +676,13 @@ export default function Auth() {
                 <p className="text-gray-500">Start your free trial today</p>
               </div>
 
+              {inviteToken && (
+                <div className="mb-4 rounded-lg border border-yellow-200 bg-yellow-50 p-3 text-sm text-yellow-800 flex items-center gap-2">
+                  <Mail className="h-4 w-4" />
+                  Invitation detected. Sign up with the invited email to join your company workspace.
+                </div>
+              )}
+
               <form onSubmit={handleSignup} className="space-y-4">
                 <div className="relative">
                   <Building2 className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
@@ -620,9 +691,58 @@ export default function Auth() {
                     placeholder="Organization Name"
                     value={signupForm.organizationName}
                     onChange={(e) => setSignupForm({ ...signupForm, organizationName: e.target.value })}
-                    className="pl-12 h-12 rounded-full border-gray-200 focus:border-orange-400 focus:ring-orange-400"
+                    className="pl-12 h-11 rounded-md border-input focus:ring-2 focus:ring-primary/20"
                   />
                 </div>
+
+                <Select
+                  value={signupForm.organizationType}
+                  onValueChange={(value) =>
+                    setSignupForm({
+                      ...signupForm,
+                      organizationType: value as "business" | "non_profit",
+                      taxClassification: "",
+                    })
+                  }
+                >
+                  <SelectTrigger className="h-11 rounded-md border-input focus:ring-2 focus:ring-primary/20 px-4">
+                    <SelectValue placeholder="Organization Type" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="business">Business</SelectItem>
+                    <SelectItem value="non_profit">Non-profit</SelectItem>
+                  </SelectContent>
+                </Select>
+
+                <Select
+                  value={signupForm.taxClassification}
+                  onValueChange={(value) => setSignupForm({ ...signupForm, taxClassification: value })}
+                >
+                  <SelectTrigger className="h-11 rounded-md border-input focus:ring-2 focus:ring-primary/20 px-4">
+                    <SelectValue
+                      placeholder={
+                        signupForm.organizationType === "business"
+                          ? "Business Tax Type"
+                          : "Non-profit Tax Classification"
+                      }
+                    />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {signupForm.organizationType === "business" ? (
+                      <>
+                        <SelectItem value="vat_registered">VAT Registered</SelectItem>
+                        <SelectItem value="turnover_tax">Turnover Tax</SelectItem>
+                        <SelectItem value="non_vat">Non-VAT</SelectItem>
+                      </>
+                    ) : (
+                      <>
+                        <SelectItem value="tax_exempt">Tax Exempt</SelectItem>
+                        <SelectItem value="grant_funded">Grant Funded</SelectItem>
+                        <SelectItem value="charitable">Charitable Organization</SelectItem>
+                      </>
+                    )}
+                  </SelectContent>
+                </Select>
 
                 <div className="relative">
                   <Mail className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
@@ -631,7 +751,19 @@ export default function Auth() {
                     placeholder="Email Address"
                     value={signupForm.email}
                     onChange={(e) => setSignupForm({ ...signupForm, email: e.target.value })}
-                    className="pl-12 h-12 rounded-full border-gray-200 focus:border-orange-400 focus:ring-orange-400"
+                    className="pl-12 h-11 rounded-md border-input focus:ring-2 focus:ring-primary/20"
+                  />
+                </div>
+
+                <div className="relative">
+                  <Input
+                    type="text"
+                    placeholder="TPIN (10 digits)"
+                    value={signupForm.tpin}
+                    onChange={(e) =>
+                      setSignupForm({ ...signupForm, tpin: e.target.value.replace(/\D/g, "").slice(0, 10) })
+                    }
+                    className="h-11 rounded-md border-input focus:ring-2 focus:ring-primary/20 px-4"
                   />
                 </div>
 
@@ -642,7 +774,7 @@ export default function Auth() {
                     placeholder="Phone Number (e.g., +260...)"
                     value={signupForm.phone}
                     onChange={(e) => setSignupForm({ ...signupForm, phone: e.target.value })}
-                    className="pl-12 h-12 rounded-full border-gray-200 focus:border-orange-400 focus:ring-orange-400"
+                    className="pl-12 h-11 rounded-md border-input focus:ring-2 focus:ring-primary/20"
                   />
                 </div>
 
@@ -653,13 +785,13 @@ export default function Auth() {
                     placeholder="Password"
                     value={signupForm.password}
                     onChange={(e) => setSignupForm({ ...signupForm, password: e.target.value })}
-                    className="pl-12 h-12 rounded-full border-gray-200 focus:border-orange-400 focus:ring-orange-400"
+                    className="pl-12 h-11 rounded-md border-input focus:ring-2 focus:ring-primary/20"
                   />
                 </div>
 
                 <Button
                   type="submit"
-                  className="w-full h-12 rounded-full bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-semibold shadow-lg"
+                  className="w-full h-11 rounded-md bg-primary hover:bg-primary/90 text-primary-foreground font-semibold shadow-sm transition-all"
                   disabled={isLoading}
                 >
                   {isLoading ? (
@@ -674,7 +806,7 @@ export default function Auth() {
 
           <div className="mt-8 text-center">
             <Link to="/" className="text-sm text-gray-500 hover:text-orange-500">
-              ← Back to Home
+              Back to Home
             </Link>
           </div>
         </div>
@@ -682,3 +814,4 @@ export default function Auth() {
     </div>
   );
 }
+

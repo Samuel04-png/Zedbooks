@@ -1,6 +1,10 @@
 import { useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { useQuery } from "@tanstack/react-query";
+import { useAuth } from "@/contexts/AuthContext";
+import { companyService } from "@/services/firebase";
+import { firestore } from "@/integrations/firebase/client";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { collection, getDocs, query, where } from "firebase/firestore";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -36,50 +40,95 @@ import { formatZMW } from "@/utils/zambianTaxCalculations";
 import { useDepreciationRunner } from "@/hooks/useDepreciationRunner";
 
 export default function AssetDepreciation() {
-  const queryClient = useQueryClient();
+  const { user } = useAuth();
   const [selectedMonth, setSelectedMonth] = useState(format(subMonths(new Date(), 1), "yyyy-MM"));
   const [isRunDialogOpen, setIsRunDialogOpen] = useState(false);
   const [postToGL, setPostToGL] = useState(true);
   const { runDepreciation, isRunning, lastResult } = useDepreciationRunner();
 
-  const { data: depreciationRecords, isLoading } = useQuery({
-    queryKey: ["asset-depreciation", selectedMonth],
+  const { data: companyId } = useQuery({
+    queryKey: ["asset-depreciation-company-id", user?.id],
     queryFn: async () => {
+      if (!user) return null;
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      return membership?.companyId ?? null;
+    },
+    enabled: Boolean(user),
+  });
+
+  const { data: depreciationRecords, isLoading } = useQuery({
+    queryKey: ["asset-depreciation", companyId, selectedMonth],
+    queryFn: async () => {
+      if (!companyId) return [];
       const startDate = startOfMonth(new Date(selectedMonth + "-01"));
       const endDate = endOfMonth(startDate);
-      
-      const { data, error } = await supabase
-        .from("asset_depreciation")
-        .select(`
-          *,
-          fixed_assets (
-            asset_number,
-            name,
-            purchase_cost,
-            depreciation_method
-          )
-        `)
-        .gte("period_start", format(startDate, "yyyy-MM-dd"))
-        .lte("period_end", format(endDate, "yyyy-MM-dd"))
-        .order("created_at", { ascending: false });
+      const start = format(startDate, "yyyy-MM-dd");
+      const end = format(endDate, "yyyy-MM-dd");
 
-      if (error) throw error;
-      return data;
+      const [entriesSnapshot, assetsSnapshot] = await Promise.all([
+        getDocs(query(collection(firestore, COLLECTIONS.DEPRECIATION_ENTRIES), where("companyId", "==", companyId))),
+        getDocs(query(collection(firestore, COLLECTIONS.FIXED_ASSETS), where("companyId", "==", companyId))),
+      ]);
+
+      const assetsMap = new Map<string, { asset_number: string; name: string; purchase_cost: number; depreciation_method: string }>();
+      assetsSnapshot.docs.forEach((docSnap) => {
+        const row = docSnap.data() as Record<string, unknown>;
+        assetsMap.set(docSnap.id, {
+          asset_number: String(row.assetNumber ?? row.asset_number ?? ""),
+          name: String(row.name ?? ""),
+          purchase_cost: Number(row.purchaseCost ?? row.purchase_cost ?? 0),
+          depreciation_method: String(row.depreciationMethod ?? row.depreciation_method ?? "straight_line"),
+        });
+      });
+
+      return entriesSnapshot.docs
+        .map((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          const periodStart = String(row.periodStart ?? row.period_start ?? "");
+          const periodEnd = String(row.periodEnd ?? row.period_end ?? "");
+          return {
+            id: docSnap.id,
+            asset_id: String(row.assetId ?? row.asset_id ?? ""),
+            depreciation_amount: Number(row.depreciationAmount ?? row.depreciation_amount ?? 0),
+            accumulated_depreciation: Number(row.accumulatedDepreciation ?? row.accumulated_depreciation ?? 0),
+            net_book_value: Number(row.netBookValue ?? row.net_book_value ?? 0),
+            is_posted: Boolean(row.isPosted ?? row.is_posted ?? false),
+            period_start: periodStart,
+            period_end: periodEnd,
+            created_at: String(row.createdAt ?? row.created_at ?? ""),
+            fixed_assets: assetsMap.get(String(row.assetId ?? row.asset_id ?? "")) ?? null,
+          };
+        })
+        .filter((record) => record.period_start >= start && record.period_end <= end)
+        .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
     },
+    enabled: Boolean(companyId),
   });
 
   const { data: assets } = useQuery({
-    queryKey: ["depreciable-assets"],
+    queryKey: ["depreciable-assets", companyId],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("fixed_assets")
-        .select("*")
-        .eq("is_deleted", false)
-        .eq("status", "active");
+      if (!companyId) return [];
+      const snapshot = await getDocs(
+        query(
+          collection(firestore, COLLECTIONS.FIXED_ASSETS),
+          where("companyId", "==", companyId),
+          where("status", "==", "active"),
+        ),
+      );
 
-      if (error) throw error;
-      return data;
+      return snapshot.docs
+        .map((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          return {
+            id: docSnap.id,
+            status: String(row.status ?? "active"),
+            is_deleted: Boolean(row.isDeleted ?? row.is_deleted ?? false),
+          };
+        })
+        .filter((asset) => !asset.is_deleted);
     },
+    enabled: Boolean(companyId),
   });
 
   const handleRunDepreciation = async () => {

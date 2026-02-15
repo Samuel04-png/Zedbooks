@@ -1,6 +1,10 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/contexts/AuthContext";
+import { companyService } from "@/services/firebase";
+import { firestore } from "@/integrations/firebase/client";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { addDoc, collection, doc, getDocs, query, serverTimestamp, setDoc, where } from "firebase/firestore";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -43,6 +47,7 @@ interface TimeEntry {
 }
 
 const TimeTracking = () => {
+  const { user } = useAuth();
   const queryClient = useQueryClient();
   const [searchTerm, setSearchTerm] = useState("");
   const [isContractorDialogOpen, setIsContractorDialogOpen] = useState(false);
@@ -67,53 +72,108 @@ const TimeTracking = () => {
     hourly_rate: 0,
   });
 
-  const { data: user } = useQuery({
-    queryKey: ["user"],
+  const { data: companyId } = useQuery({
+    queryKey: ["time-tracking-company-id", user?.id],
     queryFn: async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      return user;
+      if (!user) return null;
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      return membership?.companyId ?? null;
     },
+    enabled: Boolean(user),
   });
 
   const { data: contractors = [], isLoading: contractorsLoading } = useQuery({
-    queryKey: ["contractors"],
+    queryKey: ["contractors", companyId],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("contractors")
-        .select("*")
-        .order("name");
-      if (error) throw error;
-      return data as Contractor[];
+      if (!companyId) return [] as Contractor[];
+      const ref = collection(firestore, COLLECTIONS.CONTRACTORS);
+      const snapshot = await getDocs(query(ref, where("companyId", "==", companyId)));
+      return snapshot.docs
+        .map((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          return {
+            id: docSnap.id,
+            name: String(row.name ?? ""),
+            email: (row.email ?? null) as string | null,
+            phone: (row.phone ?? null) as string | null,
+            specialty: (row.specialty ?? null) as string | null,
+            hourly_rate: Number(row.hourlyRate ?? row.hourly_rate ?? 0),
+            daily_rate: Number(row.dailyRate ?? row.daily_rate ?? 0),
+            tpin: (row.tpin ?? null) as string | null,
+            bank_name: (row.bankName ?? row.bank_name ?? null) as string | null,
+            bank_account_number: (row.bankAccountNumber ?? row.bank_account_number ?? null) as string | null,
+            is_active: Boolean(row.isActive ?? row.is_active ?? true),
+          } satisfies Contractor;
+        })
+        .sort((a, b) => a.name.localeCompare(b.name));
     },
-    enabled: !!user,
+    enabled: Boolean(companyId),
   });
 
   const { data: timeEntries = [], isLoading: entriesLoading } = useQuery({
-    queryKey: ["time-entries"],
+    queryKey: ["time-entries", companyId],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("time_entries")
-        .select(`
-          *,
-          contractor:contractors(name)
-        `)
-        .order("work_date", { ascending: false });
-      if (error) throw error;
-      return data as TimeEntry[];
+      if (!companyId) return [] as TimeEntry[];
+      const [entriesSnapshot, contractorsSnapshot] = await Promise.all([
+        getDocs(query(collection(firestore, COLLECTIONS.TIME_ENTRIES), where("companyId", "==", companyId))),
+        getDocs(query(collection(firestore, COLLECTIONS.CONTRACTORS), where("companyId", "==", companyId))),
+      ]);
+      const contractorMap = new Map<string, string>();
+      contractorsSnapshot.docs.forEach((docSnap) => {
+        const row = docSnap.data() as Record<string, unknown>;
+        contractorMap.set(docSnap.id, String(row.name ?? ""));
+      });
+
+      return entriesSnapshot.docs
+        .map((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          const workDate = row.workDate ?? row.work_date;
+          const normalizedDate = typeof workDate === "string"
+            ? workDate
+            : (workDate as { toDate?: () => Date })?.toDate?.().toISOString().slice(0, 10) ?? "";
+          const contractorId = (row.contractorId ?? row.contractor_id ?? null) as string | null;
+
+          return {
+            id: docSnap.id,
+            contractor_id: contractorId,
+            employee_id: (row.employeeId ?? row.employee_id ?? null) as string | null,
+            project_name: (row.projectName ?? row.project_name ?? null) as string | null,
+            description: (row.description ?? null) as string | null,
+            work_date: normalizedDate,
+            hours_worked: Number(row.hoursWorked ?? row.hours_worked ?? 0),
+            hourly_rate: Number(row.hourlyRate ?? row.hourly_rate ?? 0),
+            total_amount: Number(row.totalAmount ?? row.total_amount ?? 0),
+            status: (row.status ?? "pending") as string | null,
+            contractor: contractorId ? { name: contractorMap.get(contractorId) || "-" } : undefined,
+          } satisfies TimeEntry;
+        })
+        .sort((a, b) => b.work_date.localeCompare(a.work_date));
     },
-    enabled: !!user,
+    enabled: Boolean(companyId),
   });
 
   const addContractorMutation = useMutation({
     mutationFn: async (contractor: typeof newContractor) => {
-      const { error } = await supabase.from("contractors").insert({
-        ...contractor,
-        user_id: user?.id,
+      if (!companyId || !user) throw new Error("No active company context");
+      await addDoc(collection(firestore, COLLECTIONS.CONTRACTORS), {
+        companyId,
+        name: contractor.name,
+        email: contractor.email || null,
+        phone: contractor.phone || null,
+        specialty: contractor.specialty || null,
+        hourlyRate: contractor.hourly_rate,
+        dailyRate: contractor.daily_rate,
+        tpin: contractor.tpin || null,
+        bankName: contractor.bank_name || null,
+        bankAccountNumber: contractor.bank_account_number || null,
+        isActive: true,
+        createdBy: user.id,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
       });
-      if (error) throw error;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["contractors"] });
+      queryClient.invalidateQueries({ queryKey: ["contractors", companyId] });
       toast.success("Contractor added successfully");
       setIsContractorDialogOpen(false);
       setNewContractor({
@@ -135,17 +195,25 @@ const TimeTracking = () => {
 
   const addTimeEntryMutation = useMutation({
     mutationFn: async (entry: typeof newTimeEntry) => {
+      if (!companyId || !user) throw new Error("No active company context");
       const totalAmount = entry.hours_worked * entry.hourly_rate;
-      const { error } = await supabase.from("time_entries").insert({
-        ...entry,
-        contractor_id: entry.contractor_id || null,
-        total_amount: totalAmount,
-        user_id: user?.id,
+      await addDoc(collection(firestore, COLLECTIONS.TIME_ENTRIES), {
+        companyId,
+        contractorId: entry.contractor_id || null,
+        projectName: entry.project_name || null,
+        description: entry.description || null,
+        workDate: entry.work_date,
+        hoursWorked: entry.hours_worked,
+        hourlyRate: entry.hourly_rate,
+        totalAmount: totalAmount,
+        status: "pending",
+        createdBy: user.id,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
       });
-      if (error) throw error;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["time-entries"] });
+      queryClient.invalidateQueries({ queryKey: ["time-entries", companyId] });
       toast.success("Time entry recorded");
       setIsTimeEntryDialogOpen(false);
       setNewTimeEntry({
@@ -164,14 +232,13 @@ const TimeTracking = () => {
 
   const updateEntryStatus = useMutation({
     mutationFn: async ({ id, status }: { id: string; status: string }) => {
-      const { error } = await supabase
-        .from("time_entries")
-        .update({ status })
-        .eq("id", id);
-      if (error) throw error;
+      await setDoc(doc(firestore, COLLECTIONS.TIME_ENTRIES, id), {
+        status,
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["time-entries"] });
+      queryClient.invalidateQueries({ queryKey: ["time-entries", companyId] });
       toast.success("Status updated");
     },
     onError: (error: Error) => {

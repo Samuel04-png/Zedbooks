@@ -1,6 +1,10 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/contexts/AuthContext";
+import { companyService } from "@/services/firebase";
+import { firestore } from "@/integrations/firebase/client";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { addDoc, collection, deleteDoc, doc, getDocs, query, serverTimestamp, where } from "firebase/firestore";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -55,6 +59,7 @@ interface Vendor {
 }
 
 export default function PurchaseOrders() {
+  const { user } = useAuth();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [searchQuery, setSearchQuery] = useState("");
@@ -70,43 +75,82 @@ export default function PurchaseOrders() {
     description: "",
   });
 
-  const { data: orders, isLoading } = useQuery({
-    queryKey: ["purchase-orders"],
+  const { data: companyId } = useQuery({
+    queryKey: ["purchase-orders-company-id", user?.id],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("purchase_orders")
-        .select(`
-          *,
-          vendors (name)
-        `)
-        .order("order_date", { ascending: false });
-      if (error) throw error;
-      return data as unknown as PurchaseOrder[];
+      if (!user) return null;
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      return membership?.companyId ?? null;
     },
+    enabled: Boolean(user),
+  });
+
+  const { data: orders, isLoading } = useQuery({
+    queryKey: ["purchase-orders", companyId],
+    queryFn: async () => {
+      if (!companyId) return [] as PurchaseOrder[];
+
+      const ordersRef = collection(firestore, COLLECTIONS.PURCHASE_ORDERS);
+      const ordersSnapshot = await getDocs(query(ordersRef, where("companyId", "==", companyId)));
+      const ordersData = ordersSnapshot.docs.map((docSnap) => {
+        const row = docSnap.data() as Record<string, unknown>;
+        return {
+          id: docSnap.id,
+          order_number: String(row.orderNumber ?? row.order_number ?? ""),
+          order_date: String(row.orderDate ?? row.order_date ?? ""),
+          expected_date: (row.expectedDate ?? row.expected_date ?? null) as string | null,
+          subtotal: Number(row.subtotal ?? 0),
+          vat_amount: Number(row.vatAmount ?? row.vat_amount ?? 0),
+          total: Number(row.total ?? 0),
+          status: (row.status ?? "pending") as string | null,
+          description: (row.description ?? null) as string | null,
+          vendor_id: (row.vendorId ?? row.vendor_id ?? null) as string | null,
+          vendors: null,
+        } satisfies PurchaseOrder;
+      });
+
+      const vendorIds = Array.from(new Set(ordersData.map((order) => order.vendor_id).filter(Boolean))) as string[];
+      const vendorMap = new Map<string, string>();
+      if (vendorIds.length > 0) {
+        const vendorsRef = collection(firestore, COLLECTIONS.VENDORS);
+        const vendorsSnapshot = await getDocs(query(vendorsRef, where("companyId", "==", companyId)));
+        vendorsSnapshot.docs.forEach((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          vendorMap.set(docSnap.id, String(row.name ?? ""));
+        });
+      }
+
+      return ordersData
+        .map((order) => ({
+          ...order,
+          vendors: order.vendor_id ? { name: vendorMap.get(order.vendor_id) || "Unknown Vendor" } : null,
+        }))
+        .sort((a, b) => b.order_date.localeCompare(a.order_date));
+    },
+    enabled: Boolean(companyId),
   });
 
   const { data: vendors } = useQuery({
-    queryKey: ["vendors"],
+    queryKey: ["vendors", companyId],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("vendors")
-        .select("id, name")
-        .order("name");
-      if (error) throw error;
-      return data as unknown as Vendor[];
+      if (!companyId) return [] as Vendor[];
+      const vendorsRef = collection(firestore, COLLECTIONS.VENDORS);
+      const snapshot = await getDocs(query(vendorsRef, where("companyId", "==", companyId)));
+      return snapshot.docs
+        .map((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          return {
+            id: docSnap.id,
+            name: String(row.name ?? ""),
+          } satisfies Vendor;
+        })
+        .sort((a, b) => a.name.localeCompare(b.name));
     },
+    enabled: Boolean(companyId),
   });
 
-  const { data: user } = useQuery({
-    queryKey: ["current-user"],
-    queryFn: async () => {
-      const { data } = await supabase.auth.getUser();
-      return data.user;
-    },
-  });
-
-  const isVatRegistered = settings?.is_vat_registered || false;
-  const vatRate = settings?.vat_rate || 16;
+  const isVatRegistered = settings?.isVatRegistered || false;
+  const vatRate = settings?.vatRate || 16;
 
   const subtotal = parseFloat(formData.amount) || 0;
   const vatAmount = isVatRegistered ? subtotal * (vatRate / 100) : 0;
@@ -114,17 +158,25 @@ export default function PurchaseOrders() {
 
   const createMutation = useMutation({
     mutationFn: async (data: typeof formData) => {
-      const { error } = await supabase.from("purchase_orders").insert({
-        ...data,
+      if (!companyId || !user) throw new Error("No active company context");
+      await addDoc(collection(firestore, COLLECTIONS.PURCHASE_ORDERS), {
+        companyId,
+        vendorId: data.vendor_id,
+        orderNumber: data.order_number,
+        orderDate: data.order_date,
+        expectedDate: data.expected_date || null,
         subtotal,
-        vat_amount: vatAmount,
+        vatAmount: vatAmount,
         total,
-        user_id: user?.id,
-      } as any);
-      if (error) throw error;
+        status: "pending",
+        description: data.description || null,
+        createdBy: user.id,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["purchase-orders"] });
+      queryClient.invalidateQueries({ queryKey: ["purchase-orders", companyId] });
       toast.success("Purchase order created successfully");
       setIsDialogOpen(false);
       setFormData({
@@ -143,11 +195,10 @@ export default function PurchaseOrders() {
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.from("purchase_orders").delete().eq("id", id);
-      if (error) throw error;
+      await deleteDoc(doc(firestore, COLLECTIONS.PURCHASE_ORDERS, id));
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["purchase-orders"] });
+      queryClient.invalidateQueries({ queryKey: ["purchase-orders", companyId] });
       toast.success("Purchase order deleted successfully");
     },
     onError: (error) => {

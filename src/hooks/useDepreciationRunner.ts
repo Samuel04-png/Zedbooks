@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { useAuth } from "@/contexts/AuthContext";
+import { companyService, payrollService } from "@/services/firebase";
 
 interface DepreciationResult {
   success: boolean;
@@ -20,44 +21,39 @@ interface DepreciationResult {
 }
 
 interface RunDepreciationParams {
-  periodMonth: string; // Format: YYYY-MM
+  periodMonth: string;
   postToGL?: boolean;
 }
 
 export function useDepreciationRunner() {
   const queryClient = useQueryClient();
+  const { user } = useAuth();
 
   const runDepreciation = useMutation({
     mutationFn: async ({ periodMonth, postToGL = true }: RunDepreciationParams): Promise<DepreciationResult> => {
-      // Get current user and company
-      const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Not authenticated");
 
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("company_id")
-        .eq("id", user.id)
-        .single();
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      if (!membership?.companyId) throw new Error("No company found");
 
-      if (!profile?.company_id) throw new Error("No company found");
-
-      const { data, error } = await supabase.functions.invoke("run-depreciation", {
-        body: {
-          company_id: profile.company_id,
-          period_month: periodMonth,
-          user_id: user.id,
-          post_to_gl: postToGL,
-        },
+      const data = await payrollService.runDepreciation({
+        companyId: membership.companyId,
+        periodMonth,
+        postToGL,
       });
 
-      if (error) throw error;
-      if (!data.success) throw new Error(data.error);
-      
-      return data as DepreciationResult;
+      return {
+        success: data.success,
+        period: periodMonth,
+        assets_processed: data.assetsProcessed,
+        total_depreciation: data.totalDepreciation,
+        posted_to_gl: Boolean(postToGL),
+        results: [],
+      };
     },
     onSuccess: (data) => {
       toast.success(
-        `Depreciation completed: ${data.assets_processed} assets, K${data.total_depreciation.toFixed(2)} total`
+        `Depreciation completed: ${data.assets_processed} assets, K${data.total_depreciation.toFixed(2)} total`,
       );
       queryClient.invalidateQueries({ queryKey: ["asset-depreciation"] });
       queryClient.invalidateQueries({ queryKey: ["fixed-assets"] });

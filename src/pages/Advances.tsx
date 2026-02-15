@@ -1,5 +1,9 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/contexts/AuthContext";
+import { companyService } from "@/services/firebase";
+import { firestore } from "@/integrations/firebase/client";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { addDoc, collection, doc, documentId, getDocs, query, serverTimestamp, setDoc, where } from "firebase/firestore";
 import { Button } from "@/components/ui/button";
 import { Plus, Wallet, CheckCircle, Clock, XCircle, Calendar, TrendingDown } from "lucide-react";
 import { useState } from "react";
@@ -41,6 +45,7 @@ const advanceSchema = z.object({
 type AdvanceFormData = z.infer<typeof advanceSchema>;
 
 export default function Advances() {
+  const { user } = useAuth();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const queryClient = useQueryClient();
 
@@ -61,65 +66,119 @@ export default function Advances() {
     ? (parseFloat(watchAmount) / parseInt(watchMonths)).toFixed(2)
     : "0.00";
 
+  const { data: companyId } = useQuery({
+    queryKey: ["advances-company-id", user?.id],
+    queryFn: async () => {
+      if (!user) return null;
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      return membership?.companyId ?? null;
+    },
+    enabled: Boolean(user),
+  });
+
   const { data: employees } = useQuery({
     queryKey: ["employees-active"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("employees")
-        .select("id, full_name, employee_number, department")
-        .eq("employment_status", "active")
-        .order("full_name");
+      if (!companyId) return [];
+      const ref = collection(firestore, COLLECTIONS.EMPLOYEES);
+      const snapshot = await getDocs(query(ref, where("companyId", "==", companyId)));
 
-      if (error) throw error;
-      return data;
+      return snapshot.docs
+        .map((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          return {
+            id: docSnap.id,
+            full_name: String(row.fullName ?? row.full_name ?? ""),
+            employee_number: (row.employeeNumber ?? row.employee_number ?? null) as string | null,
+            department: (row.department ?? null) as string | null,
+            employment_status: String(row.employmentStatus ?? row.employment_status ?? "active"),
+          };
+        })
+        .filter((employee) => employee.employment_status === "active")
+        .sort((a, b) => a.full_name.localeCompare(b.full_name));
     },
+    enabled: Boolean(companyId),
   });
 
   const { data: advances, isLoading } = useQuery({
-    queryKey: ["advances"],
+    queryKey: ["advances", companyId],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("advances")
-        .select(`
-          *,
-          employees (
-            full_name,
-            employee_number,
-            department
-          )
-        `)
-        .order("created_at", { ascending: false });
+      if (!companyId) return [];
+      const advancesRef = collection(firestore, COLLECTIONS.ADVANCES);
+      const snapshot = await getDocs(query(advancesRef, where("companyId", "==", companyId)));
+      const rows = snapshot.docs.map((docSnap) => {
+        const row = docSnap.data() as Record<string, unknown>;
+        const dateGiven = row.dateGiven ?? row.date_given;
+        const normalizedDate = typeof dateGiven === "string"
+          ? dateGiven
+          : (dateGiven as { toDate?: () => Date })?.toDate?.().toISOString().slice(0, 10) ?? "";
 
-      if (error) throw error;
-      return data;
+        return {
+          id: docSnap.id,
+          employee_id: String(row.employeeId ?? row.employee_id ?? ""),
+          amount: Number(row.amount ?? 0),
+          date_given: normalizedDate,
+          reason: (row.reason ?? null) as string | null,
+          status: String(row.status ?? "pending"),
+          months_to_repay: Number(row.monthsToRepay ?? row.months_to_repay ?? 1),
+          monthly_deduction: Number(row.monthlyDeduction ?? row.monthly_deduction ?? 0),
+          remaining_balance: Number(row.remainingBalance ?? row.remaining_balance ?? row.amount ?? 0),
+          months_deducted: Number(row.monthsDeducted ?? row.months_deducted ?? 0),
+          created_at: String(row.createdAt ?? row.created_at ?? ""),
+        };
+      });
+
+      const employeeIds = Array.from(new Set(rows.map((row) => row.employee_id).filter(Boolean)));
+      const employeeMap = new Map<string, { full_name: string; employee_number: string | null; department: string | null }>();
+      if (employeeIds.length > 0) {
+        const employeesRef = collection(firestore, COLLECTIONS.EMPLOYEES);
+        const snapshot = await getDocs(query(employeesRef, where(documentId(), "in", employeeIds.slice(0, 30))));
+        snapshot.docs.forEach((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          employeeMap.set(docSnap.id, {
+            full_name: String(row.fullName ?? row.full_name ?? ""),
+            employee_number: (row.employeeNumber ?? row.employee_number ?? null) as string | null,
+            department: (row.department ?? null) as string | null,
+          });
+        });
+      }
+
+      return rows
+        .map((row) => ({
+          ...row,
+          employees: employeeMap.get(row.employee_id) ?? null,
+        }))
+        .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
     },
+    enabled: Boolean(companyId),
   });
 
   const createAdvance = useMutation({
     mutationFn: async (data: AdvanceFormData) => {
-      const { data: authData } = await supabase.auth.getUser();
-      if (!authData.user) throw new Error("Not authenticated");
+      if (!user || !companyId) throw new Error("Not authenticated");
 
       const amount = parseFloat(data.amount);
       const monthsToRepay = parseInt(data.months_to_repay);
       const monthlyDeductionAmount = amount / monthsToRepay;
 
-      const { error } = await supabase.from("advances").insert({
-        employee_id: data.employee_id,
+      await addDoc(collection(firestore, COLLECTIONS.ADVANCES), {
+        companyId,
+        employeeId: data.employee_id,
         amount: amount,
-        date_given: data.date_given,
+        dateGiven: data.date_given,
         reason: data.reason || null,
         status: "pending",
-        months_to_repay: monthsToRepay,
-        monthly_deduction: monthlyDeductionAmount,
-        remaining_balance: amount,
-        months_deducted: 0,
+        monthsToRepay: monthsToRepay,
+        monthlyDeduction: monthlyDeductionAmount,
+        remainingBalance: amount,
+        monthsDeducted: 0,
+        createdBy: user.id,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
       });
-
-      if (error) throw error;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["advances"] });
+      queryClient.invalidateQueries({ queryKey: ["advances", companyId] });
       toast.success("Advance recorded successfully");
       setIsDialogOpen(false);
       form.reset();
@@ -131,15 +190,13 @@ export default function Advances() {
 
   const updateStatusMutation = useMutation({
     mutationFn: async ({ id, status }: { id: string; status: string }) => {
-      const { error } = await supabase
-        .from("advances")
-        .update({ status })
-        .eq("id", id);
-
-      if (error) throw error;
+      await setDoc(doc(firestore, COLLECTIONS.ADVANCES, id), {
+        status,
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["advances"] });
+      queryClient.invalidateQueries({ queryKey: ["advances", companyId] });
       toast.success("Advance status updated");
     },
     onError: () => {
@@ -153,19 +210,15 @@ export default function Advances() {
       const newRemainingBalance = Number(advance.remaining_balance) - Number(advance.monthly_deduction);
       const isFullyRepaid = newMonthsDeducted >= advance.months_to_repay;
 
-      const { error } = await supabase
-        .from("advances")
-        .update({
-          months_deducted: newMonthsDeducted,
-          remaining_balance: Math.max(0, newRemainingBalance),
-          status: isFullyRepaid ? "deducted" : "pending",
-        })
-        .eq("id", advance.id);
-
-      if (error) throw error;
+      await setDoc(doc(firestore, COLLECTIONS.ADVANCES, advance.id), {
+        monthsDeducted: newMonthsDeducted,
+        remainingBalance: Math.max(0, newRemainingBalance),
+        status: isFullyRepaid ? "deducted" : "pending",
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["advances"] });
+      queryClient.invalidateQueries({ queryKey: ["advances", companyId] });
       toast.success("Deduction recorded");
     },
     onError: () => {

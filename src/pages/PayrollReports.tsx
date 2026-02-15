@@ -1,5 +1,4 @@
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Download, FileText } from "lucide-react";
 import { useState } from "react";
@@ -17,67 +16,196 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { useNavigate } from "react-router-dom";
+import { useAuth } from "@/contexts/AuthContext";
+import { companyService } from "@/services/firebase";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { collection, documentId, getDocs, query, where } from "firebase/firestore";
+import { firestore } from "@/integrations/firebase/client";
+
+interface PayrollRun {
+  id: string;
+  runDate: string;
+}
+
+interface EmployeeSummary {
+  fullName: string;
+  employeeNumber: string;
+  tpin: string;
+  napsaNumber: string;
+  nhimaNumber: string;
+  position: string;
+  department: string;
+}
+
+interface PayrollItemReport {
+  id: string;
+  payrollRunId: string;
+  employeeId: string;
+  basicSalary: number;
+  housingAllowance: number;
+  transportAllowance: number;
+  otherAllowances: number;
+  grossSalary: number;
+  paye: number;
+  napsaEmployee: number;
+  napsaEmployer: number;
+  nhimaEmployee: number;
+  nhimaEmployer: number;
+  advancesDeducted: number;
+  totalDeductions: number;
+  netSalary: number;
+  employees: EmployeeSummary | null;
+}
+
+const toDateString = (value: unknown): string | null => {
+  if (!value) return null;
+  const date = new Date(String(value));
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString().slice(0, 10);
+};
+
+const chunk = <T,>(arr: T[], size: number): T[][] => {
+  if (!arr.length) return [];
+  const chunks: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) {
+    chunks.push(arr.slice(i, i + size));
+  }
+  return chunks;
+};
 
 export default function PayrollReports() {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [selectedMonth, setSelectedMonth] = useState(format(new Date(), "yyyy-MM"));
 
-  const { data: payrollRuns, isLoading } = useQuery({
-    queryKey: ["payroll-runs-report", selectedMonth],
-    queryFn: async () => {
-      const startOfMonth = `${selectedMonth}-01`;
-      const endOfMonth = new Date(
-        parseInt(selectedMonth.split("-")[0]),
-        parseInt(selectedMonth.split("-")[1]),
-        0
-      ).toISOString().split("T")[0];
+  const startOfMonth = `${selectedMonth}-01`;
+  const endOfMonth = new Date(
+    parseInt(selectedMonth.split("-")[0], 10),
+    parseInt(selectedMonth.split("-")[1], 10),
+    0,
+  )
+    .toISOString()
+    .split("T")[0];
 
-      const { data, error } = await supabase
-        .from("payroll_runs")
-        .select("*")
-        .gte("run_date", startOfMonth)
-        .lte("run_date", endOfMonth)
-        .order("run_date", { ascending: false });
-      if (error) throw error;
-      return data;
+  const { data: payrollRuns, isLoading } = useQuery({
+    queryKey: ["payroll-runs-report", selectedMonth, user?.id],
+    queryFn: async () => {
+      if (!user) return [] as PayrollRun[];
+
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      if (!membership?.companyId) return [] as PayrollRun[];
+
+      const payrollRunsRef = collection(firestore, COLLECTIONS.PAYROLL_RUNS);
+      const snapshot = await getDocs(
+        query(payrollRunsRef, where("companyId", "==", membership.companyId)),
+      );
+
+      const rows = snapshot.docs.map((docSnap) => {
+        const row = docSnap.data() as Record<string, unknown>;
+        const runDateRaw = row.runDate ?? row.run_date;
+        return {
+          id: docSnap.id,
+          runDate: runDateRaw ? String(runDateRaw) : "",
+        } satisfies PayrollRun;
+      });
+
+      return rows
+        .filter((row) => {
+          const normalizedDate = toDateString(row.runDate);
+          return Boolean(normalizedDate && normalizedDate >= startOfMonth && normalizedDate <= endOfMonth);
+        })
+        .sort((a, b) => String(b.runDate).localeCompare(String(a.runDate)));
     },
+    enabled: Boolean(user),
   });
 
   const { data: payrollItems } = useQuery({
-    queryKey: ["payroll-items-report", selectedMonth],
+    queryKey: ["payroll-items-report", selectedMonth, user?.id, (payrollRuns || []).map((run) => run.id).join("|")],
     queryFn: async () => {
-      if (!payrollRuns || payrollRuns.length === 0) return [];
+      if (!user || !payrollRuns || payrollRuns.length === 0) return [] as PayrollItemReport[];
 
-      const runIds = payrollRuns.map((run) => run.id);
-      const { data, error } = await supabase
-        .from("payroll_items")
-        .select(`
-          *,
-          employees (
-            full_name,
-            employee_number,
-            tpin,
-            napsa_number,
-            nhima_number,
-            position,
-            department
-          )
-        `)
-        .in("payroll_run_id", runIds);
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      if (!membership?.companyId) return [] as PayrollItemReport[];
 
-      if (error) throw error;
-      return data;
+      const runIds = new Set(payrollRuns.map((run) => run.id));
+
+      const payrollItemsRef = collection(firestore, COLLECTIONS.PAYROLL_ITEMS);
+      const itemSnapshot = await getDocs(
+        query(payrollItemsRef, where("companyId", "==", membership.companyId)),
+      );
+
+      const mappedItems = itemSnapshot.docs
+        .map((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          return {
+            id: docSnap.id,
+            payrollRunId: String(row.payrollRunId ?? row.payroll_run_id ?? ""),
+            employeeId: String(row.employeeId ?? row.employee_id ?? ""),
+            basicSalary: Number(row.basicSalary ?? row.basic_salary ?? 0),
+            housingAllowance: Number(row.housingAllowance ?? row.housing_allowance ?? 0),
+            transportAllowance: Number(row.transportAllowance ?? row.transport_allowance ?? 0),
+            otherAllowances: Number(row.otherAllowances ?? row.other_allowances ?? 0),
+            grossSalary: Number(row.grossSalary ?? row.gross_salary ?? 0),
+            paye: Number(row.paye ?? 0),
+            napsaEmployee: Number(row.napsaEmployee ?? row.napsa_employee ?? 0),
+            napsaEmployer: Number(row.napsaEmployer ?? row.napsa_employer ?? 0),
+            nhimaEmployee: Number(row.nhimaEmployee ?? row.nhima_employee ?? 0),
+            nhimaEmployer: Number(row.nhimaEmployer ?? row.nhima_employer ?? 0),
+            advancesDeducted: Number(row.advancesDeducted ?? row.advances_deducted ?? 0),
+            totalDeductions: Number(row.totalDeductions ?? row.total_deductions ?? 0),
+            netSalary: Number(row.netSalary ?? row.net_salary ?? 0),
+          };
+        })
+        .filter((row) => row.payrollRunId && runIds.has(row.payrollRunId));
+
+      const employeeIds = Array.from(new Set(mappedItems.map((item) => item.employeeId).filter(Boolean)));
+      const employeeMap = new Map<string, EmployeeSummary>();
+
+      const employeeChunks = chunk(employeeIds, 30);
+      if (employeeChunks.length > 0) {
+        const employeesRef = collection(firestore, COLLECTIONS.EMPLOYEES);
+
+        const employeeSnapshots = await Promise.all(
+          employeeChunks.map((idChunk) =>
+            getDocs(query(employeesRef, where(documentId(), "in", idChunk))),
+          ),
+        );
+
+        employeeSnapshots.forEach((snapshot) => {
+          snapshot.docs.forEach((docSnap) => {
+            const row = docSnap.data() as Record<string, unknown>;
+            employeeMap.set(docSnap.id, {
+              fullName: String(row.fullName ?? row.full_name ?? ""),
+              employeeNumber: String(row.employeeNumber ?? row.employee_number ?? ""),
+              tpin: String(row.tpin ?? ""),
+              napsaNumber: String(row.napsaNumber ?? row.napsa_number ?? ""),
+              nhimaNumber: String(row.nhimaNumber ?? row.nhima_number ?? ""),
+              position: String(row.position ?? ""),
+              department: String(row.department ?? ""),
+            });
+          });
+        });
+      }
+
+      return mappedItems.map((item) => ({
+        ...item,
+        employees: employeeMap.get(item.employeeId) ?? null,
+      }));
     },
-    enabled: !!payrollRuns && payrollRuns.length > 0,
+    enabled: Boolean(user && payrollRuns && payrollRuns.length > 0),
   });
+
+  const exportCsv = (headers: string[], rows: Array<Array<string | number>>, filename: string) => {
+    const csv = [headers, ...rows].map((row) => row.join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    window.URL.revokeObjectURL(url);
+  };
 
   const exportMasterPayroll = () => {
     if (!payrollItems || payrollItems.length === 0) return;
@@ -101,33 +229,27 @@ export default function PayrollReports() {
     ];
 
     const rows = payrollItems.map((item) => {
-      const employee = item.employees as any;
+      const employee = item.employees;
       return [
-        employee?.employee_number,
-        employee?.full_name,
+        employee?.employeeNumber ?? "",
+        employee?.fullName ?? "",
         employee?.position || "",
         employee?.department || "",
-        Number(item.basic_salary),
-        Number(item.housing_allowance),
-        Number(item.transport_allowance),
-        Number(item.other_allowances),
-        Number(item.gross_salary),
-        Number(item.paye),
-        Number(item.napsa_employee),
-        Number(item.nhima_employee),
-        Number(item.advances_deducted),
-        Number(item.total_deductions),
-        Number(item.net_salary),
+        item.basicSalary,
+        item.housingAllowance,
+        item.transportAllowance,
+        item.otherAllowances,
+        item.grossSalary,
+        item.paye,
+        item.napsaEmployee,
+        item.nhimaEmployee,
+        item.advancesDeducted,
+        item.totalDeductions,
+        item.netSalary,
       ];
     });
 
-    const csv = [headers, ...rows].map((row) => row.join(",")).join("\n");
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `master-payroll-${selectedMonth}.csv`;
-    a.click();
+    exportCsv(headers, rows, `master-payroll-${selectedMonth}.csv`);
   };
 
   const exportNAPSAReport = () => {
@@ -144,27 +266,21 @@ export default function PayrollReports() {
     ];
 
     const rows = payrollItems.map((item) => {
-      const employee = item.employees as any;
-      const employeeContrib = Number(item.napsa_employee);
-      const employerContrib = Number(item.napsa_employer);
+      const employee = item.employees;
+      const employeeContrib = item.napsaEmployee;
+      const employerContrib = item.napsaEmployer;
       return [
-        employee?.employee_number,
-        employee?.full_name,
-        employee?.napsa_number || "",
-        Number(item.gross_salary),
+        employee?.employeeNumber ?? "",
+        employee?.fullName ?? "",
+        employee?.napsaNumber || "",
+        item.grossSalary,
         employeeContrib,
         employerContrib,
         employeeContrib + employerContrib,
       ];
     });
 
-    const csv = [headers, ...rows].map((row) => row.join(",")).join("\n");
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `napsa-report-${selectedMonth}.csv`;
-    a.click();
+    exportCsv(headers, rows, `napsa-report-${selectedMonth}.csv`);
   };
 
   const exportNHIMAReport = () => {
@@ -181,27 +297,21 @@ export default function PayrollReports() {
     ];
 
     const rows = payrollItems.map((item) => {
-      const employee = item.employees as any;
-      const employeeContrib = Number(item.nhima_employee);
-      const employerContrib = Number(item.nhima_employer);
+      const employee = item.employees;
+      const employeeContrib = item.nhimaEmployee;
+      const employerContrib = item.nhimaEmployer;
       return [
-        employee?.employee_number,
-        employee?.full_name,
-        employee?.nhima_number || "",
-        Number(item.basic_salary),
+        employee?.employeeNumber ?? "",
+        employee?.fullName ?? "",
+        employee?.nhimaNumber || "",
+        item.basicSalary,
         employeeContrib,
         employerContrib,
         employeeContrib + employerContrib,
       ];
     });
 
-    const csv = [headers, ...rows].map((row) => row.join(",")).join("\n");
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `nhima-report-${selectedMonth}.csv`;
-    a.click();
+    exportCsv(headers, rows, `nhima-report-${selectedMonth}.csv`);
   };
 
   const exportPAYEReport = () => {
@@ -216,32 +326,26 @@ export default function PayrollReports() {
     ];
 
     const rows = payrollItems.map((item) => {
-      const employee = item.employees as any;
+      const employee = item.employees;
       return [
-        employee?.employee_number,
-        employee?.full_name,
+        employee?.employeeNumber ?? "",
+        employee?.fullName ?? "",
         employee?.tpin || "",
-        Number(item.gross_salary),
-        Number(item.paye),
+        item.grossSalary,
+        item.paye,
       ];
     });
 
-    const csv = [headers, ...rows].map((row) => row.join(",")).join("\n");
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `paye-report-${selectedMonth}.csv`;
-    a.click();
+    exportCsv(headers, rows, `paye-report-${selectedMonth}.csv`);
   };
 
-  const totalGross = payrollItems?.reduce((sum, item) => sum + Number(item.gross_salary), 0) || 0;
-  const totalNet = payrollItems?.reduce((sum, item) => sum + Number(item.net_salary), 0) || 0;
-  const totalPAYE = payrollItems?.reduce((sum, item) => sum + Number(item.paye), 0) || 0;
-  const totalNAPSAEmployee = payrollItems?.reduce((sum, item) => sum + Number(item.napsa_employee), 0) || 0;
-  const totalNAPSAEmployer = payrollItems?.reduce((sum, item) => sum + Number(item.napsa_employer), 0) || 0;
-  const totalNHIMAEmployee = payrollItems?.reduce((sum, item) => sum + Number(item.nhima_employee), 0) || 0;
-  const totalNHIMAEmployer = payrollItems?.reduce((sum, item) => sum + Number(item.nhima_employer), 0) || 0;
+  const totalGross = payrollItems?.reduce((sum, item) => sum + item.grossSalary, 0) || 0;
+  const totalNet = payrollItems?.reduce((sum, item) => sum + item.netSalary, 0) || 0;
+  const totalPAYE = payrollItems?.reduce((sum, item) => sum + item.paye, 0) || 0;
+  const totalNAPSAEmployee = payrollItems?.reduce((sum, item) => sum + item.napsaEmployee, 0) || 0;
+  const totalNAPSAEmployer = payrollItems?.reduce((sum, item) => sum + item.napsaEmployer, 0) || 0;
+  const totalNHIMAEmployee = payrollItems?.reduce((sum, item) => sum + item.nhimaEmployee, 0) || 0;
+  const totalNHIMAEmployer = payrollItems?.reduce((sum, item) => sum + item.nhimaEmployer, 0) || 0;
 
   if (isLoading) {
     return <div>Loading...</div>;
@@ -259,11 +363,7 @@ export default function PayrollReports() {
       <div className="flex items-center gap-4">
         <div className="w-48">
           <Label>Select Month</Label>
-          <Input
-            type="month"
-            value={selectedMonth}
-            onChange={(e) => setSelectedMonth(e.target.value)}
-          />
+          <Input type="month" value={selectedMonth} onChange={(e) => setSelectedMonth(e.target.value)} />
         </div>
       </div>
 
@@ -335,20 +435,17 @@ export default function PayrollReports() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {payrollItems?.map((item) => {
-                    const employee = item.employees as any;
-                    return (
-                      <TableRow key={item.id}>
-                        <TableCell>{employee?.employee_number}</TableCell>
-                        <TableCell>{employee?.full_name}</TableCell>
-                        <TableCell>{employee?.position || "-"}</TableCell>
-                        <TableCell className="text-right">{formatZMW(Number(item.basic_salary))}</TableCell>
-                        <TableCell className="text-right">{formatZMW(Number(item.gross_salary))}</TableCell>
-                        <TableCell className="text-right">{formatZMW(Number(item.total_deductions))}</TableCell>
-                        <TableCell className="text-right font-semibold">{formatZMW(Number(item.net_salary))}</TableCell>
-                      </TableRow>
-                    );
-                  })}
+                  {payrollItems?.map((item) => (
+                    <TableRow key={item.id}>
+                      <TableCell>{item.employees?.employeeNumber}</TableCell>
+                      <TableCell>{item.employees?.fullName}</TableCell>
+                      <TableCell>{item.employees?.position || "-"}</TableCell>
+                      <TableCell className="text-right">{formatZMW(item.basicSalary)}</TableCell>
+                      <TableCell className="text-right">{formatZMW(item.grossSalary)}</TableCell>
+                      <TableCell className="text-right">{formatZMW(item.totalDeductions)}</TableCell>
+                      <TableCell className="text-right font-semibold">{formatZMW(item.netSalary)}</TableCell>
+                    </TableRow>
+                  ))}
                   {(!payrollItems || payrollItems.length === 0) && (
                     <TableRow>
                       <TableCell colSpan={7} className="text-center text-muted-foreground">
@@ -369,26 +466,27 @@ export default function PayrollReports() {
             </CardHeader>
             <CardContent>
               <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                {payrollItems?.map((item) => {
-                  const employee = item.employees as any;
-                  return (
-                    <Card key={item.id} className="cursor-pointer hover:bg-muted/50 transition-colors" onClick={() => navigate(`/payroll/${item.payroll_run_id}/payslip/${item.employee_id}`)}>
-                      <CardContent className="p-4">
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <p className="font-semibold">{employee?.full_name}</p>
-                            <p className="text-sm text-muted-foreground">{employee?.employee_number}</p>
-                          </div>
-                          <FileText className="h-5 w-5 text-muted-foreground" />
+                {payrollItems?.map((item) => (
+                  <Card
+                    key={item.id}
+                    className="cursor-pointer hover:bg-muted/50 transition-colors"
+                    onClick={() => navigate(`/payroll/${item.payrollRunId}/payslip/${item.employeeId}`)}
+                  >
+                    <CardContent className="p-4">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="font-semibold">{item.employees?.fullName}</p>
+                          <p className="text-sm text-muted-foreground">{item.employees?.employeeNumber}</p>
                         </div>
-                        <div className="mt-2 pt-2 border-t">
-                          <p className="text-sm text-muted-foreground">Net Pay</p>
-                          <p className="text-lg font-bold">{formatZMW(Number(item.net_salary))}</p>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  );
-                })}
+                        <FileText className="h-5 w-5 text-muted-foreground" />
+                      </div>
+                      <div className="mt-2 pt-2 border-t">
+                        <p className="text-sm text-muted-foreground">Net Pay</p>
+                        <p className="text-lg font-bold">{formatZMW(item.netSalary)}</p>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
                 {(!payrollItems || payrollItems.length === 0) && (
                   <p className="text-muted-foreground col-span-full text-center py-8">
                     No payroll data for selected month
@@ -427,22 +525,17 @@ export default function PayrollReports() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {payrollItems?.map((item) => {
-                    const employee = item.employees as any;
-                    return (
-                      <TableRow key={item.id}>
-                        <TableCell>{employee?.employee_number}</TableCell>
-                        <TableCell>{employee?.full_name}</TableCell>
-                        <TableCell>{employee?.napsa_number || "-"}</TableCell>
-                        <TableCell className="text-right">{formatZMW(Number(item.gross_salary))}</TableCell>
-                        <TableCell className="text-right">{formatZMW(Number(item.napsa_employee))}</TableCell>
-                        <TableCell className="text-right">{formatZMW(Number(item.napsa_employer))}</TableCell>
-                        <TableCell className="text-right font-semibold">
-                          {formatZMW(Number(item.napsa_employee) + Number(item.napsa_employer))}
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
+                  {payrollItems?.map((item) => (
+                    <TableRow key={item.id}>
+                      <TableCell>{item.employees?.employeeNumber}</TableCell>
+                      <TableCell>{item.employees?.fullName}</TableCell>
+                      <TableCell>{item.employees?.napsaNumber || "-"}</TableCell>
+                      <TableCell className="text-right">{formatZMW(item.grossSalary)}</TableCell>
+                      <TableCell className="text-right">{formatZMW(item.napsaEmployee)}</TableCell>
+                      <TableCell className="text-right">{formatZMW(item.napsaEmployer)}</TableCell>
+                      <TableCell className="text-right font-semibold">{formatZMW(item.napsaEmployee + item.napsaEmployer)}</TableCell>
+                    </TableRow>
+                  ))}
                 </TableBody>
               </Table>
             </CardContent>
@@ -477,22 +570,17 @@ export default function PayrollReports() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {payrollItems?.map((item) => {
-                    const employee = item.employees as any;
-                    return (
-                      <TableRow key={item.id}>
-                        <TableCell>{employee?.employee_number}</TableCell>
-                        <TableCell>{employee?.full_name}</TableCell>
-                        <TableCell>{employee?.nhima_number || "-"}</TableCell>
-                        <TableCell className="text-right">{formatZMW(Number(item.basic_salary))}</TableCell>
-                        <TableCell className="text-right">{formatZMW(Number(item.nhima_employee))}</TableCell>
-                        <TableCell className="text-right">{formatZMW(Number(item.nhima_employer))}</TableCell>
-                        <TableCell className="text-right font-semibold">
-                          {formatZMW(Number(item.nhima_employee) + Number(item.nhima_employer))}
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
+                  {payrollItems?.map((item) => (
+                    <TableRow key={item.id}>
+                      <TableCell>{item.employees?.employeeNumber}</TableCell>
+                      <TableCell>{item.employees?.fullName}</TableCell>
+                      <TableCell>{item.employees?.nhimaNumber || "-"}</TableCell>
+                      <TableCell className="text-right">{formatZMW(item.basicSalary)}</TableCell>
+                      <TableCell className="text-right">{formatZMW(item.nhimaEmployee)}</TableCell>
+                      <TableCell className="text-right">{formatZMW(item.nhimaEmployer)}</TableCell>
+                      <TableCell className="text-right font-semibold">{formatZMW(item.nhimaEmployee + item.nhimaEmployer)}</TableCell>
+                    </TableRow>
+                  ))}
                 </TableBody>
               </Table>
             </CardContent>
@@ -504,9 +592,7 @@ export default function PayrollReports() {
             <CardHeader className="flex flex-row items-center justify-between">
               <div>
                 <CardTitle>PAYE Report</CardTitle>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Total PAYE: {formatZMW(totalPAYE)}
-                </p>
+                <p className="text-sm text-muted-foreground mt-1">Total PAYE: {formatZMW(totalPAYE)}</p>
               </div>
               <Button onClick={exportPAYEReport} disabled={!payrollItems?.length}>
                 <Download className="mr-2 h-4 w-4" />
@@ -525,18 +611,15 @@ export default function PayrollReports() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {payrollItems?.map((item) => {
-                    const employee = item.employees as any;
-                    return (
-                      <TableRow key={item.id}>
-                        <TableCell>{employee?.employee_number}</TableCell>
-                        <TableCell>{employee?.full_name}</TableCell>
-                        <TableCell>{employee?.tpin || "-"}</TableCell>
-                        <TableCell className="text-right">{formatZMW(Number(item.gross_salary))}</TableCell>
-                        <TableCell className="text-right font-semibold">{formatZMW(Number(item.paye))}</TableCell>
-                      </TableRow>
-                    );
-                  })}
+                  {payrollItems?.map((item) => (
+                    <TableRow key={item.id}>
+                      <TableCell>{item.employees?.employeeNumber}</TableCell>
+                      <TableCell>{item.employees?.fullName}</TableCell>
+                      <TableCell>{item.employees?.tpin || "-"}</TableCell>
+                      <TableCell className="text-right">{formatZMW(item.grossSalary)}</TableCell>
+                      <TableCell className="text-right font-semibold">{formatZMW(item.paye)}</TableCell>
+                    </TableRow>
+                  ))}
                 </TableBody>
               </Table>
             </CardContent>

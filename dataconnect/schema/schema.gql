@@ -1,0 +1,55 @@
+type User @table {
+  displayName: String!
+  email: String!
+  createdAt: Timestamp!
+  photoUrl: String
+}
+
+type Business @table {
+  user: User!
+  name: String!
+  createdAt: Timestamp!
+  address: String
+  taxId: String
+  contactEmail: String
+}
+
+type Transaction @table {
+  business: Business!
+  type: String! # INCOME, EXPENSE
+  amount: Float!
+  date: Date!
+  description: String!
+  createdAt: Timestamp!
+  category: Category
+  notes: String
+}
+
+type Category @table {
+  business: Business!
+  name: String!
+  type: String! # INCOME, EXPENSE
+  createdAt: Timestamp!
+}
+
+type Client @table {
+  business: Business!
+  name: String!
+  createdAt: Timestamp!
+  email: String
+  contactPerson: String
+  address: String
+}
+
+type Invoice @table {
+  business: Business!
+  client: Client!
+  invoiceNumber: String!
+  dateIssued: Date!
+  dueDate: Date!
+  totalAmount: Float!
+  status: String! # DRAFT, SENT, PAID, OVERDUE
+  createdAt: Timestamp!
+  updatedAt: Timestamp!
+  notes: String
+}

@@ -1,6 +1,5 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -8,70 +7,77 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { CompanyLogoUpload } from "@/components/payroll/CompanyLogoUpload";
+import { useAuth } from "@/contexts/AuthContext";
+import { companyService } from "@/services/firebase";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { doc, serverTimestamp, setDoc } from "firebase/firestore";
+import { firestore } from "@/integrations/firebase/client";
 
 export default function CompanySettings() {
   const queryClient = useQueryClient();
+  const { user } = useAuth();
   const [companyName, setCompanyName] = useState("");
   const [isVatRegistered, setIsVatRegistered] = useState(false);
   const [vatRate, setVatRate] = useState(16);
 
-  const { data: user } = useQuery({
-    queryKey: ["current-user"],
+  const { data: membership } = useQuery({
+    queryKey: ["primary-membership", user?.id],
     queryFn: async () => {
-      const { data } = await supabase.auth.getUser();
-      return data.user;
+      if (!user) return null;
+      return companyService.getPrimaryMembershipByUser(user.id);
     },
+    enabled: Boolean(user),
   });
 
+  const companyId = membership?.companyId;
+
   const { data: settings, isLoading } = useQuery({
-    queryKey: ["company-settings"],
+    queryKey: ["company-settings", companyId],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("company_settings")
-        .select("*")
-        .maybeSingle();
-      if (error) throw error;
-      return data;
+      if (!companyId) return null;
+      return companyService.getCompanySettings(companyId);
     },
-    enabled: !!user,
+    enabled: Boolean(companyId),
   });
 
   useEffect(() => {
     if (settings) {
-      setCompanyName(settings.company_name || "");
-      setIsVatRegistered(settings.is_vat_registered || false);
-      setVatRate(settings.vat_rate || 16);
+      setCompanyName(settings.companyName || "");
+      setIsVatRegistered(Boolean(settings.isVatRegistered));
+      setVatRate(Number(settings.vatRate ?? 16));
     }
   }, [settings]);
 
   const saveMutation = useMutation({
     mutationFn: async () => {
-      if (settings) {
-        const { error } = await supabase
-          .from("company_settings")
-          .update({
-            company_name: companyName,
-            is_vat_registered: isVatRegistered,
-            vat_rate: vatRate,
-          })
-          .eq("id", settings.id);
-        if (error) throw error;
-      } else {
-        const { error } = await supabase.from("company_settings").insert({
-          company_name: companyName,
-          is_vat_registered: isVatRegistered,
-          vat_rate: vatRate,
-          user_id: user?.id,
-        });
-        if (error) throw error;
+      if (!companyId) {
+        throw new Error("No company linked to your account.");
       }
+
+      await companyService.updateCompanyBasics({
+        companyId,
+        name: companyName,
+      });
+
+      await setDoc(
+        doc(firestore, COLLECTIONS.COMPANY_SETTINGS, companyId),
+        {
+          companyId,
+          companyName,
+          isVatRegistered,
+          vatRate: isVatRegistered ? vatRate : null,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true },
+      );
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["company-settings"] });
+      queryClient.invalidateQueries({ queryKey: ["company-settings", companyId] });
+      queryClient.invalidateQueries({ queryKey: ["company-settings", user?.id] });
       toast.success("Settings saved successfully");
     },
     onError: (error) => {
-      toast.error("Failed to save settings: " + error.message);
+      toast.error("Failed to save settings: " + (error instanceof Error ? error.message : "Unknown error"));
     },
   });
 
@@ -83,9 +89,7 @@ export default function CompanySettings() {
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold">Company Settings</h1>
-        <p className="text-muted-foreground">
-          Manage your company information and tax settings
-        </p>
+        <p className="text-muted-foreground">Manage your company information and tax settings</p>
       </div>
 
       <div className="grid gap-6 md:grid-cols-2">
@@ -114,22 +118,15 @@ export default function CompanySettings() {
         <Card>
           <CardHeader>
             <CardTitle>VAT / Tax Settings</CardTitle>
-            <CardDescription>
-              Configure VAT registration for ZRA compliance
-            </CardDescription>
+            <CardDescription>Configure VAT registration for ZRA compliance</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex items-center justify-between">
               <div className="space-y-0.5">
                 <Label>VAT Registered</Label>
-                <p className="text-sm text-muted-foreground">
-                  Are you registered for VAT with ZRA?
-                </p>
+                <p className="text-sm text-muted-foreground">Are you registered for VAT with ZRA?</p>
               </div>
-              <Switch
-                checked={isVatRegistered}
-                onCheckedChange={setIsVatRegistered}
-              />
+              <Switch checked={isVatRegistered} onCheckedChange={setIsVatRegistered} />
             </div>
 
             {isVatRegistered && (
@@ -143,9 +140,7 @@ export default function CompanySettings() {
                   min={0}
                   max={100}
                 />
-                <p className="text-xs text-muted-foreground">
-                  Standard Zambian VAT rate is 16%
-                </p>
+                <p className="text-xs text-muted-foreground">Standard Zambian VAT rate is 16%</p>
               </div>
             )}
           </CardContent>

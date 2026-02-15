@@ -1,5 +1,4 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -27,10 +26,84 @@ import {
 import { formatZMW } from "@/utils/zambianTaxCalculations";
 import { format } from "date-fns";
 import { toast } from "sonner";
+import { useAuth } from "@/contexts/AuthContext";
+import { payrollService } from "@/services/firebase";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { firestore } from "@/integrations/firebase/client";
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  limit,
+  query,
+  serverTimestamp,
+  updateDoc,
+  where,
+} from "firebase/firestore";
 
 type PayrollStatus = "draft" | "trial" | "final";
 
+interface PayrollRunDetail {
+  id: string;
+  run_date: string;
+  period_start: string;
+  period_end: string;
+  payroll_status: PayrollStatus | null;
+  status: string | null;
+  payroll_number: string | null;
+  total_gross: number | null;
+  total_deductions: number | null;
+  total_net: number | null;
+  gl_journal_id: string | null;
+}
+
+interface PayrollEmployeeDetail {
+  full_name: string;
+  employee_number: string;
+  email: string | null;
+  position: string | null;
+  department: string | null;
+  tpin: string | null;
+  napsa_number: string | null;
+  nhima_number: string | null;
+  bank_name: string | null;
+  bank_account_number: string | null;
+}
+
+interface PayrollItemDetail {
+  id: string;
+  employee_id: string;
+  basic_salary: number;
+  housing_allowance: number;
+  transport_allowance: number;
+  other_allowances: number;
+  gross_salary: number;
+  advances_deducted: number | null;
+  net_salary: number;
+  paye: number;
+  napsa_employee: number;
+  napsa_employer: number;
+  nhima_employee: number;
+  nhima_employer: number;
+  total_deductions: number;
+  employees: PayrollEmployeeDetail | null;
+}
+
+interface PayrollJournalDetail {
+  id: string;
+  description: string | null;
+  journal_entries: {
+    id: string;
+    reference_number: string | null;
+    entry_date: string;
+    description: string | null;
+    is_posted: boolean | null;
+  } | null;
+}
+
 export default function PayrollDetail() {
+  const { user } = useAuth();
   const navigate = useNavigate();
   const { id } = useParams();
   const queryClient = useQueryClient();
@@ -38,79 +111,158 @@ export default function PayrollDetail() {
   const { data: payrollRun, isLoading } = useQuery({
     queryKey: ["payrollRun", id],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("payroll_runs")
-        .select("*")
-        .eq("id", id)
-        .single();
+      if (!id) return null;
+      const runSnap = await getDoc(doc(firestore, COLLECTIONS.PAYROLL_RUNS, id));
+      if (!runSnap.exists()) return null;
 
-      if (error) throw error;
-      return data;
+      const row = runSnap.data() as Record<string, unknown>;
+      return {
+        id: runSnap.id,
+        run_date: String(row.runDate ?? row.run_date ?? ""),
+        period_start: String(row.periodStart ?? row.period_start ?? ""),
+        period_end: String(row.periodEnd ?? row.period_end ?? ""),
+        payroll_status: (row.payrollStatus ?? row.payroll_status ?? row.status ?? "draft") as PayrollStatus,
+        status: (row.status as string | null) ?? null,
+        payroll_number: (row.payrollNumber as string | null) ?? (row.payroll_number as string | null) ?? null,
+        total_gross: Number(row.totalGross ?? row.total_gross ?? 0),
+        total_deductions: Number(row.totalDeductions ?? row.total_deductions ?? 0),
+        total_net: Number(row.totalNet ?? row.total_net ?? 0),
+        gl_journal_id: (row.glJournalId as string | null) ?? (row.gl_journal_id as string | null) ?? null,
+      } satisfies PayrollRunDetail;
     },
+    enabled: Boolean(user && id),
   });
 
   const { data: payrollItems } = useQuery({
     queryKey: ["payrollItems", id],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("payroll_items")
-        .select(`
-          *,
-          employees (
-            full_name,
-            employee_number,
-            email,
-            position,
-            department,
-            tpin,
-            napsa_number,
-            nhima_number,
-            bank_name,
-            bank_account_number
-          )
-        `)
-        .eq("payroll_run_id", id);
+      if (!id) return [] as PayrollItemDetail[];
 
-      if (error) throw error;
-      return data;
+      const itemsRef = collection(firestore, COLLECTIONS.PAYROLL_ITEMS);
+      let itemsSnap = await getDocs(query(itemsRef, where("payrollRunId", "==", id)));
+      if (itemsSnap.empty) {
+        itemsSnap = await getDocs(query(itemsRef, where("payroll_run_id", "==", id)));
+      }
+
+      const rows = itemsSnap.docs.map((docSnap) => ({
+        id: docSnap.id,
+        row: docSnap.data() as Record<string, unknown>,
+      }));
+
+      const employeeIds = Array.from(
+        new Set(rows.map(({ row }) => String(row.employeeId ?? row.employee_id ?? "")).filter(Boolean)),
+      );
+
+      const employeeDocs = await Promise.all(
+        employeeIds.map(async (employeeDocId) => {
+          const snap = await getDoc(doc(firestore, COLLECTIONS.EMPLOYEES, employeeDocId));
+          return { employeeDocId, snap };
+        }),
+      );
+
+      const employeeMap = new Map<string, PayrollEmployeeDetail>();
+      employeeDocs.forEach(({ employeeDocId, snap }) => {
+        if (!snap.exists()) return;
+        const emp = snap.data() as Record<string, unknown>;
+        employeeMap.set(employeeDocId, {
+          full_name: String(emp.fullName ?? emp.full_name ?? ""),
+          employee_number: String(emp.employeeNumber ?? emp.employee_number ?? ""),
+          email: (emp.email as string | null) ?? null,
+          position: (emp.position as string | null) ?? null,
+          department: (emp.department as string | null) ?? null,
+          tpin: (emp.tpin as string | null) ?? null,
+          napsa_number: (emp.napsaNumber as string | null) ?? (emp.napsa_number as string | null) ?? null,
+          nhima_number: (emp.nhimaNumber as string | null) ?? (emp.nhima_number as string | null) ?? null,
+          bank_name: (emp.bankName as string | null) ?? (emp.bank_name as string | null) ?? null,
+          bank_account_number: (emp.bankAccountNumber as string | null) ?? (emp.bank_account_number as string | null) ?? null,
+        });
+      });
+
+      return rows.map(({ id: itemId, row }) => {
+        const employeeId = String(row.employeeId ?? row.employee_id ?? "");
+        return {
+          id: itemId,
+          employee_id: employeeId,
+          basic_salary: Number(row.basicSalary ?? row.basic_salary ?? 0),
+          housing_allowance: Number(row.housingAllowance ?? row.housing_allowance ?? 0),
+          transport_allowance: Number(row.transportAllowance ?? row.transport_allowance ?? 0),
+          other_allowances: Number(row.otherAllowances ?? row.other_allowances ?? 0),
+          gross_salary: Number(row.grossSalary ?? row.gross_salary ?? 0),
+          advances_deducted: Number(row.advancesDeducted ?? row.advances_deducted ?? 0),
+          net_salary: Number(row.netSalary ?? row.net_salary ?? 0),
+          paye: Number(row.paye ?? 0),
+          napsa_employee: Number(row.napsaEmployee ?? row.napsa_employee ?? 0),
+          napsa_employer: Number(row.napsaEmployer ?? row.napsa_employer ?? 0),
+          nhima_employee: Number(row.nhimaEmployee ?? row.nhima_employee ?? 0),
+          nhima_employer: Number(row.nhimaEmployer ?? row.nhima_employer ?? 0),
+          total_deductions: Number(row.totalDeductions ?? row.total_deductions ?? 0),
+          employees: employeeMap.get(employeeId) ?? null,
+        } satisfies PayrollItemDetail;
+      });
     },
+    enabled: Boolean(user && id),
   });
 
   const { data: glJournals } = useQuery({
     queryKey: ["payroll-journals", id],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("payroll_journals")
-        .select(`
-          *,
-          journal_entries (
-            id,
-            reference_number,
-            entry_date,
-            description,
-            is_posted
-          )
-        `)
-        .eq("payroll_run_id", id);
+      if (!id) return [] as PayrollJournalDetail[];
 
-      if (error) throw error;
-      return data;
+      const journalsRef = collection(firestore, COLLECTIONS.PAYROLL_JOURNALS);
+      let journalSnap = await getDocs(query(journalsRef, where("payrollRunId", "==", id)));
+      if (journalSnap.empty) {
+        journalSnap = await getDocs(query(journalsRef, where("payroll_run_id", "==", id)));
+      }
+
+      const rows = journalSnap.docs.map((docSnap) => ({
+        id: docSnap.id,
+        row: docSnap.data() as Record<string, unknown>,
+      }));
+
+      const journalEntryIds = Array.from(
+        new Set(rows.map(({ row }) => String(row.journalEntryId ?? row.journal_entry_id ?? "")).filter(Boolean)),
+      );
+
+      const entryDocs = await Promise.all(
+        journalEntryIds.map(async (entryId) => {
+          const snap = await getDoc(doc(firestore, COLLECTIONS.JOURNAL_ENTRIES, entryId));
+          return { entryId, snap };
+        }),
+      );
+
+      const entryMap = new Map<string, PayrollJournalDetail["journal_entries"]>();
+      entryDocs.forEach(({ entryId, snap }) => {
+        if (!snap.exists()) {
+          entryMap.set(entryId, null);
+          return;
+        }
+
+        const row = snap.data() as Record<string, unknown>;
+        entryMap.set(entryId, {
+          id: snap.id,
+          reference_number: (row.referenceNumber as string | null) ?? (row.reference_number as string | null) ?? null,
+          entry_date: String(row.entryDate ?? row.entry_date ?? ""),
+          description: (row.description as string | null) ?? null,
+          is_posted: Boolean(row.isPosted ?? row.is_posted),
+        });
+      });
+
+      return rows.map(({ id: rowId, row }) => {
+        const entryId = String(row.journalEntryId ?? row.journal_entry_id ?? "");
+        return {
+          id: rowId,
+          description: (row.description as string | null) ?? null,
+          journal_entries: entryMap.get(entryId) ?? null,
+        } satisfies PayrollJournalDetail;
+      });
     },
     enabled: payrollRun?.payroll_status === "final",
   });
 
   const runTrialMutation = useMutation({
     mutationFn: async () => {
-      const { error } = await supabase
-        .from("payroll_runs")
-        .update({
-          payroll_status: "trial" as PayrollStatus,
-          trial_run_at: new Date().toISOString(),
-          trial_run_by: (await supabase.auth.getUser()).data.user?.id,
-        })
-        .eq("id", id);
-
-      if (error) throw error;
+      if (!id) throw new Error("Payroll run not found");
+      await payrollService.runPayrollTrial({ payrollRunId: id });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["payrollRun", id] });
@@ -123,16 +275,13 @@ export default function PayrollDetail() {
 
   const revertToTrialMutation = useMutation({
     mutationFn: async () => {
-      const { error } = await supabase
-        .from("payroll_runs")
-        .update({
-          payroll_status: "draft" as PayrollStatus,
-          trial_run_at: null,
-          trial_run_by: null,
-        })
-        .eq("id", id);
-
-      if (error) throw error;
+      if (!id) throw new Error("Payroll run not found");
+      await updateDoc(doc(firestore, COLLECTIONS.PAYROLL_RUNS, id), {
+        payrollStatus: "draft" as PayrollStatus,
+        trialRunAt: null,
+        trialRunBy: null,
+        updatedAt: serverTimestamp(),
+      });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["payrollRun", id] });
@@ -145,63 +294,12 @@ export default function PayrollDetail() {
 
   const finalizeMutation = useMutation({
     mutationFn: async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("Not authenticated");
-
-      // Get profile for company_id
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("company_id")
-        .eq("id", user.id)
-        .single();
-
-      // Generate payroll number
-      const payrollNumber = `PR-${format(new Date(), "yyyyMM")}-${id?.slice(0, 4).toUpperCase()}`;
-
-      // Create GL Journal Entry
-      const { data: journalEntry, error: journalError } = await supabase
-        .from("journal_entries")
-        .insert({
-          user_id: user.id,
-          company_id: profile?.company_id,
-          entry_date: new Date().toISOString().split("T")[0],
-          reference_number: `PAYROLL-${payrollNumber}`,
-          description: `Payroll for period ${format(new Date(payrollRun!.period_start), "MMM yyyy")}`,
-          is_posted: true,
-          is_locked: true,
-        })
-        .select()
-        .single();
-
-      if (journalError) throw journalError;
-
-      // Create payroll journal link
-      await supabase.from("payroll_journals").insert({
-        payroll_run_id: id,
-        journal_entry_id: journalEntry.id,
-        journal_type: "payroll_expense",
-        description: "Monthly payroll GL posting",
-      });
-
-      // Finalize the payroll run
-      const { error } = await supabase
-        .from("payroll_runs")
-        .update({
-          payroll_status: "final" as PayrollStatus,
-          status: "completed",
-          finalized_at: new Date().toISOString(),
-          finalized_by: user.id,
-          is_locked: true,
-          payroll_number: payrollNumber,
-          gl_posted: true,
-          gl_journal_id: journalEntry.id,
-        })
-        .eq("id", id);
-
-      if (error) throw error;
+      if (!id) throw new Error("Payroll run not found");
+      await payrollService.finalizePayroll({ payrollRunId: id });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["payrollRun", id] });
+      queryClient.invalidateQueries({ queryKey: ["payrollItems", id] });
       queryClient.invalidateQueries({ queryKey: ["payroll-journals", id] });
       toast.success("Payroll finalized and posted to General Ledger!");
     },
@@ -230,15 +328,15 @@ export default function PayrollDetail() {
       "NHIMA Employer",
     ];
 
-    const rows = payrollItems.map((item: any) => [
-      item.employees.employee_number,
-      item.employees.full_name,
+    const rows = payrollItems.map((item) => [
+      item.employees?.employee_number ?? "",
+      item.employees?.full_name ?? "",
       item.basic_salary,
       item.housing_allowance,
       item.transport_allowance,
       item.other_allowances,
       item.gross_salary,
-      item.advances_deducted || 0,
+      item.advances_deducted ?? 0,
       item.net_salary,
       item.paye,
       item.napsa_employee,
@@ -265,21 +363,11 @@ export default function PayrollDetail() {
     navigate(`/payroll/${id}/payslip/${employeeId}`);
   };
 
-  const generateSecurePassword = (): string => {
-    const length = 12;
-    const charset = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#$%';
-    const values = new Uint8Array(length);
-    crypto.getRandomValues(values);
-    return Array.from(values)
-      .map(x => charset[x % charset.length])
-      .join('');
-  };
-
   const sendPayslipEmails = async () => {
     if (!payrollItems || !payrollRun) return;
     
     const confirmSend = window.confirm(
-      `Send payslips to ${payrollItems.length} employees via email?\n\nEach employee will receive a password-protected payslip with a secure random password.`
+      `Queue payslip emails for ${payrollItems.length} employees?`
     );
     
     if (!confirmSend) return;
@@ -288,44 +376,19 @@ export default function PayrollDetail() {
       async () => {
         for (const item of payrollItems) {
           const employee = item.employees;
-          if (!employee.email) continue;
+          if (!employee?.email) continue;
+          if (!id) continue;
 
-          const password = generateSecurePassword();
-
-          await supabase.functions.invoke('send-payslip-email', {
-            body: {
-              employeeName: employee.full_name,
-              employeeEmail: employee.email,
-              period: `${new Date(payrollRun.period_start).toLocaleDateString()} - ${new Date(payrollRun.period_end).toLocaleDateString()}`,
-              payslipData: {
-                basicSalary: item.basic_salary,
-                housingAllowance: item.housing_allowance,
-                transportAllowance: item.transport_allowance,
-                otherAllowances: item.other_allowances,
-                grossSalary: item.gross_salary,
-                napsa: item.napsa_employee,
-                nhima: item.nhima_employee,
-                paye: item.paye,
-                totalDeductions: item.total_deductions,
-                netSalary: item.net_salary,
-                employeeNo: employee.employee_number,
-                position: employee.position,
-                department: employee.department,
-                tpin: employee.tpin,
-                napsaNo: employee.napsa_number,
-                nhimaNo: employee.nhima_number,
-                bankName: employee.bank_name,
-                accountNumber: employee.bank_account_number,
-              },
-              password,
-            },
+          await payrollService.sendPayslipEmail({
+            payrollRunId: id,
+            employeeId: item.employee_id,
           });
         }
       },
       {
-        loading: 'Sending payslip emails...',
-        success: 'Payslip emails sent successfully!',
-        error: 'Failed to send some emails. Please check console for details.',
+        loading: "Queueing payslip emails...",
+        success: "Payslip emails queued successfully!",
+        error: "Failed to queue some emails.",
       }
     );
   };
@@ -337,7 +400,18 @@ export default function PayrollDetail() {
     batchContent += '='.repeat(100) + '\n\n';
 
     payrollItems.forEach((item, index) => {
-      const employee = item.employees;
+      const employee = item.employees ?? {
+        full_name: "Unknown",
+        employee_number: "-",
+        position: null,
+        department: null,
+        tpin: null,
+        napsa_number: null,
+        nhima_number: null,
+        bank_name: null,
+        bank_account_number: null,
+        email: null,
+      };
       batchContent += `PAYSLIP ${index + 1}\n`;
       batchContent += '-'.repeat(100) + '\n';
       batchContent += `Employee: ${employee.full_name} (${employee.employee_number})\n`;
@@ -547,7 +621,7 @@ export default function PayrollDetail() {
           </CardHeader>
           <CardContent>
             <div className="space-y-2">
-              {glJournals.map((journal: any) => (
+              {glJournals.map((journal) => (
                 <div key={journal.id} className="flex items-center justify-between p-3 bg-white rounded-lg border">
                   <div>
                     <p className="font-medium">{journal.journal_entries?.reference_number}</p>
@@ -627,12 +701,12 @@ export default function PayrollDetail() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {payrollItems?.map((item: any) => (
+                {payrollItems?.map((item) => (
                   <TableRow key={item.id}>
                     <TableCell>
                       <div>
-                        <p className="font-medium">{item.employees.full_name}</p>
-                        <p className="text-sm text-muted-foreground">{item.employees.employee_number}</p>
+                        <p className="font-medium">{item.employees?.full_name || "Unknown"}</p>
+                        <p className="text-sm text-muted-foreground">{item.employees?.employee_number || "-"}</p>
                       </div>
                     </TableCell>
                     <TableCell className="text-right">{formatZMW(Number(item.basic_salary))}</TableCell>

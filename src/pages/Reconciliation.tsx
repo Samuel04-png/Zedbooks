@@ -1,6 +1,10 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/contexts/AuthContext";
+import { companyService } from "@/services/firebase";
+import { firestore } from "@/integrations/firebase/client";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { addDoc, collection, doc, getDocs, query, serverTimestamp, where, writeBatch } from "firebase/firestore";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -30,80 +34,120 @@ interface BankTransaction {
 }
 
 const Reconciliation = () => {
+  const { user } = useAuth();
   const queryClient = useQueryClient();
   const [selectedAccountId, setSelectedAccountId] = useState<string>("");
   const [statementBalance, setStatementBalance] = useState<number>(0);
   const [reconciliationDate, setReconciliationDate] = useState(new Date().toISOString().split("T")[0]);
   const [selectedTransactions, setSelectedTransactions] = useState<Set<string>>(new Set());
 
-  const { data: user } = useQuery({
-    queryKey: ["user"],
+  const { data: companyId } = useQuery({
+    queryKey: ["reconciliation-company-id", user?.id],
     queryFn: async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      return user;
+      if (!user) return null;
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      return membership?.companyId ?? null;
     },
+    enabled: Boolean(user),
   });
 
   const { data: bankAccounts = [] } = useQuery({
-    queryKey: ["bank-accounts"],
+    queryKey: ["bank-accounts", companyId],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("bank_accounts")
-        .select("id, account_name, bank_name, current_balance")
-        .eq("is_active", true)
-        .order("account_name");
-      if (error) throw error;
-      return data as BankAccount[];
+      if (!companyId) return [] as BankAccount[];
+
+      const ref = collection(firestore, COLLECTIONS.BANK_ACCOUNTS);
+      const snapshot = await getDocs(query(ref, where("companyId", "==", companyId), where("isActive", "==", true)));
+
+      return snapshot.docs
+        .map((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          return {
+            id: docSnap.id,
+            account_name: String(row.accountName ?? row.account_name ?? ""),
+            bank_name: String(row.bankName ?? row.bank_name ?? ""),
+            current_balance: Number(row.currentBalance ?? row.current_balance ?? 0),
+          } satisfies BankAccount;
+        })
+        .sort((a, b) => a.account_name.localeCompare(b.account_name));
     },
-    enabled: !!user,
+    enabled: Boolean(companyId),
   });
 
   const { data: unreconciledTransactions = [] } = useQuery({
-    queryKey: ["unreconciled-transactions", selectedAccountId],
+    queryKey: ["unreconciled-transactions", companyId, selectedAccountId],
     queryFn: async () => {
-      if (!selectedAccountId) return [];
-      const { data, error } = await supabase
-        .from("bank_transactions")
-        .select("*")
-        .eq("bank_account_id", selectedAccountId)
-        .eq("is_reconciled", false)
-        .order("transaction_date", { ascending: false });
-      if (error) throw error;
-      return data as BankTransaction[];
+      if (!selectedAccountId || !companyId) return [] as BankTransaction[];
+
+      const ref = collection(firestore, COLLECTIONS.BANK_TRANSACTIONS);
+      const snapshot = await getDocs(
+        query(
+          ref,
+          where("companyId", "==", companyId),
+          where("bankAccountId", "==", selectedAccountId),
+          where("isReconciled", "==", false),
+        ),
+      );
+
+      return snapshot.docs
+        .map((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          const txDate = row.transactionDate ?? row.transaction_date;
+          const normalizedDate = typeof txDate === "string"
+            ? txDate
+            : (txDate as { toDate?: () => Date })?.toDate?.().toISOString().slice(0, 10) ?? "";
+          return {
+            id: docSnap.id,
+            transaction_type: String(row.transactionType ?? row.transaction_type ?? ""),
+            amount: Number(row.amount ?? 0),
+            description: (row.description ?? null) as string | null,
+            reference_number: (row.referenceNumber ?? row.reference_number ?? null) as string | null,
+            transaction_date: normalizedDate,
+            is_reconciled: Boolean(row.isReconciled ?? row.is_reconciled ?? false),
+          } satisfies BankTransaction;
+        })
+        .sort((a, b) => b.transaction_date.localeCompare(a.transaction_date));
     },
-    enabled: !!selectedAccountId,
+    enabled: Boolean(selectedAccountId && companyId),
   });
 
   const reconcileMutation = useMutation({
     mutationFn: async () => {
-      if (!selectedAccountId || selectedTransactions.size === 0) {
+      if (!selectedAccountId || selectedTransactions.size === 0 || !companyId || !user) {
         throw new Error("Please select transactions to reconcile");
       }
 
       const transactionIds = Array.from(selectedTransactions);
-      
-      // Mark transactions as reconciled
-      const { error: updateError } = await supabase
-        .from("bank_transactions")
-        .update({ is_reconciled: true, reconciled_date: reconciliationDate })
-        .in("id", transactionIds);
-      if (updateError) throw updateError;
+      const batch = writeBatch(firestore);
+      transactionIds.forEach((transactionId) => {
+        const transactionRef = doc(firestore, COLLECTIONS.BANK_TRANSACTIONS, transactionId);
+        batch.update(transactionRef, {
+          isReconciled: true,
+          reconciledDate: reconciliationDate,
+          updatedAt: serverTimestamp(),
+        });
+      });
 
-      // Create reconciliation record
       const selectedAccount = bankAccounts.find(a => a.id === selectedAccountId);
-      const { error: reconcileError } = await supabase.from("reconciliations").insert({
-        bank_account_id: selectedAccountId,
-        reconciliation_date: reconciliationDate,
-        statement_balance: statementBalance,
-        book_balance: selectedAccount?.current_balance || 0,
+      const reconciliationRef = doc(collection(firestore, COLLECTIONS.RECONCILIATIONS));
+      batch.set(reconciliationRef, {
+        companyId,
+        bankAccountId: selectedAccountId,
+        reconciliationDate,
+        statementBalance: statementBalance,
+        bookBalance: selectedAccount?.current_balance || 0,
         difference: statementBalance - (selectedAccount?.current_balance || 0),
         status: "completed",
-        user_id: user?.id,
+        transactionIds,
+        reconciledBy: user.id,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
       });
-      if (reconcileError) throw reconcileError;
+
+      await batch.commit();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["unreconciled-transactions"] });
+      queryClient.invalidateQueries({ queryKey: ["unreconciled-transactions", companyId, selectedAccountId] });
       toast.success("Transactions reconciled successfully");
       setSelectedTransactions(new Set());
     },

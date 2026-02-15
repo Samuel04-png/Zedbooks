@@ -1,193 +1,281 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Download, FileText, BarChart3, PieChart, TrendingUp, Wallet, Receipt } from "lucide-react";
+import { Download, FileText, BarChart3, PieChart, TrendingUp, BookOpen } from "lucide-react";
+import { LoadingState } from "@/components/ui/LoadingState";
+import { ErrorState } from "@/components/ui/ErrorState";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { useAuth } from "@/contexts/AuthContext";
+import { accountingService, companyService } from "@/services/firebase";
+import type { GLBalanceRow } from "@/services/firebase/accountingService";
+
+type AccountType = "asset" | "liability" | "equity" | "income" | "expense";
+
+interface AccountBalanceRow {
+  account_id: string;
+  account_code: string;
+  account_name: string;
+  account_type: AccountType;
+  debit_total: number;
+  credit_total: number;
+  balance: number;
+}
+
+const normalizeAccountType = (rawType: string): AccountType => {
+  const normalized = rawType.toLowerCase();
+  if (normalized === "revenue") {
+    return "income";
+  }
+
+  if (
+    normalized === "asset" ||
+    normalized === "liability" ||
+    normalized === "equity" ||
+    normalized === "income" ||
+    normalized === "expense"
+  ) {
+    return normalized;
+  }
+
+  return "expense";
+};
+
+const isDebitNormalAccount = (accountType: AccountType) => {
+  return accountType === "asset" || accountType === "expense";
+};
+
+const computeAccountBalance = (accountType: AccountType, debitTotal: number, creditTotal: number) => {
+  return isDebitNormalAccount(accountType)
+    ? debitTotal - creditTotal
+    : creditTotal - debitTotal;
+};
+
+const mapBalancesFromGL = (rows: GLBalanceRow[]): AccountBalanceRow[] => {
+  return rows
+    .map((row) => {
+      const accountType = normalizeAccountType(row.accountType);
+      const debitTotal = Number(row.debitTotal ?? 0);
+      const creditTotal = Number(row.creditTotal ?? 0);
+      return {
+        account_id: row.accountId,
+        account_code: String(row.accountCode ?? ""),
+        account_name: String(row.accountName ?? ""),
+        account_type: accountType,
+        debit_total: debitTotal,
+        credit_total: creditTotal,
+        balance: computeAccountBalance(accountType, debitTotal, creditTotal),
+      } satisfies AccountBalanceRow;
+    })
+    .sort((a, b) => a.account_code.localeCompare(b.account_code));
+};
+
+const sumBalancesByType = (rows: AccountBalanceRow[], accountType: AccountType) => {
+  return rows
+    .filter((row) => row.account_type === accountType)
+    .reduce((total, row) => total + row.balance, 0);
+};
+
+const formatCurrency = (amount: number) => {
+  return new Intl.NumberFormat("en-ZM", {
+    style: "currency",
+    currency: "ZMW",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(amount);
+};
+
+const toCSVValue = (value: string | number | boolean | null | undefined) => {
+  if (value === null || value === undefined) return "";
+  return String(value).replaceAll('"', '""');
+};
+
+const downloadCSV = (
+  rows: Array<Record<string, string | number | boolean | null | undefined>>,
+  filename: string,
+) => {
+  if (!rows.length) return;
+  const headers = Object.keys(rows[0]);
+  const body = rows.map((row) => headers.map((header) => `"${toCSVValue(row[header])}"`).join(","));
+  const csv = [headers.join(","), ...body].join("\n");
+
+  const blob = new Blob([csv], { type: "text/csv" });
+  const url = window.URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `${filename}.csv`;
+  anchor.click();
+  window.URL.revokeObjectURL(url);
+};
 
 const FinancialReports = () => {
+  const { user } = useAuth();
   const [startDate, setStartDate] = useState(() => {
     const date = new Date();
     date.setMonth(date.getMonth() - 1);
     return date.toISOString().split("T")[0];
   });
   const [endDate, setEndDate] = useState(new Date().toISOString().split("T")[0]);
+  const isDateRangeValid = startDate <= endDate;
 
-  const { data: user } = useQuery({
-    queryKey: ["user"],
+  const companyQuery = useQuery({
+    queryKey: ["financial-reports-company-id", user?.id],
     queryFn: async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      return user;
+      if (!user) return null;
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      return membership?.companyId ?? null;
     },
+    enabled: Boolean(user),
   });
 
-  // Fetch invoices for revenue
-  const { data: invoices = [] } = useQuery({
-    queryKey: ["invoices-report", startDate, endDate],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("invoices")
-        .select("*")
-        .gte("invoice_date", startDate)
-        .lte("invoice_date", endDate)
-        .eq("status", "paid");
-      if (error) throw error;
-      return data;
-    },
-    enabled: !!user,
+  const companyId = companyQuery.data ?? null;
+
+  const periodBalancesQuery = useQuery({
+    queryKey: ["financial-reports-gl-period", companyId, startDate, endDate],
+    queryFn: () =>
+      accountingService.getGLBalances({
+        companyId: companyId as string,
+        startDate,
+        endDate,
+      }),
+    enabled: Boolean(companyId) && isDateRangeValid,
   });
 
-  // Fetch expenses
-  const { data: expenses = [] } = useQuery({
-    queryKey: ["expenses-report", startDate, endDate],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("expenses")
-        .select("*")
-        .gte("expense_date", startDate)
-        .lte("expense_date", endDate);
-      if (error) throw error;
-      return data;
-    },
-    enabled: !!user,
+  const asOfBalancesQuery = useQuery({
+    queryKey: ["financial-reports-gl-as-of", companyId, endDate],
+    queryFn: () =>
+      accountingService.getGLBalances({
+        companyId: companyId as string,
+        startDate: "1900-01-01",
+        endDate,
+      }),
+    enabled: Boolean(companyId) && isDateRangeValid,
   });
 
-  // Fetch bills
-  const { data: bills = [] } = useQuery({
-    queryKey: ["bills-report", startDate, endDate],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("bills")
-        .select("*")
-        .gte("bill_date", startDate)
-        .lte("bill_date", endDate);
-      if (error) throw error;
-      return data;
-    },
-    enabled: !!user,
+  const isLoading = companyQuery.isLoading || periodBalancesQuery.isLoading || asOfBalancesQuery.isLoading;
+  const isError = companyQuery.isError || periodBalancesQuery.isError || asOfBalancesQuery.isError;
+
+  const periodBalances = useMemo(
+    () => mapBalancesFromGL(periodBalancesQuery.data ?? []),
+    [periodBalancesQuery.data],
+  );
+
+  const asOfBalances = useMemo(
+    () => mapBalancesFromGL(asOfBalancesQuery.data ?? []),
+    [asOfBalancesQuery.data],
+  );
+
+  const incomeRows = periodBalances.filter((row) => row.account_type === "income");
+  const expenseRows = periodBalances.filter((row) => row.account_type === "expense");
+
+  const periodRevenue = sumBalancesByType(periodBalances, "income");
+  const periodExpenses = sumBalancesByType(periodBalances, "expense");
+  const netIncome = periodRevenue - periodExpenses;
+
+  const totalAssets = sumBalancesByType(asOfBalances, "asset");
+  const totalLiabilities = sumBalancesByType(asOfBalances, "liability");
+  const totalEquityWithoutRetained = sumBalancesByType(asOfBalances, "equity");
+  const retainedEarnings = sumBalancesByType(asOfBalances, "income") - sumBalancesByType(asOfBalances, "expense");
+  const totalEquity = totalEquityWithoutRetained + retainedEarnings;
+
+  const cashLikeAccounts = asOfBalances.filter(
+    (row) => row.account_type === "asset" && /cash|bank/i.test(row.account_name),
+  );
+
+  const closingCashBalance = cashLikeAccounts.reduce((total, row) => total + row.balance, 0);
+  const periodCashMovement = periodBalances
+    .filter((row) => row.account_type === "asset" && /cash|bank/i.test(row.account_name))
+    .reduce((total, row) => total + row.balance, 0);
+  const operatingInflowProxy = incomeRows.reduce((total, row) => total + row.credit_total, 0);
+  const operatingOutflowProxy = expenseRows.reduce((total, row) => total + row.debit_total, 0);
+
+  const trialBalanceRows = asOfBalances.map((row) => {
+    const netByLedger = row.debit_total - row.credit_total;
+    return {
+      ...row,
+      debit_balance: netByLedger > 0 ? netByLedger : 0,
+      credit_balance: netByLedger < 0 ? Math.abs(netByLedger) : 0,
+    };
   });
 
-  // Fetch payroll
-  const { data: payrollRuns = [] } = useQuery({
-    queryKey: ["payroll-report", startDate, endDate],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("payroll_runs")
-        .select("*")
-        .gte("run_date", startDate)
-        .lte("run_date", endDate)
-        .eq("status", "approved");
-      if (error) throw error;
-      return data;
-    },
-    enabled: !!user,
-  });
+  const trialDebitTotal = trialBalanceRows.reduce((total, row) => total + row.debit_balance, 0);
+  const trialCreditTotal = trialBalanceRows.reduce((total, row) => total + row.credit_balance, 0);
 
-  // Fetch bank accounts
-  const { data: bankAccounts = [] } = useQuery({
-    queryKey: ["bank-accounts-report"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("bank_accounts")
-        .select("*")
-        .eq("is_active", true);
-      if (error) throw error;
-      return data;
-    },
-    enabled: !!user,
-  });
+  if (!isDateRangeValid) {
+    return (
+      <ErrorState
+        title="Invalid date range"
+        message="Start date must be before or equal to end date."
+      />
+    );
+  }
 
-  // Fetch bank transactions for cashbook
-  const { data: bankTransactions = [] } = useQuery({
-    queryKey: ["bank-transactions-report", startDate, endDate],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("bank_transactions")
-        .select("*, bank_accounts(account_name)")
-        .gte("transaction_date", startDate)
-        .lte("transaction_date", endDate)
-        .order("transaction_date", { ascending: false });
-      if (error) throw error;
-      return data;
-    },
-    enabled: !!user,
-  });
+  if (!user) {
+    return (
+      <ErrorState
+        title="Not authenticated"
+        message="Sign in to view financial reports."
+      />
+    );
+  }
 
-  // Fetch inventory
-  const { data: inventory = [] } = useQuery({
-    queryKey: ["inventory-report"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("inventory_items")
-        .select("*");
-      if (error) throw error;
-      return data;
-    },
-    enabled: !!user,
-  });
+  if (isLoading) {
+    return <LoadingState message="Building reports from the general ledger..." className="py-20" />;
+  }
 
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat("en-ZM", {
-      style: "currency",
-      currency: "ZMW",
-    }).format(amount);
-  };
+  if (!companyId) {
+    return (
+      <EmptyState
+        title="No company membership found"
+        description="Your account is not linked to an active company."
+        icon={<BookOpen className="h-8 w-8 text-muted-foreground" />}
+      />
+    );
+  }
 
-  // Calculate financial metrics
-  const totalRevenue = invoices.reduce((sum, inv) => sum + (inv.total || 0), 0);
-  const totalExpenses = expenses.reduce((sum, exp) => sum + (exp.amount || 0), 0);
-  const totalBills = bills.reduce((sum, bill) => sum + (bill.total || 0), 0);
-  const totalPayroll = payrollRuns.reduce((sum, pr) => sum + (pr.total_net || 0), 0);
-  const totalCashBalance = bankAccounts.reduce((sum, acc) => sum + (acc.current_balance || 0), 0);
-  const totalInventoryValue = inventory.reduce((sum, item) => sum + ((item.quantity_on_hand || 0) * (item.unit_cost || 0)), 0);
+  if (isError) {
+    const message = companyQuery.error instanceof Error
+      ? companyQuery.error.message
+      : periodBalancesQuery.error instanceof Error
+        ? periodBalancesQuery.error.message
+        : asOfBalancesQuery.error instanceof Error
+          ? asOfBalancesQuery.error.message
+          : undefined;
 
-  const grossProfit = totalRevenue;
-  const operatingExpenses = totalExpenses + totalBills + totalPayroll;
-  const netIncome = grossProfit - operatingExpenses;
+    return (
+      <ErrorState
+        title="Failed to load financial reports"
+        message={message}
+        onRetry={() => {
+          companyQuery.refetch();
+          periodBalancesQuery.refetch();
+          asOfBalancesQuery.refetch();
+        }}
+      />
+    );
+  }
 
-  // Expense breakdown by category
-  const expensesByCategory = expenses.reduce((acc: Record<string, number>, exp) => {
-    const category = exp.category || "Uncategorized";
-    acc[category] = (acc[category] || 0) + (exp.amount || 0);
-    return acc;
-  }, {});
-
-  // Petty cash expenses (cash payment method)
-  const pettyCashExpenses = expenses.filter(e => e.payment_method === 'cash');
-  const totalPettyCash = pettyCashExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
-
-  // Cashbook calculations (all bank transactions)
-  const cashbookReceipts = bankTransactions.filter((t: any) => t.transaction_type === 'deposit' || t.transaction_type === 'receipt');
-  const cashbookPayments = bankTransactions.filter((t: any) => t.transaction_type === 'withdrawal' || t.transaction_type === 'payment');
-  const totalReceipts = cashbookReceipts.reduce((sum: number, t: any) => sum + (t.amount || 0), 0);
-  const totalPayments = cashbookPayments.reduce((sum: number, t: any) => sum + (t.amount || 0), 0);
-
-  const downloadCSV = (data: any[], filename: string) => {
-    if (data.length === 0) return;
-    const headers = Object.keys(data[0]);
-    const csvContent = [
-      headers.join(","),
-      ...data.map(row => headers.map(h => `"${row[h] || ""}"`).join(","))
-    ].join("\n");
-    
-    const blob = new Blob([csvContent], { type: "text/csv" });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${filename}.csv`;
-    a.click();
-    window.URL.revokeObjectURL(url);
-  };
+  if (!periodBalances.length && !asOfBalances.length) {
+    return (
+      <EmptyState
+        title="No posted journal entries found"
+        description="Post journal entries first. Financial reports are generated directly from the general ledger."
+        icon={<BookOpen className="h-8 w-8 text-muted-foreground" />}
+      />
+    );
+  }
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">Financial Reports</h1>
-        <p className="text-muted-foreground">Standard accounting reports and financial statements</p>
+      <div className="space-y-1">
+        <h1 className="text-2xl font-semibold tracking-tight">Financial Reports</h1>
+        <p className="text-sm text-muted-foreground">
+          All statements below are generated from posted general ledger journal lines only.
+        </p>
       </div>
 
       <Card>
@@ -195,21 +283,23 @@ const FinancialReports = () => {
           <CardTitle>Report Period</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="flex gap-4 items-end">
+          <div className="grid gap-4 sm:grid-cols-2 lg:max-w-xl">
             <div className="space-y-2">
-              <Label>Start Date</Label>
+              <Label htmlFor="report-start-date">Start Date</Label>
               <Input
+                id="report-start-date"
                 type="date"
                 value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
+                onChange={(event) => setStartDate(event.target.value)}
               />
             </div>
             <div className="space-y-2">
-              <Label>End Date</Label>
+              <Label htmlFor="report-end-date">End Date</Label>
               <Input
+                id="report-end-date"
                 type="date"
                 value={endDate}
-                onChange={(e) => setEndDate(e.target.value)}
+                onChange={(event) => setEndDate(event.target.value)}
               />
             </div>
           </div>
@@ -217,45 +307,48 @@ const FinancialReports = () => {
       </Card>
 
       <Tabs defaultValue="income-statement">
-        <TabsList className="grid w-full grid-cols-6">
+        <TabsList className="grid w-full grid-cols-2 md:grid-cols-5">
           <TabsTrigger value="income-statement">
-            <TrendingUp className="h-4 w-4 mr-2" />
+            <TrendingUp className="mr-2 h-4 w-4" />
             Income Statement
           </TabsTrigger>
           <TabsTrigger value="balance-sheet">
-            <PieChart className="h-4 w-4 mr-2" />
+            <PieChart className="mr-2 h-4 w-4" />
             Balance Sheet
           </TabsTrigger>
           <TabsTrigger value="cash-flow">
-            <BarChart3 className="h-4 w-4 mr-2" />
+            <BarChart3 className="mr-2 h-4 w-4" />
             Cash Flow
           </TabsTrigger>
           <TabsTrigger value="trial-balance">
-            <FileText className="h-4 w-4 mr-2" />
+            <FileText className="mr-2 h-4 w-4" />
             Trial Balance
           </TabsTrigger>
-          <TabsTrigger value="petty-cash">
-            <Receipt className="h-4 w-4 mr-2" />
-            Petty Cash
-          </TabsTrigger>
-          <TabsTrigger value="cashbook">
-            <Wallet className="h-4 w-4 mr-2" />
-            Cashbook
+          <TabsTrigger value="general-ledger">
+            <BookOpen className="mr-2 h-4 w-4" />
+            GL Summary
           </TabsTrigger>
         </TabsList>
 
         <TabsContent value="income-statement">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle>Income Statement (Profit & Loss)</CardTitle>
-              <Button variant="outline" size="sm" onClick={() => downloadCSV([
-                { Category: "Revenue", Amount: totalRevenue },
-                { Category: "Expenses", Amount: totalExpenses },
-                { Category: "Bills", Amount: totalBills },
-                { Category: "Payroll", Amount: totalPayroll },
-                { Category: "Net Income", Amount: netIncome },
-              ], "income-statement")}>
-                <Download className="h-4 w-4 mr-2" />
+              <CardTitle>Income Statement (GL-based)</CardTitle>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  downloadCSV(
+                    [
+                      { category: "Revenue", amount: periodRevenue },
+                      { category: "Expenses", amount: periodExpenses },
+                      { category: "Net Income", amount: netIncome },
+                    ],
+                    "income-statement",
+                  )
+                }
+              >
+                <Download className="mr-2 h-4 w-4" />
                 Export CSV
               </Button>
             </CardHeader>
@@ -268,41 +361,15 @@ const FinancialReports = () => {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  <TableRow className="font-semibold bg-muted/30">
-                    <TableCell>Revenue</TableCell>
-                    <TableCell className="text-right"></TableCell>
+                  <TableRow className="font-medium">
+                    <TableCell>Total Revenue</TableCell>
+                    <TableCell className="text-right text-green-600">{formatCurrency(periodRevenue)}</TableCell>
                   </TableRow>
-                  <TableRow>
-                    <TableCell className="pl-8">Sales Revenue (Paid Invoices)</TableCell>
-                    <TableCell className="text-right text-green-600">{formatCurrency(totalRevenue)}</TableCell>
+                  <TableRow className="font-medium">
+                    <TableCell>Total Expenses</TableCell>
+                    <TableCell className="text-right text-red-600">({formatCurrency(periodExpenses)})</TableCell>
                   </TableRow>
-                  <TableRow className="font-semibold bg-muted/30">
-                    <TableCell>Gross Profit</TableCell>
-                    <TableCell className="text-right">{formatCurrency(grossProfit)}</TableCell>
-                  </TableRow>
-                  
-                  <TableRow className="font-semibold bg-muted/30">
-                    <TableCell>Operating Expenses</TableCell>
-                    <TableCell className="text-right"></TableCell>
-                  </TableRow>
-                  <TableRow>
-                    <TableCell className="pl-8">General Expenses</TableCell>
-                    <TableCell className="text-right text-red-600">({formatCurrency(totalExpenses)})</TableCell>
-                  </TableRow>
-                  <TableRow>
-                    <TableCell className="pl-8">Vendor Bills</TableCell>
-                    <TableCell className="text-right text-red-600">({formatCurrency(totalBills)})</TableCell>
-                  </TableRow>
-                  <TableRow>
-                    <TableCell className="pl-8">Payroll Expenses</TableCell>
-                    <TableCell className="text-right text-red-600">({formatCurrency(totalPayroll)})</TableCell>
-                  </TableRow>
-                  <TableRow className="font-semibold">
-                    <TableCell className="pl-8">Total Operating Expenses</TableCell>
-                    <TableCell className="text-right text-red-600">({formatCurrency(operatingExpenses)})</TableCell>
-                  </TableRow>
-
-                  <TableRow className="font-bold text-lg bg-primary/10">
+                  <TableRow className="font-semibold bg-muted/40">
                     <TableCell>Net Income</TableCell>
                     <TableCell className={`text-right ${netIncome >= 0 ? "text-green-600" : "text-red-600"}`}>
                       {formatCurrency(netIncome)}
@@ -310,32 +377,6 @@ const FinancialReports = () => {
                   </TableRow>
                 </TableBody>
               </Table>
-
-              {Object.keys(expensesByCategory).length > 0 && (
-                <div className="mt-6">
-                  <h3 className="font-semibold mb-3">Expense Breakdown by Category</h3>
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Category</TableHead>
-                        <TableHead className="text-right">Amount</TableHead>
-                        <TableHead className="text-right">% of Total</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {Object.entries(expensesByCategory).map(([category, amount]) => (
-                        <TableRow key={category}>
-                          <TableCell>{category}</TableCell>
-                          <TableCell className="text-right">{formatCurrency(amount)}</TableCell>
-                          <TableCell className="text-right">
-                            {((amount / totalExpenses) * 100).toFixed(1)}%
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -343,13 +384,22 @@ const FinancialReports = () => {
         <TabsContent value="balance-sheet">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle>Balance Sheet</CardTitle>
-              <Button variant="outline" size="sm" onClick={() => downloadCSV([
-                { Category: "Cash & Bank", Type: "Asset", Amount: totalCashBalance },
-                { Category: "Inventory", Type: "Asset", Amount: totalInventoryValue },
-                { Category: "Accounts Receivable", Type: "Asset", Amount: invoices.filter(i => i.status !== "paid").reduce((s, i) => s + i.total, 0) },
-              ], "balance-sheet")}>
-                <Download className="h-4 w-4 mr-2" />
+              <CardTitle>Balance Sheet (as of {endDate})</CardTitle>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  downloadCSV(
+                    [
+                      { section: "Assets", amount: totalAssets },
+                      { section: "Liabilities", amount: totalLiabilities },
+                      { section: "Equity", amount: totalEquity },
+                    ],
+                    "balance-sheet",
+                  )
+                }
+              >
+                <Download className="mr-2 h-4 w-4" />
                 Export CSV
               </Button>
             </CardHeader>
@@ -357,70 +407,26 @@ const FinancialReports = () => {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Account</TableHead>
+                    <TableHead>Section</TableHead>
                     <TableHead className="text-right">Amount</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  <TableRow className="font-bold bg-muted/30">
-                    <TableCell>ASSETS</TableCell>
-                    <TableCell className="text-right"></TableCell>
-                  </TableRow>
-                  
-                  <TableRow className="font-semibold">
-                    <TableCell className="pl-4">Current Assets</TableCell>
-                    <TableCell className="text-right"></TableCell>
+                  <TableRow>
+                    <TableCell>Total Assets</TableCell>
+                    <TableCell className="text-right">{formatCurrency(totalAssets)}</TableCell>
                   </TableRow>
                   <TableRow>
-                    <TableCell className="pl-8">Cash & Bank Accounts</TableCell>
-                    <TableCell className="text-right">{formatCurrency(totalCashBalance)}</TableCell>
+                    <TableCell>Total Liabilities</TableCell>
+                    <TableCell className="text-right">{formatCurrency(totalLiabilities)}</TableCell>
                   </TableRow>
                   <TableRow>
-                    <TableCell className="pl-8">Accounts Receivable (Unpaid Invoices)</TableCell>
-                    <TableCell className="text-right">
-                      {formatCurrency(invoices.filter(i => i.status !== "paid").reduce((s, i) => s + (i.total || 0), 0))}
-                    </TableCell>
+                    <TableCell>Total Equity (includes retained earnings)</TableCell>
+                    <TableCell className="text-right">{formatCurrency(totalEquity)}</TableCell>
                   </TableRow>
-                  <TableRow>
-                    <TableCell className="pl-8">Inventory</TableCell>
-                    <TableCell className="text-right">{formatCurrency(totalInventoryValue)}</TableCell>
-                  </TableRow>
-                  <TableRow className="font-semibold">
-                    <TableCell className="pl-4">Total Current Assets</TableCell>
-                    <TableCell className="text-right">
-                      {formatCurrency(totalCashBalance + totalInventoryValue + invoices.filter(i => i.status !== "paid").reduce((s, i) => s + (i.total || 0), 0))}
-                    </TableCell>
-                  </TableRow>
-
-                  <TableRow className="font-bold bg-muted/30">
-                    <TableCell>LIABILITIES</TableCell>
-                    <TableCell className="text-right"></TableCell>
-                  </TableRow>
-                  
-                  <TableRow className="font-semibold">
-                    <TableCell className="pl-4">Current Liabilities</TableCell>
-                    <TableCell className="text-right"></TableCell>
-                  </TableRow>
-                  <TableRow>
-                    <TableCell className="pl-8">Accounts Payable (Unpaid Bills)</TableCell>
-                    <TableCell className="text-right">
-                      {formatCurrency(bills.filter(b => b.status !== "paid").reduce((s, b) => s + (b.total || 0), 0))}
-                    </TableCell>
-                  </TableRow>
-                  <TableRow className="font-semibold">
-                    <TableCell className="pl-4">Total Liabilities</TableCell>
-                    <TableCell className="text-right">
-                      {formatCurrency(bills.filter(b => b.status !== "paid").reduce((s, b) => s + (b.total || 0), 0))}
-                    </TableCell>
-                  </TableRow>
-
-                  <TableRow className="font-bold bg-muted/30">
-                    <TableCell>EQUITY</TableCell>
-                    <TableCell className="text-right"></TableCell>
-                  </TableRow>
-                  <TableRow>
-                    <TableCell className="pl-8">Retained Earnings</TableCell>
-                    <TableCell className="text-right">{formatCurrency(netIncome)}</TableCell>
+                  <TableRow className="font-semibold bg-muted/40">
+                    <TableCell>Liabilities + Equity</TableCell>
+                    <TableCell className="text-right">{formatCurrency(totalLiabilities + totalEquity)}</TableCell>
                   </TableRow>
                 </TableBody>
               </Table>
@@ -431,68 +437,58 @@ const FinancialReports = () => {
         <TabsContent value="cash-flow">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle>Cash Flow Statement</CardTitle>
-              <Button variant="outline" size="sm" onClick={() => downloadCSV([
-                { Activity: "Cash from Operations", Amount: totalRevenue - operatingExpenses },
-              ], "cash-flow")}>
-                <Download className="h-4 w-4 mr-2" />
+              <CardTitle>Cash Flow Summary (GL-derived)</CardTitle>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  downloadCSV(
+                    [
+                      { metric: "Operating Inflow Proxy", amount: operatingInflowProxy },
+                      { metric: "Operating Outflow Proxy", amount: operatingOutflowProxy },
+                      { metric: "Net Cash Movement (Cash/Bank Accounts)", amount: periodCashMovement },
+                      { metric: "Closing Cash Balance", amount: closingCashBalance },
+                    ],
+                    "cash-flow-summary",
+                  )
+                }
+              >
+                <Download className="mr-2 h-4 w-4" />
                 Export CSV
               </Button>
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-4">
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Activity</TableHead>
-                    <TableHead className="text-right">Inflow</TableHead>
-                    <TableHead className="text-right">Outflow</TableHead>
-                    <TableHead className="text-right">Net</TableHead>
+                    <TableHead>Metric</TableHead>
+                    <TableHead className="text-right">Amount</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  <TableRow className="font-bold bg-muted/30">
-                    <TableCell colSpan={4}>Operating Activities</TableCell>
+                  <TableRow>
+                    <TableCell>Operating Inflow Proxy</TableCell>
+                    <TableCell className="text-right text-green-600">{formatCurrency(operatingInflowProxy)}</TableCell>
                   </TableRow>
                   <TableRow>
-                    <TableCell className="pl-4">Cash from Sales</TableCell>
-                    <TableCell className="text-right text-green-600">{formatCurrency(totalRevenue)}</TableCell>
-                    <TableCell className="text-right">-</TableCell>
-                    <TableCell className="text-right">{formatCurrency(totalRevenue)}</TableCell>
+                    <TableCell>Operating Outflow Proxy</TableCell>
+                    <TableCell className="text-right text-red-600">({formatCurrency(operatingOutflowProxy)})</TableCell>
                   </TableRow>
                   <TableRow>
-                    <TableCell className="pl-4">Payments for Expenses</TableCell>
-                    <TableCell className="text-right">-</TableCell>
-                    <TableCell className="text-right text-red-600">({formatCurrency(totalExpenses)})</TableCell>
-                    <TableCell className="text-right text-red-600">({formatCurrency(totalExpenses)})</TableCell>
-                  </TableRow>
-                  <TableRow>
-                    <TableCell className="pl-4">Payments to Vendors</TableCell>
-                    <TableCell className="text-right">-</TableCell>
-                    <TableCell className="text-right text-red-600">({formatCurrency(totalBills)})</TableCell>
-                    <TableCell className="text-right text-red-600">({formatCurrency(totalBills)})</TableCell>
-                  </TableRow>
-                  <TableRow>
-                    <TableCell className="pl-4">Payroll Payments</TableCell>
-                    <TableCell className="text-right">-</TableCell>
-                    <TableCell className="text-right text-red-600">({formatCurrency(totalPayroll)})</TableCell>
-                    <TableCell className="text-right text-red-600">({formatCurrency(totalPayroll)})</TableCell>
-                  </TableRow>
-                  <TableRow className="font-semibold">
-                    <TableCell className="pl-4">Net Cash from Operations</TableCell>
-                    <TableCell className="text-right">{formatCurrency(totalRevenue)}</TableCell>
-                    <TableCell className="text-right">({formatCurrency(operatingExpenses)})</TableCell>
-                    <TableCell className={`text-right ${netIncome >= 0 ? "text-green-600" : "text-red-600"}`}>
-                      {formatCurrency(netIncome)}
+                    <TableCell>Net Cash Movement (Cash/Bank Accounts)</TableCell>
+                    <TableCell className={`text-right ${periodCashMovement >= 0 ? "text-green-600" : "text-red-600"}`}>
+                      {formatCurrency(periodCashMovement)}
                     </TableCell>
                   </TableRow>
-
-                  <TableRow className="font-bold bg-primary/10">
-                    <TableCell>Cash Balance</TableCell>
-                    <TableCell colSpan={2}></TableCell>
-                    <TableCell className="text-right font-bold">{formatCurrency(totalCashBalance)}</TableCell>
+                  <TableRow className="font-semibold bg-muted/40">
+                    <TableCell>Closing Cash Balance</TableCell>
+                    <TableCell className="text-right">{formatCurrency(closingCashBalance)}</TableCell>
                   </TableRow>
                 </TableBody>
               </Table>
+              <p className="text-xs text-muted-foreground">
+                Cash balances are derived from asset accounts with names containing "cash" or "bank".
+              </p>
             </CardContent>
           </Card>
         </TabsContent>
@@ -500,16 +496,23 @@ const FinancialReports = () => {
         <TabsContent value="trial-balance">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle>Trial Balance</CardTitle>
-              <Button variant="outline" size="sm" onClick={() => downloadCSV([
-                { Account: "Cash & Bank", Debit: totalCashBalance, Credit: 0 },
-                { Account: "Accounts Receivable", Debit: invoices.filter(i => i.status !== "paid").reduce((s, i) => s + i.total, 0), Credit: 0 },
-                { Account: "Inventory", Debit: totalInventoryValue, Credit: 0 },
-                { Account: "Accounts Payable", Debit: 0, Credit: bills.filter(b => b.status !== "paid").reduce((s, b) => s + b.total, 0) },
-                { Account: "Revenue", Debit: 0, Credit: totalRevenue },
-                { Account: "Expenses", Debit: operatingExpenses, Credit: 0 },
-              ], "trial-balance")}>
-                <Download className="h-4 w-4 mr-2" />
+              <CardTitle>Trial Balance (as of {endDate})</CardTitle>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  downloadCSV(
+                    trialBalanceRows.map((row) => ({
+                      account_code: row.account_code,
+                      account_name: row.account_name,
+                      debit: row.debit_balance,
+                      credit: row.credit_balance,
+                    })),
+                    "trial-balance",
+                  )
+                }
+              >
+                <Download className="mr-2 h-4 w-4" />
                 Export CSV
               </Button>
             </CardHeader>
@@ -523,252 +526,74 @@ const FinancialReports = () => {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  <TableRow>
-                    <TableCell>Cash & Bank Accounts</TableCell>
-                    <TableCell className="text-right">{formatCurrency(totalCashBalance)}</TableCell>
-                    <TableCell className="text-right">-</TableCell>
-                  </TableRow>
-                  <TableRow>
-                    <TableCell>Accounts Receivable</TableCell>
-                    <TableCell className="text-right">
-                      {formatCurrency(invoices.filter(i => i.status !== "paid").reduce((s, i) => s + (i.total || 0), 0))}
-                    </TableCell>
-                    <TableCell className="text-right">-</TableCell>
-                  </TableRow>
-                  <TableRow>
-                    <TableCell>Inventory</TableCell>
-                    <TableCell className="text-right">{formatCurrency(totalInventoryValue)}</TableCell>
-                    <TableCell className="text-right">-</TableCell>
-                  </TableRow>
-                  <TableRow>
-                    <TableCell>Accounts Payable</TableCell>
-                    <TableCell className="text-right">-</TableCell>
-                    <TableCell className="text-right">
-                      {formatCurrency(bills.filter(b => b.status !== "paid").reduce((s, b) => s + (b.total || 0), 0))}
-                    </TableCell>
-                  </TableRow>
-                  <TableRow>
-                    <TableCell>Revenue</TableCell>
-                    <TableCell className="text-right">-</TableCell>
-                    <TableCell className="text-right">{formatCurrency(totalRevenue)}</TableCell>
-                  </TableRow>
-                  <TableRow>
-                    <TableCell>Operating Expenses</TableCell>
-                    <TableCell className="text-right">{formatCurrency(operatingExpenses)}</TableCell>
-                    <TableCell className="text-right">-</TableCell>
-                  </TableRow>
-                  <TableRow className="font-bold bg-muted/30">
-                    <TableCell>TOTALS</TableCell>
-                    <TableCell className="text-right">
-                      {formatCurrency(totalCashBalance + totalInventoryValue + operatingExpenses + invoices.filter(i => i.status !== "paid").reduce((s, i) => s + (i.total || 0), 0))}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {formatCurrency(totalRevenue + bills.filter(b => b.status !== "paid").reduce((s, b) => s + (b.total || 0), 0))}
-                    </TableCell>
-                  </TableRow>
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="petty-cash">
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle>Petty Cash Report</CardTitle>
-              <Button variant="outline" size="sm" onClick={() => downloadCSV(
-                pettyCashExpenses.map(e => ({
-                  Date: e.expense_date,
-                  Description: e.description,
-                  Category: e.category || 'Uncategorized',
-                  Reference: e.reference_number || '-',
-                  Amount: e.amount,
-                })), "petty-cash-report"
-              )}>
-                <Download className="h-4 w-4 mr-2" />
-                Export CSV
-              </Button>
-            </CardHeader>
-            <CardContent>
-              <div className="mb-6 grid gap-4 md:grid-cols-3">
-                <Card>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-sm font-medium">Total Petty Cash Spent</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="text-2xl font-bold text-destructive">{formatCurrency(totalPettyCash)}</div>
-                  </CardContent>
-                </Card>
-                <Card>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-sm font-medium">Number of Transactions</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="text-2xl font-bold">{pettyCashExpenses.length}</div>
-                  </CardContent>
-                </Card>
-                <Card>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-sm font-medium">Average Transaction</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="text-2xl font-bold">
-                      {formatCurrency(pettyCashExpenses.length > 0 ? totalPettyCash / pettyCashExpenses.length : 0)}
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
-
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Date</TableHead>
-                    <TableHead>Description</TableHead>
-                    <TableHead>Category</TableHead>
-                    <TableHead>Reference</TableHead>
-                    <TableHead className="text-right">Amount</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {pettyCashExpenses.length > 0 ? (
-                    pettyCashExpenses.map((expense) => (
-                      <TableRow key={expense.id}>
-                        <TableCell>{expense.expense_date}</TableCell>
-                        <TableCell>{expense.description}</TableCell>
-                        <TableCell>{expense.category || 'Uncategorized'}</TableCell>
-                        <TableCell>{expense.reference_number || '-'}</TableCell>
-                        <TableCell className="text-right">{formatCurrency(expense.amount || 0)}</TableCell>
-                      </TableRow>
-                    ))
-                  ) : (
-                    <TableRow>
-                      <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
-                        No petty cash transactions in this period
+                  {trialBalanceRows.map((row) => (
+                    <TableRow key={row.account_id}>
+                      <TableCell>{row.account_code} - {row.account_name}</TableCell>
+                      <TableCell className="text-right">
+                        {row.debit_balance > 0 ? formatCurrency(row.debit_balance) : "-"}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {row.credit_balance > 0 ? formatCurrency(row.credit_balance) : "-"}
                       </TableCell>
                     </TableRow>
-                  )}
-                  {pettyCashExpenses.length > 0 && (
-                    <TableRow className="font-bold bg-muted/30">
-                      <TableCell colSpan={4}>TOTAL</TableCell>
-                      <TableCell className="text-right">{formatCurrency(totalPettyCash)}</TableCell>
-                    </TableRow>
-                  )}
+                  ))}
+                  <TableRow className="font-semibold bg-muted/40">
+                    <TableCell>Totals</TableCell>
+                    <TableCell className="text-right">{formatCurrency(trialDebitTotal)}</TableCell>
+                    <TableCell className="text-right">{formatCurrency(trialCreditTotal)}</TableCell>
+                  </TableRow>
                 </TableBody>
               </Table>
             </CardContent>
           </Card>
         </TabsContent>
 
-        <TabsContent value="cashbook">
+        <TabsContent value="general-ledger">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle>Cashbook Report</CardTitle>
-              <Button variant="outline" size="sm" onClick={() => downloadCSV(
-                bankTransactions.map((t: any) => ({
-                  Date: t.transaction_date,
-                  Account: t.bank_accounts?.account_name || '-',
-                  Description: t.description || '-',
-                  Reference: t.reference_number || '-',
-                  Type: t.transaction_type,
-                  Receipt: ['deposit', 'receipt'].includes(t.transaction_type) ? t.amount : '',
-                  Payment: ['withdrawal', 'payment'].includes(t.transaction_type) ? t.amount : '',
-                })), "cashbook-report"
-              )}>
-                <Download className="h-4 w-4 mr-2" />
+              <CardTitle>General Ledger Account Movements</CardTitle>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  downloadCSV(
+                    periodBalances.map((row) => ({
+                      account_code: row.account_code,
+                      account_name: row.account_name,
+                      account_type: row.account_type,
+                      debit_total: row.debit_total,
+                      credit_total: row.credit_total,
+                      balance: row.balance,
+                    })),
+                    "general-ledger-summary",
+                  )
+                }
+              >
+                <Download className="mr-2 h-4 w-4" />
                 Export CSV
               </Button>
             </CardHeader>
             <CardContent>
-              <div className="mb-6 grid gap-4 md:grid-cols-4">
-                <Card>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-sm font-medium">Opening Balance</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="text-2xl font-bold">{formatCurrency(totalCashBalance - totalReceipts + totalPayments)}</div>
-                  </CardContent>
-                </Card>
-                <Card>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-sm font-medium">Total Receipts</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="text-2xl font-bold text-green-600">{formatCurrency(totalReceipts)}</div>
-                  </CardContent>
-                </Card>
-                <Card>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-sm font-medium">Total Payments</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="text-2xl font-bold text-destructive">{formatCurrency(totalPayments)}</div>
-                  </CardContent>
-                </Card>
-                <Card>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-sm font-medium">Closing Balance</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="text-2xl font-bold">{formatCurrency(totalCashBalance)}</div>
-                  </CardContent>
-                </Card>
-              </div>
-
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Date</TableHead>
                     <TableHead>Account</TableHead>
-                    <TableHead>Description</TableHead>
-                    <TableHead>Reference</TableHead>
-                    <TableHead className="text-right text-green-600">Receipt</TableHead>
-                    <TableHead className="text-right text-destructive">Payment</TableHead>
+                    <TableHead>Type</TableHead>
+                    <TableHead className="text-right">Debits</TableHead>
+                    <TableHead className="text-right">Credits</TableHead>
                     <TableHead className="text-right">Balance</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {bankTransactions.length > 0 ? (
-                    (() => {
-                      let runningBalance = totalCashBalance - totalReceipts + totalPayments;
-                      return [...bankTransactions].reverse().map((transaction: any) => {
-                        const isReceipt = ['deposit', 'receipt'].includes(transaction.transaction_type);
-                        if (isReceipt) {
-                          runningBalance += transaction.amount || 0;
-                        } else {
-                          runningBalance -= transaction.amount || 0;
-                        }
-                        return (
-                          <TableRow key={transaction.id}>
-                            <TableCell>{transaction.transaction_date}</TableCell>
-                            <TableCell>{transaction.bank_accounts?.account_name || '-'}</TableCell>
-                            <TableCell>{transaction.description || '-'}</TableCell>
-                            <TableCell>{transaction.reference_number || '-'}</TableCell>
-                            <TableCell className="text-right text-green-600">
-                              {isReceipt ? formatCurrency(transaction.amount || 0) : '-'}
-                            </TableCell>
-                            <TableCell className="text-right text-destructive">
-                              {!isReceipt ? formatCurrency(transaction.amount || 0) : '-'}
-                            </TableCell>
-                            <TableCell className="text-right font-medium">{formatCurrency(runningBalance)}</TableCell>
-                          </TableRow>
-                        );
-                      }).reverse();
-                    })()
-                  ) : (
-                    <TableRow>
-                      <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
-                        No bank transactions in this period
-                      </TableCell>
+                  {periodBalances.map((row) => (
+                    <TableRow key={row.account_id}>
+                      <TableCell>{row.account_code} - {row.account_name}</TableCell>
+                      <TableCell className="capitalize">{row.account_type}</TableCell>
+                      <TableCell className="text-right">{formatCurrency(row.debit_total)}</TableCell>
+                      <TableCell className="text-right">{formatCurrency(row.credit_total)}</TableCell>
+                      <TableCell className="text-right">{formatCurrency(row.balance)}</TableCell>
                     </TableRow>
-                  )}
-                  {bankTransactions.length > 0 && (
-                    <TableRow className="font-bold bg-muted/30">
-                      <TableCell colSpan={4}>TOTALS</TableCell>
-                      <TableCell className="text-right text-green-600">{formatCurrency(totalReceipts)}</TableCell>
-                      <TableCell className="text-right text-destructive">{formatCurrency(totalPayments)}</TableCell>
-                      <TableCell className="text-right">{formatCurrency(totalCashBalance)}</TableCell>
-                    </TableRow>
-                  )}
+                  ))}
                 </TableBody>
               </Table>
             </CardContent>

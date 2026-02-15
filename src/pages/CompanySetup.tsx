@@ -1,12 +1,10 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -14,15 +12,48 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Heart, Building2, FileCheck, ArrowRight, MapPin, Phone, Mail, Hash, Shield } from "lucide-react";
+import { Heart, Building2, ArrowRight, MapPin, Phone, Mail, Hash, Shield } from "lucide-react";
 import { toast } from "sonner";
 import { CompanyLogoUpload } from "@/components/payroll/CompanyLogoUpload";
+import { useAuth } from "@/contexts/AuthContext";
+import { companyService } from "@/services/firebase";
 
 type BusinessType = "sme" | "ngo" | "school" | "corporate";
 type TaxType = "vat_registered" | "turnover_tax" | "non_vat" | "tax_exempt";
+type OrganizationType = "business" | "non_profit";
+
+const BUSINESS_TAX_OPTIONS: {
+  value: TaxType;
+  label: string;
+  description: string;
+}[] = [
+    {
+      value: "vat_registered",
+      label: "VAT Registered",
+      description: "For businesses with annual turnover above K800,000. 16% VAT applies.",
+    },
+    {
+      value: "turnover_tax",
+      label: "Turnover Tax",
+      description: "For businesses with annual turnover below K800,000. 4% turnover tax.",
+    },
+    {
+      value: "non_vat",
+      label: "Non-VAT Registered",
+      description: "Not registered for VAT. No VAT charged on sales.",
+    },
+  ];
+
+const NON_PROFIT_TAX_CLASSIFICATIONS = [
+  { value: "charitable", label: "Registered Charitable Organization" },
+  { value: "faith_based", label: "Faith-Based Organization" },
+  { value: "educational", label: "Educational Non-profit" },
+  { value: "grant_funded", label: "Grant-Funded NGO" },
+];
 
 interface CompanyData {
   name: string;
+  organizationType: OrganizationType;
   businessType: BusinessType;
   address: string;
   phone: string;
@@ -31,6 +62,7 @@ interface CompanyData {
   registrationNumber: string;
   industryType: string;
   taxType: TaxType;
+  taxClassification: string;
   vatRate: string;
   turnoverTaxNumber: string;
 }
@@ -56,10 +88,13 @@ const INDUSTRY_TYPES = [
 export default function CompanySetup() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { user } = useAuth();
   const [step, setStep] = useState(1);
-  
+  const [companyLogoUrl, setCompanyLogoUrl] = useState<string | null>(null);
+
   const [companyData, setCompanyData] = useState<CompanyData>({
     name: "",
+    organizationType: "business",
     businessType: "sme",
     address: "",
     phone: "",
@@ -68,12 +103,25 @@ export default function CompanySetup() {
     registrationNumber: "",
     industryType: "",
     taxType: "non_vat",
+    taxClassification: "",
     vatRate: "16",
     turnoverTaxNumber: "",
   });
 
   const updateField = <K extends keyof CompanyData>(field: K, value: CompanyData[K]) => {
     setCompanyData(prev => ({ ...prev, [field]: value }));
+  };
+
+  const handleOrganizationTypeChange = (value: OrganizationType) => {
+    setCompanyData((prev) => ({
+      ...prev,
+      organizationType: value,
+      taxType: value === "business"
+        ? (prev.taxType === "tax_exempt" ? "non_vat" : prev.taxType)
+        : "tax_exempt",
+      taxClassification: value === "business" ? "" : prev.taxClassification,
+      turnoverTaxNumber: value === "business" ? prev.turnoverTaxNumber : "",
+    }));
   };
 
   // Validate TPIN format (10 digits)
@@ -83,65 +131,34 @@ export default function CompanySetup() {
 
   const setupMutation = useMutation({
     mutationFn: async () => {
-      const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Not authenticated");
 
-      // Get the user's profile to find their company
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("company_id")
-        .eq("id", user.id)
-        .single();
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      if (!membership?.companyId) throw new Error("No company associated with user");
 
-      if (!profile?.company_id) throw new Error("No company associated with user");
+      const isVatRegistered = companyData.organizationType === "business" && companyData.taxType === "vat_registered";
+      const taxClassification =
+        companyData.organizationType === "business"
+          ? companyData.taxType
+          : companyData.taxClassification;
 
-      // Update the company record
-      const { error: companyError } = await supabase
-        .from("companies")
-        .update({
-          name: companyData.name,
-          business_type: companyData.businessType,
-          address: companyData.address,
-          phone: companyData.phone,
-          email: companyData.email,
-          tpin: companyData.tpin,
-          registration_number: companyData.registrationNumber,
-          industry_type: companyData.industryType,
-          tax_type: companyData.taxType,
-          turnover_tax_number: companyData.taxType === "turnover_tax" ? companyData.turnoverTaxNumber : null,
-        })
-        .eq("id", profile.company_id);
-
-      if (companyError) throw companyError;
-
-      // Update or create company_settings for backward compatibility
-      const { data: existing } = await supabase
-        .from("company_settings")
-        .select("id")
-        .eq("user_id", user.id)
-        .maybeSingle();
-
-      const isVatRegistered = companyData.taxType === "vat_registered";
-
-      if (existing) {
-        const { error } = await supabase
-          .from("company_settings")
-          .update({
-            company_name: companyData.name,
-            is_vat_registered: isVatRegistered,
-            vat_rate: isVatRegistered ? parseFloat(companyData.vatRate) : null,
-          })
-          .eq("id", existing.id);
-        if (error) throw error;
-      } else {
-        const { error } = await supabase.from("company_settings").insert({
-          user_id: user.id,
-          company_name: companyData.name,
-          is_vat_registered: isVatRegistered,
-          vat_rate: isVatRegistered ? parseFloat(companyData.vatRate) : null,
-        });
-        if (error) throw error;
-      }
+      await companyService.completeCompanySetup({
+        companyId: membership.companyId,
+        name: companyData.name,
+        organizationType: companyData.organizationType,
+        businessType: companyData.businessType,
+        taxType: companyData.organizationType === "business" ? companyData.taxType : "tax_exempt",
+        taxClassification,
+        address: companyData.address || undefined,
+        phone: companyData.phone || undefined,
+        email: companyData.email || undefined,
+        tpin: companyData.tpin || undefined,
+        registrationNumber: companyData.registrationNumber || undefined,
+        industryType: companyData.industryType || undefined,
+        logoUrl: companyLogoUrl,
+        isVatRegistered,
+        vatRate: isVatRegistered ? parseFloat(companyData.vatRate) : null,
+      });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["company-settings"] });
@@ -161,6 +178,14 @@ export default function CompanySetup() {
           toast.error("Please enter your company name");
           return false;
         }
+        if (!companyData.phone) {
+          toast.error("Phone number is required");
+          return false;
+        }
+        if (!companyData.email) {
+          toast.error("Email is required");
+          return false;
+        }
         if (!companyData.tpin) {
           toast.error("TPIN is required for ZRA compliance");
           return false;
@@ -171,10 +196,18 @@ export default function CompanySetup() {
         }
         return true;
       case 2:
-        return true; // Logo is optional
+        if (!companyLogoUrl) {
+          toast.error("Company logo is required");
+          return false;
+        }
+        return true;
       case 3:
-        if (companyData.taxType === "turnover_tax" && !companyData.turnoverTaxNumber) {
+        if (companyData.organizationType === "business" && companyData.taxType === "turnover_tax" && !companyData.turnoverTaxNumber) {
           toast.error("Please enter your Turnover Tax number");
+          return false;
+        }
+        if (companyData.organizationType === "non_profit" && !companyData.taxClassification) {
+          toast.error("Please select a non-profit tax classification");
           return false;
         }
         return true;
@@ -185,7 +218,7 @@ export default function CompanySetup() {
 
   const handleNext = () => {
     if (!validateStep()) return;
-    
+
     if (step < 3) {
       setStep(step + 1);
     } else {
@@ -215,20 +248,28 @@ export default function CompanySetup() {
     switch (step) {
       case 1: return "Enter your organization's registration details";
       case 2: return "Upload your company logo";
-      case 3: return "Configure your tax registration type";
+      case 3: return companyData.organizationType === "business"
+        ? "Configure your business tax registration type"
+        : "Select your non-profit tax classification";
       default: return "";
     }
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary via-primary/90 to-accent p-4">
-      <div className="w-full max-w-xl">
+    <div className="min-h-screen flex items-center justify-center bg-slate-50 relative overflow-hidden p-4">
+      {/* Background blobs */}
+      <div className="absolute top-0 left-0 w-full h-full overflow-hidden pointer-events-none">
+        <div className="absolute -left-[10%] -top-[10%] w-[40%] h-[40%] bg-blue-900/5 rounded-full blur-3xl" />
+        <div className="absolute -right-[10%] -bottom-[10%] w-[40%] h-[40%] bg-indigo-900/5 rounded-full blur-3xl" />
+      </div>
+
+      <div className="w-full max-w-xl relative z-10">
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-background mb-4">
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-white shadow-sm mb-4 border border-border/50">
             <Heart className="h-8 w-8 text-primary" />
           </div>
-          <h1 className="text-3xl font-bold text-white mb-2">Welcome to ZedBooks</h1>
-          <p className="text-white/90">Let's set up your organization for ZRA compliance</p>
+          <h1 className="text-3xl font-bold text-slate-900 mb-2">Welcome to ZedBooks</h1>
+          <p className="text-slate-500">Let's set up your organization for ZRA compliance</p>
         </div>
 
         {/* Progress indicator */}
@@ -236,9 +277,8 @@ export default function CompanySetup() {
           {[1, 2, 3].map((s) => (
             <div
               key={s}
-              className={`h-2 w-16 rounded-full transition-colors ${
-                s <= step ? "bg-white" : "bg-white/30"
-              }`}
+              className={`h-2 w-16 rounded-full transition-all duration-300 ${s <= step ? "bg-primary" : "bg-slate-200"
+                }`}
             />
           ))}
         </div>
@@ -265,9 +305,25 @@ export default function CompanySetup() {
                 </div>
 
                 <div className="space-y-2">
+                  <Label>Organization Type *</Label>
+                  <Select
+                    value={companyData.organizationType}
+                    onValueChange={(v) => handleOrganizationTypeChange(v as OrganizationType)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select organization type" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="business">Business</SelectItem>
+                      <SelectItem value="non_profit">Non-profit</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
                   <Label>Business Type *</Label>
-                  <Select 
-                    value={companyData.businessType} 
+                  <Select
+                    value={companyData.businessType}
                     onValueChange={(v) => updateField("businessType", v as BusinessType)}
                   >
                     <SelectTrigger>
@@ -309,8 +365,8 @@ export default function CompanySetup() {
 
                 <div className="space-y-2">
                   <Label>Industry Type</Label>
-                  <Select 
-                    value={companyData.industryType} 
+                  <Select
+                    value={companyData.industryType}
                     onValueChange={(v) => updateField("industryType", v)}
                   >
                     <SelectTrigger>
@@ -342,7 +398,7 @@ export default function CompanySetup() {
                   <div className="space-y-2">
                     <Label className="flex items-center gap-1">
                       <Phone className="h-3 w-3" />
-                      Phone
+                      Phone *
                     </Label>
                     <Input
                       value={companyData.phone}
@@ -354,7 +410,7 @@ export default function CompanySetup() {
                   <div className="space-y-2">
                     <Label className="flex items-center gap-1">
                       <Mail className="h-3 w-3" />
-                      Email
+                      Email *
                     </Label>
                     <Input
                       type="email"
@@ -369,9 +425,9 @@ export default function CompanySetup() {
 
             {step === 2 && (
               <div className="space-y-4">
-                <CompanyLogoUpload />
+                <CompanyLogoUpload onUploaded={setCompanyLogoUrl} />
                 <p className="text-sm text-muted-foreground">
-                  Your logo will appear on invoices, payslips, and reports.
+                  Your logo will appear on invoices, payslips, and reports. This is required.
                 </p>
               </div>
             )}
@@ -379,64 +435,65 @@ export default function CompanySetup() {
             {step === 3 && (
               <div className="space-y-6">
                 <div className="space-y-3">
-                  <Label className="text-base font-medium">Tax Registration Type *</Label>
+                  <Label className="text-base font-medium">
+                    {companyData.organizationType === "business"
+                      ? "Tax Registration Type *"
+                      : "Non-profit Tax Classification *"}
+                  </Label>
                   <p className="text-sm text-muted-foreground">
-                    Select your company's tax registration status with ZRA
+                    {companyData.organizationType === "business"
+                      ? "Select your company's tax registration status with ZRA"
+                      : "Select your non-profit tax classification based on ZRA guidance"}
                   </p>
 
-                  <div className="grid gap-3">
-                    {[
-                      {
-                        value: "vat_registered" as TaxType,
-                        label: "VAT Registered",
-                        description: "For businesses with annual turnover above K800,000. 16% VAT applies.",
-                      },
-                      {
-                        value: "turnover_tax" as TaxType,
-                        label: "Turnover Tax",
-                        description: "For businesses with annual turnover below K800,000. 4% turnover tax.",
-                      },
-                      {
-                        value: "non_vat" as TaxType,
-                        label: "Non-VAT Registered",
-                        description: "Not registered for VAT. No VAT charged on sales.",
-                      },
-                      {
-                        value: "tax_exempt" as TaxType,
-                        label: "Tax Exempt",
-                        description: "Exempt organizations (NGOs, diplomatic missions, etc.)",
-                      },
-                    ].map((option) => (
-                      <div
-                        key={option.value}
-                        className={`flex items-start gap-3 p-4 rounded-lg border cursor-pointer transition-colors ${
-                          companyData.taxType === option.value
-                            ? "border-primary bg-primary/5"
-                            : "border-border hover:border-primary/50"
-                        }`}
-                        onClick={() => updateField("taxType", option.value)}
-                      >
+                  {companyData.organizationType === "business" ? (
+                    <div className="grid gap-3">
+                      {BUSINESS_TAX_OPTIONS.map((option) => (
                         <div
-                          className={`w-4 h-4 mt-0.5 rounded-full border-2 flex items-center justify-center ${
-                            companyData.taxType === option.value
-                              ? "border-primary"
-                              : "border-muted-foreground"
-                          }`}
+                          key={option.value}
+                          className={`flex items-start gap-3 p-4 rounded-lg border cursor-pointer transition-colors ${companyData.taxType === option.value
+                              ? "border-primary bg-primary/5"
+                              : "border-border hover:border-primary/50"
+                            }`}
+                          onClick={() => updateField("taxType", option.value)}
                         >
-                          {companyData.taxType === option.value && (
-                            <div className="w-2 h-2 rounded-full bg-primary" />
-                          )}
+                          <div
+                            className={`w-4 h-4 mt-0.5 rounded-full border-2 flex items-center justify-center ${companyData.taxType === option.value
+                                ? "border-primary"
+                                : "border-muted-foreground"
+                              }`}
+                          >
+                            {companyData.taxType === option.value && (
+                              <div className="w-2 h-2 rounded-full bg-primary" />
+                            )}
+                          </div>
+                          <div className="flex-1">
+                            <p className="font-medium">{option.label}</p>
+                            <p className="text-sm text-muted-foreground">{option.description}</p>
+                          </div>
                         </div>
-                        <div className="flex-1">
-                          <p className="font-medium">{option.label}</p>
-                          <p className="text-sm text-muted-foreground">{option.description}</p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <Select
+                      value={companyData.taxClassification}
+                      onValueChange={(value) => updateField("taxClassification", value)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select non-profit classification" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {NON_PROFIT_TAX_CLASSIFICATIONS.map((classification) => (
+                          <SelectItem key={classification.value} value={classification.value}>
+                            {classification.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
                 </div>
 
-                {companyData.taxType === "vat_registered" && (
+                {companyData.organizationType === "business" && companyData.taxType === "vat_registered" && (
                   <div className="space-y-2 p-4 bg-muted/50 rounded-lg">
                     <Label>VAT Rate (%)</Label>
                     <Input
@@ -451,7 +508,7 @@ export default function CompanySetup() {
                   </div>
                 )}
 
-                {companyData.taxType === "turnover_tax" && (
+                {companyData.organizationType === "business" && companyData.taxType === "turnover_tax" && (
                   <div className="space-y-2 p-4 bg-muted/50 rounded-lg">
                     <Label>Turnover Tax Number</Label>
                     <Input
@@ -467,8 +524,11 @@ export default function CompanySetup() {
 
                 <div className="p-4 border rounded-lg bg-amber-500/10 border-amber-500/20">
                   <p className="text-sm text-amber-700 dark:text-amber-400">
-                    <strong>Important:</strong> Your tax type determines how invoices are processed.
-                    {companyData.taxType === "vat_registered" && 
+                    <strong>Important:</strong> {companyData.organizationType === "business"
+                      ? "Your tax type determines how invoices are processed."
+                      : "Your non-profit classification is stored for compliance and reporting."
+                    }
+                    {companyData.organizationType === "business" && companyData.taxType === "vat_registered" &&
                       " VAT invoices will be submitted to ZRA Smart Invoice for approval."
                     }
                   </p>
@@ -500,7 +560,7 @@ export default function CompanySetup() {
           </CardContent>
         </Card>
 
-        <p className="text-center text-sm text-white/70 mt-6">
+        <p className="text-center text-sm text-slate-400 mt-6">
           Step {step} of 3
         </p>
       </div>

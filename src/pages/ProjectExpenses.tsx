@@ -1,7 +1,11 @@
 import { useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/contexts/AuthContext";
+import { companyService } from "@/services/firebase";
+import { firestore } from "@/integrations/firebase/client";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { addDoc, collection, deleteDoc, doc, getDoc, getDocs, query, serverTimestamp, setDoc, where } from "firebase/firestore";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -47,6 +51,7 @@ const expenseCategories = [
 ];
 
 export default function ProjectExpenses() {
+  const { user } = useAuth();
   const { projectId } = useParams<{ projectId: string }>();
   const queryClient = useQueryClient();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -59,59 +64,104 @@ export default function ProjectExpenses() {
     notes: "",
   });
 
-  const { data: user } = useQuery({
-    queryKey: ["user"],
+  const { data: companyId } = useQuery({
+    queryKey: ["project-expenses-company-id", user?.id],
     queryFn: async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      return user;
+      if (!user) return null;
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      return membership?.companyId ?? null;
     },
+    enabled: Boolean(user),
   });
 
   const { data: project } = useQuery({
-    queryKey: ["project", projectId],
+    queryKey: ["project", companyId, projectId],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("projects")
-        .select("*")
-        .eq("id", projectId)
-        .single();
-      if (error) throw error;
-      return data;
+      if (!projectId || !companyId) return null;
+      const snap = await getDoc(doc(firestore, COLLECTIONS.PROJECTS, projectId));
+      if (!snap.exists()) return null;
+
+      const row = snap.data() as Record<string, unknown>;
+      if (String(row.companyId ?? "") !== companyId) return null;
+
+      return {
+        id: snap.id,
+        ...row,
+        budget: Number(row.budget ?? 0),
+        spent: Number(row.spent ?? 0),
+        name: String(row.name ?? ""),
+      };
     },
-    enabled: !!projectId,
+    enabled: Boolean(projectId && companyId),
   });
 
   const { data: expenses = [], isLoading } = useQuery({
-    queryKey: ["project-expenses", projectId],
+    queryKey: ["project-expenses", companyId, projectId],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("project_expenses")
-        .select("*")
-        .eq("project_id", projectId)
-        .order("expense_date", { ascending: false });
-      if (error) throw error;
-      return data;
+      if (!projectId || !companyId) return [];
+
+      const ref = collection(firestore, COLLECTIONS.PROJECT_EXPENSES);
+      const snapshot = await getDocs(
+        query(
+          ref,
+          where("companyId", "==", companyId),
+          where("projectId", "==", projectId),
+        ),
+      );
+
+      return snapshot.docs
+        .map((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          const expenseDate = row.expenseDate ?? row.expense_date;
+          const normalizedDate = typeof expenseDate === "string"
+            ? expenseDate
+            : (expenseDate as { toDate?: () => Date })?.toDate?.().toISOString().slice(0, 10) ?? new Date().toISOString().slice(0, 10);
+          return {
+            id: docSnap.id,
+            description: String(row.description ?? ""),
+            amount: Number(row.amount ?? 0),
+            expense_date: normalizedDate,
+            category: (row.category ?? null) as string | null,
+            notes: (row.notes ?? null) as string | null,
+          };
+        })
+        .sort((a, b) => b.expense_date.localeCompare(a.expense_date));
     },
-    enabled: !!projectId && !!user,
+    enabled: Boolean(projectId && companyId),
   });
+
+  const refreshProjectSpent = async () => {
+    if (!projectId || !companyId) return;
+    const ref = collection(firestore, COLLECTIONS.PROJECT_EXPENSES);
+    const snapshot = await getDocs(query(ref, where("companyId", "==", companyId), where("projectId", "==", projectId)));
+    const spent = snapshot.docs.reduce((sum, docSnap) => sum + Number((docSnap.data() as Record<string, unknown>).amount ?? 0), 0);
+    await setDoc(doc(firestore, COLLECTIONS.PROJECTS, projectId), {
+      spent,
+      updatedAt: serverTimestamp(),
+    }, { merge: true });
+  };
 
   const createMutation = useMutation({
     mutationFn: async (data: typeof formData) => {
-      const { error } = await supabase.from("project_expenses").insert({
-        project_id: projectId,
-        user_id: user?.id,
+      if (!projectId || !companyId || !user) throw new Error("No active company context");
+      await addDoc(collection(firestore, COLLECTIONS.PROJECT_EXPENSES), {
+        companyId,
+        projectId,
+        userId: user.id,
         description: data.description,
         amount: parseFloat(data.amount),
-        expense_date: data.expense_date,
+        expenseDate: data.expense_date,
         category: data.category || null,
         notes: data.notes || null,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
       });
-      if (error) throw error;
+      await refreshProjectSpent();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["project-expenses", projectId] });
-      queryClient.invalidateQueries({ queryKey: ["project", projectId] });
-      queryClient.invalidateQueries({ queryKey: ["projects"] });
+      queryClient.invalidateQueries({ queryKey: ["project-expenses", companyId, projectId] });
+      queryClient.invalidateQueries({ queryKey: ["project", companyId, projectId] });
+      queryClient.invalidateQueries({ queryKey: ["projects", companyId] });
       toast.success("Expense added successfully");
       resetForm();
     },
@@ -122,22 +172,20 @@ export default function ProjectExpenses() {
 
   const updateMutation = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: typeof formData }) => {
-      const { error } = await supabase
-        .from("project_expenses")
-        .update({
-          description: data.description,
-          amount: parseFloat(data.amount),
-          expense_date: data.expense_date,
-          category: data.category || null,
-          notes: data.notes || null,
-        })
-        .eq("id", id);
-      if (error) throw error;
+      await setDoc(doc(firestore, COLLECTIONS.PROJECT_EXPENSES, id), {
+        description: data.description,
+        amount: parseFloat(data.amount),
+        expenseDate: data.expense_date,
+        category: data.category || null,
+        notes: data.notes || null,
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+      await refreshProjectSpent();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["project-expenses", projectId] });
-      queryClient.invalidateQueries({ queryKey: ["project", projectId] });
-      queryClient.invalidateQueries({ queryKey: ["projects"] });
+      queryClient.invalidateQueries({ queryKey: ["project-expenses", companyId, projectId] });
+      queryClient.invalidateQueries({ queryKey: ["project", companyId, projectId] });
+      queryClient.invalidateQueries({ queryKey: ["projects", companyId] });
       toast.success("Expense updated successfully");
       resetForm();
     },
@@ -148,13 +196,13 @@ export default function ProjectExpenses() {
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.from("project_expenses").delete().eq("id", id);
-      if (error) throw error;
+      await deleteDoc(doc(firestore, COLLECTIONS.PROJECT_EXPENSES, id));
+      await refreshProjectSpent();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["project-expenses", projectId] });
-      queryClient.invalidateQueries({ queryKey: ["project", projectId] });
-      queryClient.invalidateQueries({ queryKey: ["projects"] });
+      queryClient.invalidateQueries({ queryKey: ["project-expenses", companyId, projectId] });
+      queryClient.invalidateQueries({ queryKey: ["project", companyId, projectId] });
+      queryClient.invalidateQueries({ queryKey: ["projects", companyId] });
       toast.success("Expense deleted successfully");
     },
     onError: (error) => {

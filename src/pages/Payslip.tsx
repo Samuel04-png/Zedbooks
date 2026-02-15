@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, Download, Building2, Mail, Loader2, Settings } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
@@ -8,6 +7,11 @@ import { formatZMW } from "@/utils/zambianTaxCalculations";
 import { format } from "date-fns";
 import { toast } from "sonner";
 import { useCompanySettings } from "@/hooks/useCompanySettings";
+import { useAuth } from "@/contexts/AuthContext";
+import { payrollService } from "@/services/firebase";
+import { firestore } from "@/integrations/firebase/client";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { collection, doc, getDoc, getDocs, limit, query, where } from "firebase/firestore";
 import {
   Dialog,
   DialogContent,
@@ -18,7 +22,57 @@ import {
 } from "@/components/ui/dialog";
 import { CompanyLogoUpload } from "@/components/payroll/CompanyLogoUpload";
 
+interface PayrollRunRecord {
+  id: string;
+  period_start: string;
+  period_end: string;
+  run_date: string;
+}
+
+interface EmployeeRecord {
+  full_name: string;
+  employee_number: string;
+  position: string | null;
+  department: string | null;
+  tpin: string | null;
+  napsa_number: string | null;
+  nhima_number: string | null;
+  bank_name: string | null;
+  bank_account_number: string | null;
+  email: string | null;
+}
+
+interface PayrollItemRecord {
+  id: string;
+  employee_id: string;
+  basic_salary: number;
+  housing_allowance: number;
+  transport_allowance: number;
+  other_allowances: number;
+  gross_salary: number;
+  napsa_employee: number;
+  napsa_employer: number;
+  nhima_employee: number;
+  nhima_employer: number;
+  paye: number;
+  advances_deducted: number;
+  total_deductions: number;
+  net_salary: number;
+  employees: EmployeeRecord | null;
+}
+
+interface PayrollAdditionRecord {
+  id: string;
+  type: string;
+  name: string;
+  amount: number;
+}
+
+const asNumber = (value: unknown): number => Number(value ?? 0);
+const asString = (value: unknown): string => String(value ?? "");
+
 export default function Payslip() {
+  const { user } = useAuth();
   const navigate = useNavigate();
   const { runId, employeeId } = useParams();
   const [isSending, setIsSending] = useState(false);
@@ -29,73 +83,123 @@ export default function Payslip() {
   const { data: payrollRun } = useQuery({
     queryKey: ["payrollRun", runId],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("payroll_runs")
-        .select("*")
-        .eq("id", runId)
-        .single();
+      if (!runId) return null;
+      const snap = await getDoc(doc(firestore, COLLECTIONS.PAYROLL_RUNS, runId));
+      if (!snap.exists()) return null;
 
-      if (error) throw error;
-      return data;
+      const row = snap.data() as Record<string, unknown>;
+      return {
+        id: snap.id,
+        period_start: asString(row.periodStart ?? row.period_start),
+        period_end: asString(row.periodEnd ?? row.period_end),
+        run_date: asString(row.runDate ?? row.run_date),
+      } satisfies PayrollRunRecord;
     },
+    enabled: Boolean(user && runId),
   });
 
   const { data: payrollItem, isLoading } = useQuery({
     queryKey: ["payrollItem", runId, employeeId],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("payroll_items")
-        .select(`
-          *,
-          employees (
-            full_name,
-            employee_number,
-            position,
-            department,
-            tpin,
-            napsa_number,
-            nhima_number,
-            bank_name,
-            bank_account_number,
-            email
-          )
-        `)
-        .eq("payroll_run_id", runId)
-        .eq("employee_id", employeeId)
-        .single();
+      if (!runId || !employeeId) return null;
 
-      if (error) throw error;
-      return data;
+      const payrollItemsRef = collection(firestore, COLLECTIONS.PAYROLL_ITEMS);
+
+      const findPayrollItem = async (runField: string, employeeField: string) => {
+        const snap = await getDocs(
+          query(
+            payrollItemsRef,
+            where(runField, "==", runId),
+            where(employeeField, "==", employeeId),
+            limit(1),
+          ),
+        );
+        return snap.empty ? null : snap.docs[0];
+      };
+
+      const itemDoc =
+        (await findPayrollItem("payrollRunId", "employeeId")) ??
+        (await findPayrollItem("payroll_run_id", "employee_id"));
+
+      if (!itemDoc) return null;
+
+      const row = itemDoc.data() as Record<string, unknown>;
+      const resolvedEmployeeId = asString(row.employeeId ?? row.employee_id ?? employeeId);
+
+      let employee: EmployeeRecord | null = null;
+      if (resolvedEmployeeId) {
+        const employeeSnap = await getDoc(doc(firestore, COLLECTIONS.EMPLOYEES, resolvedEmployeeId));
+        if (employeeSnap.exists()) {
+          const emp = employeeSnap.data() as Record<string, unknown>;
+          employee = {
+            full_name: asString(emp.fullName ?? emp.full_name),
+            employee_number: asString(emp.employeeNumber ?? emp.employee_number),
+            position: (emp.position as string | null) ?? null,
+            department: (emp.department as string | null) ?? null,
+            tpin: (emp.tpin as string | null) ?? null,
+            napsa_number: (emp.napsaNumber as string | null) ?? (emp.napsa_number as string | null) ?? null,
+            nhima_number: (emp.nhimaNumber as string | null) ?? (emp.nhima_number as string | null) ?? null,
+            bank_name: (emp.bankName as string | null) ?? (emp.bank_name as string | null) ?? null,
+            bank_account_number: (emp.bankAccountNumber as string | null) ?? (emp.bank_account_number as string | null) ?? null,
+            email: (emp.email as string | null) ?? null,
+          };
+        }
+      }
+
+      return {
+        id: itemDoc.id,
+        employee_id: resolvedEmployeeId,
+        basic_salary: asNumber(row.basicSalary ?? row.basic_salary),
+        housing_allowance: asNumber(row.housingAllowance ?? row.housing_allowance),
+        transport_allowance: asNumber(row.transportAllowance ?? row.transport_allowance),
+        other_allowances: asNumber(row.otherAllowances ?? row.other_allowances),
+        gross_salary: asNumber(row.grossSalary ?? row.gross_salary),
+        napsa_employee: asNumber(row.napsaEmployee ?? row.napsa_employee),
+        napsa_employer: asNumber(row.napsaEmployer ?? row.napsa_employer),
+        nhima_employee: asNumber(row.nhimaEmployee ?? row.nhima_employee),
+        nhima_employer: asNumber(row.nhimaEmployer ?? row.nhima_employer),
+        paye: asNumber(row.paye),
+        advances_deducted: asNumber(row.advancesDeducted ?? row.advances_deducted),
+        total_deductions: asNumber(row.totalDeductions ?? row.total_deductions),
+        net_salary: asNumber(row.netSalary ?? row.net_salary),
+        employees: employee,
+      } satisfies PayrollItemRecord;
     },
+    enabled: Boolean(user && runId && employeeId),
   });
 
   const { data: additions } = useQuery({
     queryKey: ["payroll-additions", runId, employeeId],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("payroll_additions")
-        .select("*")
-        .eq("payroll_run_id", runId)
-        .eq("employee_id", employeeId);
+      if (!runId || !employeeId) return [] as PayrollAdditionRecord[];
 
-      if (error) throw error;
-      return data;
+      const additionsRef = collection(firestore, COLLECTIONS.PAYROLL_ADDITIONS);
+
+      let snap = await getDocs(
+        query(additionsRef, where("payrollRunId", "==", runId), where("employeeId", "==", employeeId)),
+      );
+      if (snap.empty) {
+        snap = await getDocs(
+          query(additionsRef, where("payroll_run_id", "==", runId), where("employee_id", "==", employeeId)),
+        );
+      }
+
+      return snap.docs.map((docSnap) => {
+        const row = docSnap.data() as Record<string, unknown>;
+        return {
+          id: docSnap.id,
+          type: asString(row.type),
+          name: asString(row.name),
+          amount: asNumber(row.amount),
+        } satisfies PayrollAdditionRecord;
+      });
     },
+    enabled: Boolean(user && runId && employeeId),
   });
 
   const printPayslip = () => {
     window.print();
     toast.success("Print dialog opened");
-  };
-
-  const generateSecurePassword = (): string => {
-    const length = 12;
-    const charset = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#$%';
-    const values = new Uint8Array(length);
-    crypto.getRandomValues(values);
-    return Array.from(values)
-      .map(x => charset[x % charset.length])
-      .join('');
   };
 
   const sendPayslipEmail = async () => {
@@ -107,52 +211,14 @@ export default function Payslip() {
     setIsSending(true);
 
     try {
-      const period = payrollRun ? format(new Date(payrollRun.period_start), "MMMM yyyy") : "";
-      const password = generateSecurePassword();
-
-      const additionalEarnings = additions?.filter(a => a.type !== "advance").reduce((sum, a) => sum + Number(a.amount), 0) || 0;
-      const advanceDeductions = additions?.filter(a => a.type === "advance").reduce((sum, a) => sum + Number(a.amount), 0) || 0;
-
-      const { error } = await supabase.functions.invoke("send-payslip-email", {
-        body: {
-          employeeName: employee.full_name,
-          employeeEmail: employee.email,
-          period,
-          companyName: companySettings?.company_name || "ZedBooks NGO",
-          companyLogoUrl: companySettings?.logo_url,
-          payslipData: {
-            basicSalary: Number(payrollItem?.basic_salary),
-            housingAllowance: Number(payrollItem?.housing_allowance),
-            transportAllowance: Number(payrollItem?.transport_allowance),
-            otherAllowances: Number(payrollItem?.other_allowances),
-            additionalEarnings,
-            grossSalary: Number(payrollItem?.gross_salary) + additionalEarnings,
-            napsa: Number(payrollItem?.napsa_employee),
-            nhima: Number(payrollItem?.nhima_employee),
-            paye: Number(payrollItem?.paye),
-            advancesDeducted: Number(payrollItem?.advances_deducted) + advanceDeductions,
-            totalDeductions: Number(payrollItem?.total_deductions) + advanceDeductions,
-            netSalary: Number(payrollItem?.net_salary) - advanceDeductions,
-            employeeNo: employee.employee_number,
-            position: employee.position || "",
-            department: employee.department || "",
-            tpin: employee.tpin || "",
-            napsaNo: employee.napsa_number || "",
-            nhimaNo: employee.nhima_number || "",
-            bankName: employee.bank_name || "",
-            accountNumber: employee.bank_account_number || "",
-          },
-          password,
-        },
+      if (!runId || !employeeId) throw new Error("Invalid payroll context");
+      await payrollService.sendPayslipEmail({
+        payrollRunId: runId,
+        employeeId,
       });
 
-      if (error) throw error;
-
-      toast.success(`Payslip sent to ${employee.email}`, {
-        description: `Password: ${password}`,
-      });
-    } catch (error) {
-      console.error(error);
+      toast.success(`Payslip queued for ${employee.email}`);
+    } catch {
       toast.error("Failed to send payslip email");
     } finally {
       setIsSending(false);
@@ -167,7 +233,7 @@ export default function Payslip() {
     );
   }
 
-  const employee = payrollItem?.employees as any;
+  const employee = payrollItem?.employees;
   const earningsAdditions = additions?.filter(a => a.type !== "advance") || [];
   const advanceAdditions = additions?.filter(a => a.type === "advance") || [];
   const additionalEarningsTotal = earningsAdditions.reduce((sum, a) => sum + Number(a.amount), 0);
@@ -230,14 +296,14 @@ export default function Payslip() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
               <div className="bg-primary-foreground/20 p-3 rounded-lg h-16 w-16 flex items-center justify-center overflow-hidden">
-                {companySettings?.logo_url ? (
-                  <img src={companySettings.logo_url} alt="Company Logo" className="h-full w-full object-contain" />
+                {companySettings?.logoUrl ? (
+                  <img src={companySettings.logoUrl} alt="Company Logo" className="h-full w-full object-contain" />
                 ) : (
                   <Building2 className="h-10 w-10" />
                 )}
               </div>
               <div>
-                <h1 className="text-2xl font-bold">{companySettings?.company_name || "ZedBooks NGO"}</h1>
+                <h1 className="text-2xl font-bold">{companySettings?.companyName || "ZedBooks NGO"}</h1>
                 <p className="text-primary-foreground/80 text-sm">Accounting Suite</p>
               </div>
             </div>
@@ -318,7 +384,7 @@ export default function Payslip() {
                       <td className="px-4 py-2.5 text-muted-foreground">Other Allowances</td>
                       <td className="px-4 py-2.5 text-right font-medium">{formatZMW(Number(payrollItem?.other_allowances))}</td>
                     </tr>
-                    {earningsAdditions.map((addition: any) => (
+                    {earningsAdditions.map((addition) => (
                       <tr key={addition.id} className="border-b">
                         <td className="px-4 py-2.5 text-muted-foreground">{addition.name}</td>
                         <td className="px-4 py-2.5 text-right font-medium">{formatZMW(Number(addition.amount))}</td>
@@ -357,7 +423,7 @@ export default function Payslip() {
                         <td className="px-4 py-2.5 text-right font-medium">{formatZMW(Number(payrollItem?.advances_deducted))}</td>
                       </tr>
                     )}
-                    {advanceAdditions.map((addition: any) => (
+                    {advanceAdditions.map((addition) => (
                       <tr key={addition.id} className="border-b">
                         <td className="px-4 py-2.5 text-muted-foreground">{addition.name}</td>
                         <td className="px-4 py-2.5 text-right font-medium">{formatZMW(Number(addition.amount))}</td>

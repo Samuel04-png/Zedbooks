@@ -1,37 +1,65 @@
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { DollarSign, FileText, TrendingUp, TrendingDown, ShieldCheck, CreditCard, AlertTriangle, CheckCircle } from "lucide-react";
 import { formatZMW } from "@/utils/zambianTaxCalculations";
+import { useAuth } from "@/contexts/AuthContext";
+import { dashboardService } from "@/services/firebase";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { readNumber, readString } from "@/components/dashboard/dashboardDataUtils";
 
 export function FinancialManagerDashboard() {
-  const { data: stats } = useQuery({
-    queryKey: ["financial-manager-dashboard-stats"],
-    queryFn: async () => {
-      const [invoices, expenses, bills, bankAccounts, payrollRuns, approvalRequests] = await Promise.all([
-        supabase.from("invoices").select("total, status, vat_amount"),
-        supabase.from("expenses").select("amount, approval_status"),
-        supabase.from("bills").select("total, status, approval_status"),
-        supabase.from("bank_accounts").select("current_balance, account_name"),
-        supabase.from("payroll_runs").select("total_gross, total_net, status, payroll_status"),
-        supabase.from("approval_requests").select("status, workflow_type, amount"),
-      ]);
+  const { user } = useAuth();
 
-      const pendingApprovals = approvalRequests.data?.filter(a => a.status === 'pending') || [];
+  const { data: stats } = useQuery({
+    queryKey: ["financial-manager-dashboard-stats", user?.id],
+    enabled: Boolean(user),
+    queryFn: async () => {
+      if (!user) {
+        return {
+          totalRevenue: 0,
+          totalExpenses: 0,
+          cashBalance: 0,
+          unpaidBills: 0,
+          pendingApprovals: 0,
+          pendingApprovalsAmount: 0,
+          expensesPendingApproval: 0,
+          lastPayrollGross: 0,
+          lastPayrollNet: 0,
+          bankAccounts: [] as Array<Record<string, unknown>>,
+          vatCollected: 0,
+        };
+      }
+
+      const { invoices, expenses, bills, bankAccounts, payrollRuns, approvalRequests } = await dashboardService.runQueries(user.id, {
+        invoices: { collectionName: COLLECTIONS.INVOICES },
+        expenses: { collectionName: COLLECTIONS.EXPENSES },
+        bills: { collectionName: COLLECTIONS.BILLS },
+        bankAccounts: { collectionName: COLLECTIONS.BANK_ACCOUNTS },
+        payrollRuns: { collectionName: COLLECTIONS.PAYROLL_RUNS, orderByField: "createdAt", orderDirection: "desc" },
+        approvalRequests: { collectionName: COLLECTIONS.APPROVAL_REQUESTS },
+      });
+
+      const pendingApprovals = approvalRequests.filter((a) => readString(a, ["status"]) === "pending");
 
       return {
-        totalRevenue: invoices.data?.filter(i => i.status === 'paid').reduce((s, i) => s + (i.total || 0), 0) || 0,
-        totalExpenses: expenses.data?.reduce((s, e) => s + (e.amount || 0), 0) || 0,
-        cashBalance: bankAccounts.data?.reduce((s, a) => s + (a.current_balance || 0), 0) || 0,
-        unpaidBills: bills.data?.filter(b => b.status !== 'paid').reduce((s, b) => s + (b.total || 0), 0) || 0,
+        totalRevenue: invoices
+          .filter((i) => readString(i, ["status"]) === "paid")
+          .reduce((sum, i) => sum + readNumber(i, ["total", "amount"]), 0),
+        totalExpenses: expenses.reduce((sum, e) => sum + readNumber(e, ["amount", "total"]), 0),
+        cashBalance: bankAccounts.reduce((sum, a) => sum + readNumber(a, ["currentBalance", "current_balance"]), 0),
+        unpaidBills: bills
+          .filter((b) => readString(b, ["status"]) !== "paid")
+          .reduce((sum, b) => sum + readNumber(b, ["total", "amount"]), 0),
         pendingApprovals: pendingApprovals.length,
-        pendingApprovalsAmount: pendingApprovals.reduce((s, a) => s + (a.amount || 0), 0),
-        expensesPendingApproval: expenses.data?.filter(e => e.approval_status === 'pending').length || 0,
-        lastPayrollGross: payrollRuns.data?.[0]?.total_gross || 0,
-        lastPayrollNet: payrollRuns.data?.[0]?.total_net || 0,
-        bankAccounts: bankAccounts.data || [],
-        vatCollected: invoices.data?.filter(i => i.status === 'paid').reduce((s, i) => s + (i.vat_amount || 0), 0) || 0,
+        pendingApprovalsAmount: pendingApprovals.reduce((sum, a) => sum + readNumber(a, ["amount"]), 0),
+        expensesPendingApproval: expenses.filter((e) => readString(e, ["approvalStatus", "approval_status"]) === "pending").length,
+        lastPayrollGross: payrollRuns[0] ? readNumber(payrollRuns[0], ["totalGross", "total_gross"]) : 0,
+        lastPayrollNet: payrollRuns[0] ? readNumber(payrollRuns[0], ["totalNet", "total_net"]) : 0,
+        bankAccounts,
+        vatCollected: invoices
+          .filter((i) => readString(i, ["status"]) === "paid")
+          .reduce((sum, i) => sum + readNumber(i, ["vatAmount", "vat_amount"]), 0),
       };
     },
   });
@@ -145,10 +173,10 @@ export function FinancialManagerDashboard() {
             </div>
             <div className="border-t pt-2">
               <p className="text-xs text-muted-foreground">Bank Accounts</p>
-              {stats?.bankAccounts?.map((a: { account_name: string; current_balance: number }) => (
-                <div key={a.account_name} className="flex justify-between mt-1">
-                  <span className="text-sm text-muted-foreground">{a.account_name}</span>
-                  <span className="text-sm font-medium">{formatZMW(a.current_balance || 0)}</span>
+              {stats?.bankAccounts?.map((a: Record<string, unknown>) => (
+                <div key={readString(a, ["accountName", "account_name", "id"], "bank-account")} className="flex justify-between mt-1">
+                  <span className="text-sm text-muted-foreground">{readString(a, ["accountName", "account_name"], "Bank Account")}</span>
+                  <span className="text-sm font-medium">{formatZMW(readNumber(a, ["currentBalance", "current_balance"]))}</span>
                 </div>
               ))}
             </div>

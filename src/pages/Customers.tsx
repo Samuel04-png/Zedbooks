@@ -1,10 +1,9 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -27,6 +26,22 @@ import { useNavigate } from "react-router-dom";
 import { ImportDialog } from "@/components/shared/ImportDialog";
 import { ImportColumn, transformers } from "@/utils/importFromExcel";
 import { exportToCSV, ExportColumn } from "@/utils/exportToExcel";
+import { useAuth } from "@/contexts/AuthContext";
+import { companyService } from "@/services/firebase";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import {
+  addDoc,
+  collection,
+  deleteDoc,
+  doc,
+  getDocs,
+  query,
+  serverTimestamp,
+  setDoc,
+  where,
+  writeBatch,
+} from "firebase/firestore";
+import { firestore } from "@/integrations/firebase/client";
 
 interface Customer {
   id: string;
@@ -63,9 +78,18 @@ const customerExportColumns: ExportColumn[] = [
   { header: "Notes", key: "notes" },
 ];
 
+const chunk = <T,>(items: T[], size: number): T[][] => {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+};
+
 export default function Customers() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { user } = useAuth();
   const [searchQuery, setSearchQuery] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isImportOpen, setIsImportOpen] = useState(false);
@@ -83,72 +107,111 @@ export default function Customers() {
   });
 
   const { data: customers, isLoading } = useQuery({
-    queryKey: ["customers"],
+    queryKey: ["customers", user?.id],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("customers")
-        .select("*")
-        .order("name");
-      if (error) throw error;
-      return data as Customer[];
-    },
-  });
+      if (!user) return [] as Customer[];
 
-  const { data: user } = useQuery({
-    queryKey: ["current-user"],
-    queryFn: async () => {
-      const { data } = await supabase.auth.getUser();
-      return data.user;
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      if (!membership?.companyId) return [] as Customer[];
+
+      const customersRef = collection(firestore, COLLECTIONS.CUSTOMERS);
+      const snapshot = await getDocs(
+        query(customersRef, where("companyId", "==", membership.companyId)),
+      );
+
+      return snapshot.docs
+        .map((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          return {
+            id: docSnap.id,
+            name: String(row.name ?? ""),
+            email: (row.email as string | null) ?? null,
+            phone: (row.phone as string | null) ?? null,
+            address: (row.address as string | null) ?? null,
+            tpin: (row.tpin as string | null) ?? null,
+            contact_person: (row.contactPerson ?? row.contact_person ?? null) as string | null,
+            notes: (row.notes as string | null) ?? null,
+            project_id: (row.projectId ?? row.project_id ?? null) as string | null,
+            grant_reference: (row.grantReference ?? row.grant_reference ?? null) as string | null,
+          } satisfies Customer;
+        })
+        .sort((a, b) => a.name.localeCompare(b.name));
     },
+    enabled: Boolean(user),
   });
 
   const createMutation = useMutation({
     mutationFn: async (data: typeof formData) => {
-      const { error } = await supabase.from("customers").insert({
-        ...data,
-        user_id: user?.id,
+      if (!user) throw new Error("You must be logged in");
+
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      if (!membership?.companyId) throw new Error("No company profile found for your account");
+
+      await addDoc(collection(firestore, COLLECTIONS.CUSTOMERS), {
+        companyId: membership.companyId,
+        userId: user.id,
+        name: data.name,
+        email: data.email || null,
+        phone: data.phone || null,
+        address: data.address || null,
+        tpin: data.tpin || null,
+        contactPerson: data.contact_person || null,
+        notes: data.notes || null,
+        projectId: data.project_id || null,
+        grantReference: data.grant_reference || null,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
       });
-      if (error) throw error;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["customers"] });
+      queryClient.invalidateQueries({ queryKey: ["customers", user?.id] });
       toast.success("Customer created successfully");
       resetForm();
     },
     onError: (error) => {
-      toast.error("Failed to create customer: " + error.message);
+      toast.error("Failed to create customer: " + (error instanceof Error ? error.message : "Unknown error"));
     },
   });
 
   const updateMutation = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: typeof formData }) => {
-      const { error } = await supabase
-        .from("customers")
-        .update(data)
-        .eq("id", id);
-      if (error) throw error;
+      await setDoc(
+        doc(firestore, COLLECTIONS.CUSTOMERS, id),
+        {
+          name: data.name,
+          email: data.email || null,
+          phone: data.phone || null,
+          address: data.address || null,
+          tpin: data.tpin || null,
+          contactPerson: data.contact_person || null,
+          notes: data.notes || null,
+          projectId: data.project_id || null,
+          grantReference: data.grant_reference || null,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true },
+      );
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["customers"] });
+      queryClient.invalidateQueries({ queryKey: ["customers", user?.id] });
       toast.success("Customer updated successfully");
       resetForm();
     },
     onError: (error) => {
-      toast.error("Failed to update customer: " + error.message);
+      toast.error("Failed to update customer: " + (error instanceof Error ? error.message : "Unknown error"));
     },
   });
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.from("customers").delete().eq("id", id);
-      if (error) throw error;
+      await deleteDoc(doc(firestore, COLLECTIONS.CUSTOMERS, id));
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["customers"] });
+      queryClient.invalidateQueries({ queryKey: ["customers", user?.id] });
       toast.success("Customer deleted successfully");
     },
     onError: (error) => {
-      toast.error("Failed to delete customer: " + error.message);
+      toast.error("Failed to delete customer: " + (error instanceof Error ? error.message : "Unknown error"));
     },
   });
 
@@ -197,25 +260,43 @@ export default function Customers() {
     (customer) =>
       customer.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       customer.email?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      customer.phone?.includes(searchQuery)
+      customer.phone?.includes(searchQuery),
   );
 
   const handleImport = async (data: Record<string, unknown>[]) => {
-    for (const item of data) {
-      const insertData = {
-        name: item.name as string,
-        email: item.email as string || null,
-        phone: item.phone as string || null,
-        address: item.address as string || null,
-        tpin: item.tpin as string || null,
-        contact_person: item.contact_person as string || null,
-        notes: item.notes as string || null,
-        grant_reference: item.grant_reference as string || null,
-        user_id: user?.id as string,
-      };
-      await supabase.from("customers").insert(insertData);
+    if (!user) throw new Error("You must be logged in");
+
+    const membership = await companyService.getPrimaryMembershipByUser(user.id);
+    if (!membership?.companyId) throw new Error("No company profile found for your account");
+
+    const payloads = data.map((item) => ({
+      companyId: membership.companyId,
+      userId: user.id,
+      name: String(item.name || ""),
+      email: (item.email as string) || null,
+      phone: (item.phone as string) || null,
+      address: (item.address as string) || null,
+      tpin: (item.tpin as string) || null,
+      contactPerson: (item.contact_person as string) || null,
+      notes: (item.notes as string) || null,
+      projectId: null,
+      grantReference: (item.grant_reference as string) || null,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    }));
+
+    const customersRef = collection(firestore, COLLECTIONS.CUSTOMERS);
+    const batches = chunk(payloads, 400);
+
+    for (const records of batches) {
+      const batch = writeBatch(firestore);
+      records.forEach((record) => {
+        batch.set(doc(customersRef), record);
+      });
+      await batch.commit();
     }
-    queryClient.invalidateQueries({ queryKey: ["customers"] });
+
+    queryClient.invalidateQueries({ queryKey: ["customers", user?.id] });
     toast.success(`Imported ${data.length} customers`);
   };
 
@@ -224,7 +305,7 @@ export default function Customers() {
       toast.error("No customers to export");
       return;
     }
-    exportToCSV(customers as any, customerExportColumns, "customers-export");
+    exportToCSV(customers as Record<string, unknown>[], customerExportColumns, "customers-export");
     toast.success("Customers exported");
   };
 
@@ -237,9 +318,7 @@ export default function Customers() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold">Customers</h1>
-          <p className="text-muted-foreground">
-            Manage your customers and their information
-          </p>
+          <p className="text-muted-foreground">Manage your customers and their information</p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={() => setIsImportOpen(true)}>
@@ -250,132 +329,113 @@ export default function Customers() {
             <Download className="mr-2 h-4 w-4" />
             Export
           </Button>
-          <Dialog open={isDialogOpen} onOpenChange={(open) => {
-            setIsDialogOpen(open);
-            if (!open) resetForm();
-          }}>
+          <Dialog
+            open={isDialogOpen}
+            onOpenChange={(open) => {
+              setIsDialogOpen(open);
+              if (!open) resetForm();
+            }}
+          >
             <DialogTrigger asChild>
               <Button>
                 <Plus className="mr-2 h-4 w-4" />
                 Add Customer
               </Button>
             </DialogTrigger>
-          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle>
-                {editingCustomer ? "Edit Customer" : "Add New Customer"}
-              </DialogTitle>
-            </DialogHeader>
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div className="grid gap-4 md:grid-cols-2">
+            <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>{editingCustomer ? "Edit Customer" : "Add New Customer"}</DialogTitle>
+              </DialogHeader>
+              <form onSubmit={handleSubmit} className="space-y-4">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="name">Customer Name *</Label>
+                    <Input
+                      id="name"
+                      value={formData.name}
+                      onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="contact_person">Contact Person</Label>
+                    <Input
+                      id="contact_person"
+                      value={formData.contact_person}
+                      onChange={(e) => setFormData({ ...formData, contact_person: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="email">Email</Label>
+                    <Input
+                      id="email"
+                      type="email"
+                      value={formData.email}
+                      onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="phone">Phone</Label>
+                    <Input
+                      id="phone"
+                      value={formData.phone}
+                      onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="tpin">TPIN</Label>
+                    <Input
+                      id="tpin"
+                      value={formData.tpin}
+                      onChange={(e) => setFormData({ ...formData, tpin: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="project_id">Project Reference</Label>
+                    <Input
+                      id="project_id"
+                      value={formData.project_id}
+                      onChange={(e) => setFormData({ ...formData, project_id: e.target.value })}
+                      placeholder="For NGO project tracking"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="grant_reference">Grant Reference</Label>
+                    <Input
+                      id="grant_reference"
+                      value={formData.grant_reference}
+                      onChange={(e) => setFormData({ ...formData, grant_reference: e.target.value })}
+                      placeholder="For donor/grant tracking"
+                    />
+                  </div>
+                </div>
                 <div className="space-y-2">
-                  <Label htmlFor="name">Customer Name *</Label>
-                  <Input
-                    id="name"
-                    value={formData.name}
-                    onChange={(e) =>
-                      setFormData({ ...formData, name: e.target.value })
-                    }
-                    required
+                  <Label htmlFor="address">Address</Label>
+                  <Textarea
+                    id="address"
+                    value={formData.address}
+                    onChange={(e) => setFormData({ ...formData, address: e.target.value })}
+                    rows={2}
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="contact_person">Contact Person</Label>
-                  <Input
-                    id="contact_person"
-                    value={formData.contact_person}
-                    onChange={(e) =>
-                      setFormData({ ...formData, contact_person: e.target.value })
-                    }
+                  <Label htmlFor="notes">Notes</Label>
+                  <Textarea
+                    id="notes"
+                    value={formData.notes}
+                    onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                    rows={2}
                   />
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="email">Email</Label>
-                  <Input
-                    id="email"
-                    type="email"
-                    value={formData.email}
-                    onChange={(e) =>
-                      setFormData({ ...formData, email: e.target.value })
-                    }
-                  />
+                <div className="flex justify-end gap-2">
+                  <Button type="button" variant="outline" onClick={resetForm}>
+                    Cancel
+                  </Button>
+                  <Button type="submit">{editingCustomer ? "Update" : "Create"} Customer</Button>
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="phone">Phone</Label>
-                  <Input
-                    id="phone"
-                    value={formData.phone}
-                    onChange={(e) =>
-                      setFormData({ ...formData, phone: e.target.value })
-                    }
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="tpin">TPIN</Label>
-                  <Input
-                    id="tpin"
-                    value={formData.tpin}
-                    onChange={(e) =>
-                      setFormData({ ...formData, tpin: e.target.value })
-                    }
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="project_id">Project Reference</Label>
-                  <Input
-                    id="project_id"
-                    value={formData.project_id}
-                    onChange={(e) =>
-                      setFormData({ ...formData, project_id: e.target.value })
-                    }
-                    placeholder="For NGO project tracking"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="grant_reference">Grant Reference</Label>
-                  <Input
-                    id="grant_reference"
-                    value={formData.grant_reference}
-                    onChange={(e) =>
-                      setFormData({ ...formData, grant_reference: e.target.value })
-                    }
-                    placeholder="For donor/grant tracking"
-                  />
-                </div>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="address">Address</Label>
-                <Textarea
-                  id="address"
-                  value={formData.address}
-                  onChange={(e) =>
-                    setFormData({ ...formData, address: e.target.value })
-                  }
-                  rows={2}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="notes">Notes</Label>
-                <Textarea
-                  id="notes"
-                  value={formData.notes}
-                  onChange={(e) =>
-                    setFormData({ ...formData, notes: e.target.value })
-                  }
-                  rows={2}
-                />
-              </div>
-              <div className="flex justify-end gap-2">
-                <Button type="button" variant="outline" onClick={resetForm}>
-                  Cancel
-                </Button>
-                <Button type="submit">
-                  {editingCustomer ? "Update" : "Create"} Customer
-                </Button>
-              </div>
-            </form>
-          </DialogContent>
-        </Dialog>
+              </form>
+            </DialogContent>
+          </Dialog>
         </div>
       </div>
 
@@ -440,18 +500,10 @@ export default function Customers() {
                       >
                         <FileText className="h-4 w-4" />
                       </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => handleEdit(customer)}
-                      >
+                      <Button variant="ghost" size="icon" onClick={() => handleEdit(customer)}>
                         <Pencil className="h-4 w-4" />
                       </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => deleteMutation.mutate(customer.id)}
-                      >
+                      <Button variant="ghost" size="icon" onClick={() => deleteMutation.mutate(customer.id)}>
                         <Trash2 className="h-4 w-4" />
                       </Button>
                     </div>

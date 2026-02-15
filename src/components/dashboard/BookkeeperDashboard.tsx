@@ -1,37 +1,63 @@
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DollarSign, FileText, TrendingUp, TrendingDown, Receipt, CreditCard } from "lucide-react";
 import { formatZMW } from "@/utils/zambianTaxCalculations";
+import { useAuth } from "@/contexts/AuthContext";
+import { dashboardService } from "@/services/firebase";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { readNumber, readString } from "@/components/dashboard/dashboardDataUtils";
 
 export function BookkeeperDashboard() {
-  const { data: stats } = useQuery({
-    queryKey: ["bookkeeper-dashboard-stats"],
-    queryFn: async () => {
-      const [invoices, expenses, bills, vendors, customers] = await Promise.all([
-        supabase.from("invoices").select("total, status"),
-        supabase.from("expenses").select("amount, category, expense_date"),
-        supabase.from("bills").select("total, status, due_date"),
-        supabase.from("vendors").select("id"),
-        supabase.from("customers").select("id"),
-      ]);
+  const { user } = useAuth();
 
-      const today = new Date().toISOString().split('T')[0];
-      const overdueBills = bills.data?.filter(b => 
-        b.status !== 'paid' && b.due_date && b.due_date < today
-      ) || [];
+  const { data: stats } = useQuery({
+    queryKey: ["bookkeeper-dashboard-stats", user?.id],
+    enabled: Boolean(user),
+    queryFn: async () => {
+      if (!user) {
+        return {
+          totalInvoices: 0,
+          paidInvoices: 0,
+          unpaidInvoicesAmount: 0,
+          totalExpenses: 0,
+          unpaidBillsAmount: 0,
+          overdueBillsCount: 0,
+          overdueBillsAmount: 0,
+          vendorCount: 0,
+          customerCount: 0,
+          recentExpenses: [] as Array<Record<string, unknown>>,
+        };
+      }
+
+      const { invoices, expenses, bills, vendors, customers } = await dashboardService.runQueries(user.id, {
+        invoices: { collectionName: COLLECTIONS.INVOICES },
+        expenses: { collectionName: COLLECTIONS.EXPENSES },
+        bills: { collectionName: COLLECTIONS.BILLS },
+        vendors: { collectionName: COLLECTIONS.VENDORS },
+        customers: { collectionName: COLLECTIONS.CUSTOMERS },
+      });
+
+      const today = new Date().toISOString().split("T")[0];
+      const overdueBills = bills.filter((b) => {
+        const dueDate = readString(b, ["dueDate", "due_date"]);
+        return readString(b, ["status"]) !== "paid" && Boolean(dueDate) && dueDate < today;
+      });
 
       return {
-        totalInvoices: invoices.data?.length || 0,
-        paidInvoices: invoices.data?.filter(i => i.status === 'paid').length || 0,
-        unpaidInvoicesAmount: invoices.data?.filter(i => i.status !== 'paid').reduce((s, i) => s + (i.total || 0), 0) || 0,
-        totalExpenses: expenses.data?.reduce((s, e) => s + (e.amount || 0), 0) || 0,
-        unpaidBillsAmount: bills.data?.filter(b => b.status !== 'paid').reduce((s, b) => s + (b.total || 0), 0) || 0,
+        totalInvoices: invoices.length,
+        paidInvoices: invoices.filter((i) => readString(i, ["status"]) === "paid").length,
+        unpaidInvoicesAmount: invoices
+          .filter((i) => readString(i, ["status"]) !== "paid")
+          .reduce((sum, i) => sum + readNumber(i, ["total", "amount"]), 0),
+        totalExpenses: expenses.reduce((sum, e) => sum + readNumber(e, ["amount", "total"]), 0),
+        unpaidBillsAmount: bills
+          .filter((b) => readString(b, ["status"]) !== "paid")
+          .reduce((sum, b) => sum + readNumber(b, ["total", "amount"]), 0),
         overdueBillsCount: overdueBills.length,
-        overdueBillsAmount: overdueBills.reduce((s, b) => s + (b.total || 0), 0),
-        vendorCount: vendors.data?.length || 0,
-        customerCount: customers.data?.length || 0,
-        recentExpenses: expenses.data?.slice(0, 5) || [],
+        overdueBillsAmount: overdueBills.reduce((sum, b) => sum + readNumber(b, ["total", "amount"]), 0),
+        vendorCount: vendors.length,
+        customerCount: customers.length,
+        recentExpenses: expenses.slice(0, 5),
       };
     },
   });
@@ -40,7 +66,7 @@ export function BookkeeperDashboard() {
     { title: "Invoices Created", value: stats?.totalInvoices || 0, subtitle: `${stats?.paidInvoices || 0} paid`, icon: FileText, color: "text-primary" },
     { title: "Unpaid Invoices", value: formatZMW(stats?.unpaidInvoicesAmount || 0), icon: Receipt, color: "text-warning" },
     { title: "Total Expenses", value: formatZMW(stats?.totalExpenses || 0), icon: TrendingDown, color: "text-destructive" },
-    { title: "Unpaid Bills", value: formatZMW(stats?.unpaidBillsAmount || 0), icon: CreditCard, color: "text-orange-500" },
+    { title: "Unpaid Bills", value: formatZMW(stats?.unpaidBillsAmount || 0), icon: CreditCard, color: "text-amber-600" },
   ];
 
   return (

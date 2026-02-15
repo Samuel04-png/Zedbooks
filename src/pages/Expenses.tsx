@@ -1,6 +1,10 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/contexts/AuthContext";
+import { companyService } from "@/services/firebase";
+import { firestore } from "@/integrations/firebase/client";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { addDoc, collection, deleteDoc, doc, getDocs, query, serverTimestamp, setDoc, where } from "firebase/firestore";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -48,6 +52,17 @@ interface Expense {
   notes: string | null;
 }
 
+interface ExpenseFormData {
+  description: string;
+  category: string;
+  amount: string;
+  expense_date: string;
+  vendor_name: string;
+  payment_method: string;
+  reference_number: string;
+  notes: string;
+}
+
 const expenseCategories = [
   "Office Supplies",
   "Travel",
@@ -87,13 +102,14 @@ const expenseExportColumns: ExportColumn[] = [
 ];
 
 export default function Expenses() {
+  const { user } = useAuth();
   const queryClient = useQueryClient();
   const [searchQuery, setSearchQuery] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isImportOpen, setIsImportOpen] = useState(false);
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
 
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<ExpenseFormData>({
     description: "",
     category: "",
     amount: "",
@@ -104,36 +120,62 @@ export default function Expenses() {
     notes: "",
   });
 
-  const { data: expenses, isLoading } = useQuery({
-    queryKey: ["expenses"],
+  const { data: companyId } = useQuery({
+    queryKey: ["expenses-company-id", user?.id],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("expenses")
-        .select("*")
-        .order("expense_date", { ascending: false });
-      if (error) throw error;
-      return data as unknown as Expense[];
+      if (!user) return null;
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      return membership?.companyId ?? null;
     },
+    enabled: Boolean(user),
   });
 
-  const { data: user } = useQuery({
-    queryKey: ["current-user"],
+  const { data: expenses, isLoading } = useQuery({
+    queryKey: ["expenses", companyId],
     queryFn: async () => {
-      const { data } = await supabase.auth.getUser();
-      return data.user;
+      if (!companyId) return [] as Expense[];
+      const snapshot = await getDocs(query(collection(firestore, COLLECTIONS.EXPENSES), where("companyId", "==", companyId)));
+      return snapshot.docs
+        .map((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          return {
+            id: docSnap.id,
+            description: String(row.description ?? ""),
+            category: (row.category ?? null) as string | null,
+            amount: Number(row.amount ?? 0),
+            expense_date: String(row.expenseDate ?? row.expense_date ?? new Date().toISOString().slice(0, 10)),
+            vendor_name: (row.vendorName ?? row.vendor_name ?? null) as string | null,
+            payment_method: (row.paymentMethod ?? row.payment_method ?? null) as string | null,
+            reference_number: (row.referenceNumber ?? row.reference_number ?? null) as string | null,
+            notes: (row.notes ?? null) as string | null,
+          } satisfies Expense;
+        })
+        .sort((a, b) => b.expense_date.localeCompare(a.expense_date));
     },
+    enabled: Boolean(companyId),
   });
 
   const createMutation = useMutation({
-    mutationFn: async (data: typeof formData) => {
-      const { error } = await supabase.from("expenses").insert({
-        ...data,
-        user_id: user?.id,
-      } as any);
-      if (error) throw error;
+    mutationFn: async (data: ExpenseFormData) => {
+      if (!companyId || !user) throw new Error("Not authenticated");
+
+      await addDoc(collection(firestore, COLLECTIONS.EXPENSES), {
+        companyId,
+        description: data.description,
+        category: data.category || null,
+        amount: Number(data.amount),
+        expenseDate: data.expense_date,
+        vendorName: data.vendor_name || null,
+        paymentMethod: data.payment_method || null,
+        referenceNumber: data.reference_number || null,
+        notes: data.notes || null,
+        createdBy: user.id,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["expenses"] });
+      queryClient.invalidateQueries({ queryKey: ["expenses", companyId] });
       toast.success("Expense recorded successfully");
       resetForm();
     },
@@ -143,15 +185,21 @@ export default function Expenses() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: async ({ id, data }: { id: string; data: typeof formData }) => {
-      const { error } = await supabase
-        .from("expenses")
-        .update(data as any)
-        .eq("id", id);
-      if (error) throw error;
+    mutationFn: async ({ id, data }: { id: string; data: ExpenseFormData }) => {
+      await setDoc(doc(firestore, COLLECTIONS.EXPENSES, id), {
+        description: data.description,
+        category: data.category || null,
+        amount: Number(data.amount),
+        expenseDate: data.expense_date,
+        vendorName: data.vendor_name || null,
+        paymentMethod: data.payment_method || null,
+        referenceNumber: data.reference_number || null,
+        notes: data.notes || null,
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["expenses"] });
+      queryClient.invalidateQueries({ queryKey: ["expenses", companyId] });
       toast.success("Expense updated successfully");
       resetForm();
     },
@@ -162,11 +210,10 @@ export default function Expenses() {
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.from("expenses").delete().eq("id", id);
-      if (error) throw error;
+      await deleteDoc(doc(firestore, COLLECTIONS.EXPENSES, id));
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["expenses"] });
+      queryClient.invalidateQueries({ queryKey: ["expenses", companyId] });
       toast.success("Expense deleted successfully");
     },
     onError: (error) => {
@@ -245,13 +292,26 @@ export default function Expenses() {
   ) || 0;
 
   const handleImport = async (data: Record<string, unknown>[]) => {
-    for (const item of data) {
-      await supabase.from("expenses").insert({
-        ...item,
-        user_id: user?.id,
-      } as any);
+    if (!user?.id || !companyId) throw new Error("Not authenticated");
+
+    for (const rawItem of data) {
+      const item = rawItem as Record<string, unknown>;
+      await addDoc(collection(firestore, COLLECTIONS.EXPENSES), {
+        companyId,
+        description: String(item.description ?? "").trim(),
+        category: item.category ? String(item.category).trim() : null,
+        amount: Number(item.amount ?? 0),
+        expenseDate: String(item.expense_date ?? new Date().toISOString().split("T")[0]),
+        vendorName: item.vendor_name ? String(item.vendor_name) : null,
+        paymentMethod: item.payment_method ? String(item.payment_method) : null,
+        referenceNumber: item.reference_number ? String(item.reference_number) : null,
+        notes: item.notes ? String(item.notes) : null,
+        createdBy: user.id,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
     }
-    queryClient.invalidateQueries({ queryKey: ["expenses"] });
+    queryClient.invalidateQueries({ queryKey: ["expenses", companyId] });
     toast.success(`Imported ${data.length} expenses`);
   };
 
@@ -260,7 +320,7 @@ export default function Expenses() {
       toast.error("No expenses to export");
       return;
     }
-    exportToCSV(expenses as any, expenseExportColumns, "expenses-export");
+    exportToCSV(expenses, expenseExportColumns, "expenses-export");
     toast.success("Expenses exported");
   };
 

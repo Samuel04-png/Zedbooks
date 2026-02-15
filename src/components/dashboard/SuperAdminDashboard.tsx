@@ -1,5 +1,4 @@
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -19,6 +18,7 @@ import {
   Heart,
   Stethoscope,
   MapPin,
+  Building2,
 } from "lucide-react";
 import { formatZMW } from "@/utils/zambianTaxCalculations";
 import {
@@ -38,31 +38,50 @@ import {
   AreaChart,
   Area,
 } from "recharts";
-import { useCompanySettings } from "@/hooks/useCompanySettings";
 import { useAuth } from "@/contexts/AuthContext";
+import { dashboardService } from "@/services/firebase";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { readNumber, readString } from "@/components/dashboard/dashboardDataUtils";
 
-const COLORS = ["#f97316", "#3b82f6", "#22c55e", "#eab308", "#8b5cf6", "#ec4899"];
-const DONUT_COLORS = ["#f97316", "#ef4444", "#6366f1", "#ec4899", "#22c55e"];
+// Updated Fintech Palette
+const COLORS = ["#0f172a", "#3b82f6", "#22c55e", "#eab308", "#8b5cf6", "#ec4899"];
+const DONUT_COLORS = ["#0f172a", "#334155", "#475569", "#64748b", "#94a3b8"];
 
 export function SuperAdminDashboard() {
-  const { data: companySettings } = useCompanySettings();
   const { user } = useAuth();
 
   const { data: stats } = useQuery({
-    queryKey: ["admin-dashboard-stats"],
+    queryKey: ["admin-dashboard-stats", user?.id],
+    enabled: Boolean(user),
     queryFn: async () => {
-      const [invoices, employees, payrollRuns, expenses, projects, customers] = await Promise.all([
-        supabase.from("invoices").select("total, status, created_at"),
-        supabase.from("employees").select("id, employment_status, department"),
-        supabase.from("payroll_runs").select("total_net, status, total_gross, created_at"),
-        supabase.from("expenses").select("amount, category, expense_date"),
-        supabase.from("projects").select("id, status, budget, spent, name"),
-        supabase.from("customers").select("id, name"),
-      ]);
+      if (!user) {
+        return {
+          totalRevenue: 0,
+          pendingInvoices: 0,
+          activeEmployees: 0,
+          totalEmployees: 0,
+          totalPayroll: 0,
+          totalExpenses: 0,
+          activeProjects: 0,
+          totalCustomers: 0,
+          departmentData: [] as Array<{ name: string; value: number }>,
+          monthlyRevenue: [] as Array<{ name: string; revenue: number; expenses: number }>,
+          projects: [] as Array<Record<string, unknown>>,
+        };
+      }
+
+      const { invoices, employees, payrollRuns, expenses, projects, customers } = await dashboardService.runQueries(user.id, {
+        invoices: { collectionName: COLLECTIONS.INVOICES },
+        employees: { collectionName: COLLECTIONS.EMPLOYEES },
+        payrollRuns: { collectionName: COLLECTIONS.PAYROLL_RUNS },
+        expenses: { collectionName: COLLECTIONS.EXPENSES },
+        projects: { collectionName: COLLECTIONS.PROJECTS },
+        customers: { collectionName: COLLECTIONS.CUSTOMERS },
+      });
 
       // Group by department for donut chart
-      const departmentData = (employees.data as { id: string; employment_status: string; department: string }[] || []).reduce((acc, emp) => {
-        const dept = emp.department || "Other";
+      const departmentData = employees.reduce((acc, employee) => {
+        const dept = readString(employee, ["department"], "Other");
         if (!acc[dept]) acc[dept] = 0;
         acc[dept]++;
         return acc;
@@ -84,25 +103,27 @@ export function SuperAdminDashboard() {
         { name: "Dec", revenue: 48000, expenses: 27000 },
       ];
 
-      const employeeList = employees.data as { id: string; employment_status: string; department: string }[] || [];
-
       return {
-        totalRevenue: invoices.data?.filter(i => i.status === 'paid').reduce((s, i) => s + (i.total || 0), 0) || 0,
-        pendingInvoices: invoices.data?.filter(i => i.status === 'pending').length || 0,
-        activeEmployees: employeeList.filter(e => e.employment_status === 'active').length,
-        totalEmployees: employeeList.length,
-        totalPayroll: payrollRuns.data?.filter(p => p.status === 'approved').reduce((s, p) => s + (p.total_net || 0), 0) || 0,
-        totalExpenses: expenses.data?.reduce((s, e) => s + (e.amount || 0), 0) || 0,
-        activeProjects: projects.data?.filter(p => p.status === 'active').length || 0,
-        totalCustomers: customers.data?.length || 0,
+        totalRevenue: invoices
+          .filter((invoice) => readString(invoice, ["status"]) === "paid")
+          .reduce((sum, invoice) => sum + readNumber(invoice, ["total", "amount"]), 0),
+        pendingInvoices: invoices.filter((invoice) => readString(invoice, ["status"]) === "pending").length,
+        activeEmployees: employees.filter((employee) => readString(employee, ["employmentStatus", "employment_status"]) === "active").length,
+        totalEmployees: employees.length,
+        totalPayroll: payrollRuns
+          .filter((run) => readString(run, ["status", "payrollStatus", "payroll_status"]) === "approved")
+          .reduce((sum, run) => sum + readNumber(run, ["totalNet", "total_net"]), 0),
+        totalExpenses: expenses.reduce((sum, expense) => sum + readNumber(expense, ["amount", "total"]), 0),
+        activeProjects: projects.filter((project) => readString(project, ["status"]) === "active").length,
+        totalCustomers: customers.length,
         departmentData: Object.entries(departmentData).map(([name, value]) => ({ name, value })),
         monthlyRevenue,
-        projects: projects.data?.slice(0, 5) || [],
+        projects: projects.slice(0, 5),
       };
     },
   });
 
-  const userName = user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'Admin';
+  const userName = user?.displayName || user?.email?.split("@")[0] || "Admin";
 
   // Health metrics cards data
   const healthMetrics = [
@@ -110,9 +131,9 @@ export function SuperAdminDashboard() {
       title: "Total Revenue",
       value: formatZMW(stats?.totalRevenue || 0),
       icon: DollarSign,
-      color: "bg-orange-500",
-      bgColor: "bg-orange-50",
-      iconColor: "text-orange-500",
+      color: "bg-primary",
+      bgColor: "bg-primary/10",
+      iconColor: "text-primary",
     },
     {
       title: "Employees",
@@ -151,7 +172,7 @@ export function SuperAdminDashboard() {
   ];
 
   return (
-    <div className="space-y-6 min-h-screen">
+    <div className="space-y-6 min-h-screen pb-10">
       {/* Header */}
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div className="flex items-center gap-4">
@@ -159,7 +180,7 @@ export function SuperAdminDashboard() {
             <h1 className="text-2xl font-bold text-foreground">
               Welcome {userName},
             </h1>
-            <p className="text-muted-foreground">How're you feeling today?</p>
+            <p className="text-muted-foreground">Here's your organization's financial overview.</p>
           </div>
         </div>
         <div className="flex items-center gap-4">
@@ -167,21 +188,21 @@ export function SuperAdminDashboard() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
               placeholder="Search..."
-              className="pl-10 w-64 rounded-full bg-muted/50"
+              className="pl-10 w-64 rounded-full bg-muted/50 focus:bg-background transition-colors"
             />
           </div>
-          <Button variant="ghost" size="icon" className="relative">
+          <Button variant="ghost" size="icon" className="relative text-muted-foreground hover:text-foreground">
             <Bell className="h-5 w-5" />
-            <span className="absolute top-1 right-1 h-2 w-2 bg-red-500 rounded-full" />
+            <span className="absolute top-2 right-2 h-2 w-2 bg-red-500 rounded-full ring-2 ring-background" />
           </Button>
           <div className="flex items-center gap-2">
             <Moon className="h-4 w-4 text-muted-foreground" />
             <Switch />
             <span className="text-sm text-muted-foreground">Dark Mode</span>
           </div>
-          <div className="flex items-center gap-3">
-            <Avatar className="h-10 w-10 border-2 border-orange-200">
-              <AvatarFallback className="bg-gradient-to-br from-orange-400 to-orange-600 text-white">
+          <div className="flex items-center gap-3 pl-4 border-l">
+            <Avatar className="h-9 w-9 border border-border">
+              <AvatarFallback className="bg-primary/10 text-primary font-medium">
                 {userName.charAt(0).toUpperCase()}
               </AvatarFallback>
             </Avatar>
@@ -196,22 +217,22 @@ export function SuperAdminDashboard() {
       {/* Top Metrics */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {healthMetrics.map((metric, index) => (
-          <Card key={index} className="border-0 shadow-sm hover:shadow-md transition-shadow">
+          <Card key={index} className="border border-border/50 shadow-sm hover:shadow-md transition-shadow">
             <CardContent className="p-6">
               <div className="flex items-center justify-between">
                 <div className={`p-3 rounded-xl ${metric.bgColor}`}>
-                  <metric.icon className={`h-6 w-6 ${metric.iconColor}`} />
+                  <metric.icon className={`h-5 w-5 ${metric.iconColor}`} />
                 </div>
                 {metric.trend && (
-                  <Badge className="bg-green-100 text-green-700 gap-1">
+                  <Badge className="bg-green-100 text-green-700 hover:bg-green-200 border-green-200 gap-1">
                     <TrendingUp className="h-3 w-3" />
                     {metric.trend}
                   </Badge>
                 )}
               </div>
               <div className="mt-4">
-                <p className="text-sm text-muted-foreground">{metric.title}</p>
-                <p className="text-3xl font-bold mt-1">{metric.value}</p>
+                <p className="text-sm font-medium text-muted-foreground">{metric.title}</p>
+                <p className="text-3xl font-bold mt-1 tracking-tight text-foreground">{metric.value}</p>
                 {metric.subtitle && (
                   <p className="text-xs text-muted-foreground mt-1">{metric.subtitle}</p>
                 )}
@@ -224,7 +245,7 @@ export function SuperAdminDashboard() {
       {/* Main Content Grid */}
       <div className="grid lg:grid-cols-3 gap-6">
         {/* Donut Chart - Department Distribution */}
-        <Card className="border-0 shadow-sm">
+        <Card className="border border-border/50 shadow-sm">
           <CardHeader>
             <CardTitle className="text-lg">Department Distribution</CardTitle>
           </CardHeader>
@@ -247,7 +268,7 @@ export function SuperAdminDashboard() {
                   </PieChart>
                 </ResponsiveContainer>
                 <div className="absolute inset-0 flex items-center justify-center flex-col">
-                  <p className="text-2xl font-bold text-orange-500">
+                  <p className="text-2xl font-bold text-primary">
                     {stats?.totalEmployees || 0}
                   </p>
                   <p className="text-xs text-muted-foreground">Total</p>
@@ -258,12 +279,12 @@ export function SuperAdminDashboard() {
                   <div key={dept.name} className="flex items-center justify-between text-sm">
                     <div className="flex items-center gap-2">
                       <div
-                        className="w-3 h-3 rounded-full"
+                        className="w-2.5 h-2.5 rounded-full"
                         style={{ backgroundColor: DONUT_COLORS[index % DONUT_COLORS.length] }}
                       />
-                      <span className="truncate max-w-[100px]">{dept.name}</span>
+                      <span className="truncate max-w-[100px] text-muted-foreground">{dept.name}</span>
                     </div>
-                    <span className="text-muted-foreground font-medium">{dept.value}</span>
+                    <span className="font-medium">{dept.value}</span>
                   </div>
                 ))}
                 {(!stats?.departmentData || stats.departmentData.length === 0) && (
@@ -275,17 +296,17 @@ export function SuperAdminDashboard() {
         </Card>
 
         {/* Revenue Chart */}
-        <Card className="lg:col-span-2 border-0 shadow-sm">
+        <Card className="lg:col-span-2 border border-border/50 shadow-sm">
           <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle className="text-lg">Revenue Overview</CardTitle>
             <div className="flex gap-4 text-sm">
               <div className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full bg-orange-500" />
-                <span>Revenue</span>
+                <div className="w-2.5 h-2.5 rounded-full bg-slate-900" />
+                <span className="text-muted-foreground">Revenue</span>
               </div>
               <div className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full bg-blue-500" />
-                <span>Expenses</span>
+                <div className="w-2.5 h-2.5 rounded-full bg-blue-500" />
+                <span className="text-muted-foreground">Expenses</span>
               </div>
             </div>
           </CardHeader>
@@ -294,25 +315,25 @@ export function SuperAdminDashboard() {
               <AreaChart data={stats?.monthlyRevenue || []}>
                 <defs>
                   <linearGradient id="colorRevenue" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#f97316" stopOpacity={0.3}/>
-                    <stop offset="95%" stopColor="#f97316" stopOpacity={0}/>
+                    <stop offset="5%" stopColor="#0f172a" stopOpacity={0.1} />
+                    <stop offset="95%" stopColor="#0f172a" stopOpacity={0} />
                   </linearGradient>
                   <linearGradient id="colorExpenses" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
-                    <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
+                    <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.1} />
+                    <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
                   </linearGradient>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
-                <XAxis dataKey="name" axisLine={false} tickLine={false} fontSize={12} />
-                <YAxis axisLine={false} tickLine={false} fontSize={12} />
-                <Tooltip 
-                  contentStyle={{ 
-                    borderRadius: '12px', 
-                    border: 'none', 
-                    boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' 
-                  }} 
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                <XAxis dataKey="name" axisLine={false} tickLine={false} fontSize={12} tick={{ fill: '#64748b' }} />
+                <YAxis axisLine={false} tickLine={false} fontSize={12} tick={{ fill: '#64748b' }} tickFormatter={(value) => `K${value / 1000}k`} />
+                <Tooltip
+                  contentStyle={{
+                    borderRadius: '8px',
+                    border: '1px solid #e2e8f0',
+                    boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'
+                  }}
                 />
-                <Area type="monotone" dataKey="revenue" stroke="#f97316" fill="url(#colorRevenue)" strokeWidth={2} />
+                <Area type="monotone" dataKey="revenue" stroke="#0f172a" fill="url(#colorRevenue)" strokeWidth={2} />
                 <Area type="monotone" dataKey="expenses" stroke="#3b82f6" fill="url(#colorExpenses)" strokeWidth={2} />
               </AreaChart>
             </ResponsiveContainer>
@@ -323,10 +344,10 @@ export function SuperAdminDashboard() {
       {/* Bottom Row */}
       <div className="grid lg:grid-cols-3 gap-6">
         {/* Map / Region Stats */}
-        <Card className="lg:col-span-2 border-0 shadow-sm">
+        <Card className="lg:col-span-2 border border-border/50 shadow-sm">
           <CardHeader>
             <CardTitle className="text-lg flex items-center gap-2">
-              <MapPin className="h-5 w-5 text-orange-500" />
+              <MapPin className="h-5 w-5 text-primary" />
               Regional Performance
             </CardTitle>
           </CardHeader>
@@ -334,17 +355,17 @@ export function SuperAdminDashboard() {
             <div className="grid md:grid-cols-2 gap-6">
               <div className="space-y-4">
                 {[
-                  { region: "Lusaka", value: 42000, color: "bg-green-500" },
+                  { region: "Lusaka", value: 42000, color: "bg-primary" },
                   { region: "Copperbelt", value: 28000, color: "bg-blue-500" },
-                  { region: "Southern", value: 18000, color: "bg-orange-500" },
-                  { region: "Eastern", value: 12000, color: "bg-purple-500" },
+                  { region: "Southern", value: 18000, color: "bg-indigo-500" },
+                  { region: "Eastern", value: 12000, color: "bg-violet-500" },
                 ].map((item) => (
-                  <div key={item.region} className="flex items-center justify-between">
+                  <div key={item.region} className="flex items-center justify-between group">
                     <div className="flex items-center gap-3">
-                      <div className={`w-3 h-3 rounded-full ${item.color}`} />
-                      <span className="font-medium">{item.region}</span>
+                      <div className={`w-2.5 h-2.5 rounded-full ${item.color}`} />
+                      <span className="font-medium text-muted-foreground group-hover:text-foreground transition-colors">{item.region}</span>
                     </div>
-                    <span className="font-bold">{formatZMW(item.value)}</span>
+                    <span className="font-bold tabular-nums">{formatZMW(item.value)}</span>
                   </div>
                 ))}
               </div>
@@ -356,10 +377,13 @@ export function SuperAdminDashboard() {
                     { name: "Southern", value: 18 },
                     { name: "Eastern", value: 12 },
                   ]}>
-                    <XAxis dataKey="name" axisLine={false} tickLine={false} fontSize={12} />
+                    <XAxis dataKey="name" axisLine={false} tickLine={false} fontSize={12} tick={{ fill: '#64748b' }} />
                     <YAxis hide />
-                    <Tooltip />
-                    <Bar dataKey="value" fill="#f97316" radius={[8, 8, 0, 0]} />
+                    <Tooltip
+                      cursor={{ fill: '#f1f5f9' }}
+                      contentStyle={{ borderRadius: '8px', border: '1px solid #e2e8f0' }}
+                    />
+                    <Bar dataKey="value" fill="#0f172a" radius={[4, 4, 0, 0]} barSize={40} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
@@ -368,31 +392,27 @@ export function SuperAdminDashboard() {
         </Card>
 
         {/* Upcoming Tasks */}
-        <Card className="border-0 shadow-sm">
+        <Card className="border border-border/50 shadow-sm">
           <CardHeader>
             <CardTitle className="text-lg flex items-center gap-2">
-              <Calendar className="h-5 w-5 text-orange-500" />
+              <Calendar className="h-5 w-5 text-primary" />
               Upcoming Tasks
             </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
               {upcomingTasks.map((task, index) => (
-                <div key={index} className="flex items-center gap-4 p-3 rounded-lg hover:bg-muted/50 transition-colors">
-                  <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
-                    task.status === 'urgent' ? 'bg-red-100' : 
-                    task.status === 'scheduled' ? 'bg-blue-100' : 'bg-orange-100'
-                  }`}>
-                    <Activity className={`h-5 w-5 ${
-                      task.status === 'urgent' ? 'text-red-500' : 
-                      task.status === 'scheduled' ? 'text-blue-500' : 'text-orange-500'
-                    }`} />
+                <div key={index} className="flex items-center gap-4 p-3 rounded-lg hover:bg-muted/50 transition-colors border border-transparent hover:border-border/50">
+                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${task.status === 'urgent' ? 'bg-red-50 text-red-600' :
+                      task.status === 'scheduled' ? 'bg-blue-50 text-blue-600' : 'bg-slate-50 text-slate-600'
+                    }`}>
+                    <Activity className="h-4.5 w-4.5" />
                   </div>
                   <div className="flex-1">
-                    <p className="font-medium text-sm">{task.name}</p>
+                    <p className="font-medium text-sm text-foreground">{task.name}</p>
                     <p className="text-xs text-muted-foreground">{task.type}</p>
                   </div>
-                  <Badge variant={task.status === 'urgent' ? 'destructive' : 'secondary'} className="text-xs">
+                  <Badge variant={task.status === 'urgent' ? 'destructive' : 'secondary'} className="text-xs font-normal">
                     {task.date}
                   </Badge>
                 </div>
@@ -404,54 +424,54 @@ export function SuperAdminDashboard() {
 
       {/* Quick Stats Row */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <Card className="border-0 shadow-sm">
+        <Card className="border border-border/50 shadow-sm hover:border-primary/20 transition-colors">
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm text-muted-foreground">Active Projects</p>
-                <p className="text-2xl font-bold">{stats?.activeProjects || 0}</p>
+                <p className="text-sm text-muted-foreground font-medium">Active Projects</p>
+                <p className="text-2xl font-bold mt-1">{stats?.activeProjects || 0}</p>
               </div>
-              <div className="h-10 w-10 rounded-full bg-green-100 flex items-center justify-center">
-                <FileText className="h-5 w-5 text-green-500" />
+              <div className="h-10 w-10 rounded-xl bg-green-50 flex items-center justify-center">
+                <FileText className="h-5 w-5 text-green-600" />
               </div>
             </div>
           </CardContent>
         </Card>
-        <Card className="border-0 shadow-sm">
+        <Card className="border border-border/50 shadow-sm hover:border-primary/20 transition-colors">
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm text-muted-foreground">Pending Invoices</p>
-                <p className="text-2xl font-bold">{stats?.pendingInvoices || 0}</p>
+                <p className="text-sm text-muted-foreground font-medium">Pending Invoices</p>
+                <p className="text-2xl font-bold mt-1">{stats?.pendingInvoices || 0}</p>
               </div>
-              <div className="h-10 w-10 rounded-full bg-orange-100 flex items-center justify-center">
-                <DollarSign className="h-5 w-5 text-orange-500" />
+              <div className="h-10 w-10 rounded-xl bg-amber-50 flex items-center justify-center">
+                <DollarSign className="h-5 w-5 text-amber-600" />
               </div>
             </div>
           </CardContent>
         </Card>
-        <Card className="border-0 shadow-sm">
+        <Card className="border border-border/50 shadow-sm hover:border-primary/20 transition-colors">
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm text-muted-foreground">Total Payroll</p>
-                <p className="text-2xl font-bold">{formatZMW(stats?.totalPayroll || 0)}</p>
+                <p className="text-sm text-muted-foreground font-medium">Total Payroll</p>
+                <p className="text-2xl font-bold mt-1">{formatZMW(stats?.totalPayroll || 0)}</p>
               </div>
-              <div className="h-10 w-10 rounded-full bg-blue-100 flex items-center justify-center">
-                <Users className="h-5 w-5 text-blue-500" />
+              <div className="h-10 w-10 rounded-xl bg-blue-50 flex items-center justify-center">
+                <Users className="h-5 w-5 text-blue-600" />
               </div>
             </div>
           </CardContent>
         </Card>
-        <Card className="border-0 shadow-sm">
+        <Card className="border border-border/50 shadow-sm hover:border-primary/20 transition-colors">
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm text-muted-foreground">Total Expenses</p>
-                <p className="text-2xl font-bold">{formatZMW(stats?.totalExpenses || 0)}</p>
+                <p className="text-sm text-muted-foreground font-medium">Total Expenses</p>
+                <p className="text-2xl font-bold mt-1">{formatZMW(stats?.totalExpenses || 0)}</p>
               </div>
-              <div className="h-10 w-10 rounded-full bg-red-100 flex items-center justify-center">
-                <TrendingUp className="h-5 w-5 text-red-500" />
+              <div className="h-10 w-10 rounded-xl bg-red-50 flex items-center justify-center">
+                <TrendingUp className="h-5 w-5 text-red-600" />
               </div>
             </div>
           </CardContent>

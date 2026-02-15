@@ -1,31 +1,60 @@
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DollarSign, FileText, TrendingDown, Receipt, CreditCard, AlertTriangle } from "lucide-react";
 import { formatZMW } from "@/utils/zambianTaxCalculations";
+import { useAuth } from "@/contexts/AuthContext";
+import { dashboardService } from "@/services/firebase";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { readNumber, readString } from "@/components/dashboard/dashboardDataUtils";
 
 export function FinanceOfficerDashboard() {
-  const { data: stats } = useQuery({
-    queryKey: ["finance-officer-dashboard-stats"],
-    queryFn: async () => {
-      const [invoices, expenses, bills, bankAccounts] = await Promise.all([
-        supabase.from("invoices").select("total, status, due_date"),
-        supabase.from("expenses").select("amount, category, approval_status"),
-        supabase.from("bills").select("total, status, due_date"),
-        supabase.from("bank_accounts").select("current_balance, account_name"),
-      ]);
+  const { user } = useAuth();
 
-      const today = new Date().toISOString().split('T')[0];
+  const { data: stats } = useQuery({
+    queryKey: ["finance-officer-dashboard-stats", user?.id],
+    enabled: Boolean(user),
+    queryFn: async () => {
+      if (!user) {
+        return {
+          paidInvoices: 0,
+          pendingInvoices: 0,
+          overdueInvoices: 0,
+          totalExpenses: 0,
+          pendingExpenses: 0,
+          unpaidBills: 0,
+          overdueBills: 0,
+          cashBalance: 0,
+        };
+      }
+
+      const { invoices, expenses, bills, bankAccounts } = await dashboardService.runQueries(user.id, {
+        invoices: { collectionName: COLLECTIONS.INVOICES },
+        expenses: { collectionName: COLLECTIONS.EXPENSES },
+        bills: { collectionName: COLLECTIONS.BILLS },
+        bankAccounts: { collectionName: COLLECTIONS.BANK_ACCOUNTS },
+      });
+
+      const today = new Date().toISOString().split("T")[0];
 
       return {
-        paidInvoices: invoices.data?.filter(i => i.status === 'paid').reduce((s, i) => s + (i.total || 0), 0) || 0,
-        pendingInvoices: invoices.data?.filter(i => i.status === 'pending').length || 0,
-        overdueInvoices: invoices.data?.filter(i => i.status !== 'paid' && i.due_date && i.due_date < today).length || 0,
-        totalExpenses: expenses.data?.reduce((s, e) => s + (e.amount || 0), 0) || 0,
-        pendingExpenses: expenses.data?.filter(e => e.approval_status === 'pending').length || 0,
-        unpaidBills: bills.data?.filter(b => b.status !== 'paid').reduce((s, b) => s + (b.total || 0), 0) || 0,
-        overdueBills: bills.data?.filter(b => b.status !== 'paid' && b.due_date && b.due_date < today).length || 0,
-        cashBalance: bankAccounts.data?.reduce((s, a) => s + (a.current_balance || 0), 0) || 0,
+        paidInvoices: invoices
+          .filter((i) => readString(i, ["status"]) === "paid")
+          .reduce((sum, i) => sum + readNumber(i, ["total", "amount"]), 0),
+        pendingInvoices: invoices.filter((i) => readString(i, ["status"]) === "pending").length,
+        overdueInvoices: invoices.filter((i) => {
+          const dueDate = readString(i, ["dueDate", "due_date"]);
+          return readString(i, ["status"]) !== "paid" && Boolean(dueDate) && dueDate < today;
+        }).length,
+        totalExpenses: expenses.reduce((sum, e) => sum + readNumber(e, ["amount", "total"]), 0),
+        pendingExpenses: expenses.filter((e) => readString(e, ["approvalStatus", "approval_status"]) === "pending").length,
+        unpaidBills: bills
+          .filter((b) => readString(b, ["status"]) !== "paid")
+          .reduce((sum, b) => sum + readNumber(b, ["total", "amount"]), 0),
+        overdueBills: bills.filter((b) => {
+          const dueDate = readString(b, ["dueDate", "due_date"]);
+          return readString(b, ["status"]) !== "paid" && Boolean(dueDate) && dueDate < today;
+        }).length,
+        cashBalance: bankAccounts.reduce((sum, a) => sum + readNumber(a, ["currentBalance", "current_balance"]), 0),
       };
     },
   });

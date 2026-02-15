@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -29,67 +28,174 @@ import {
 import { Search, BookOpen, Eye, Loader2, Filter } from "lucide-react";
 import { format } from "date-fns";
 import { formatZMW } from "@/utils/zambianTaxCalculations";
+import { useAuth } from "@/contexts/AuthContext";
+import { companyService } from "@/services/firebase";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { collection, documentId, getDocs, query, where } from "firebase/firestore";
+import { firestore } from "@/integrations/firebase/client";
+
+interface JournalEntryRow {
+  id: string;
+  entryDate: string;
+  referenceNumber: string | null;
+  description: string | null;
+  isPosted: boolean;
+  isDeleted: boolean;
+  isLocked: boolean;
+}
+
+interface JournalEntryLineRow {
+  id: string;
+  entryId: string;
+  accountId: string;
+  description: string | null;
+  debitAmount: number;
+  creditAmount: number;
+}
+
+interface AccountRow {
+  id: string;
+  accountCode: string;
+  accountName: string;
+  accountType: string;
+}
+
+interface JournalLineWithAccount extends JournalEntryLineRow {
+  account: AccountRow | null;
+}
+
+const chunk = <T,>(items: T[], size: number): T[][] => {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+};
+
+const toDateString = (value: unknown): string => {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === "object" && value !== null && "toDate" in value) {
+    const ts = value as { toDate?: () => Date };
+    if (typeof ts.toDate === "function") {
+      return ts.toDate().toISOString();
+    }
+  }
+  return "";
+};
 
 export default function JournalEntries() {
+  const { user } = useAuth();
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [selectedEntry, setSelectedEntry] = useState<any>(null);
+  const [selectedEntry, setSelectedEntry] = useState<JournalEntryRow | null>(null);
 
   const { data: journalEntries, isLoading } = useQuery({
-    queryKey: ["journal-entries"],
+    queryKey: ["journal-entries", user?.id],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("journal_entries")
-        .select("*")
-        .eq("is_deleted", false)
-        .order("entry_date", { ascending: false });
+      if (!user) return [] as JournalEntryRow[];
 
-      if (error) throw error;
-      return data;
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      if (!membership?.companyId) return [] as JournalEntryRow[];
+
+      const entriesRef = collection(firestore, COLLECTIONS.JOURNAL_ENTRIES);
+      const snapshot = await getDocs(
+        query(entriesRef, where("companyId", "==", membership.companyId)),
+      );
+
+      return snapshot.docs
+        .map((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          return {
+            id: docSnap.id,
+            entryDate: toDateString(row.entryDate ?? row.entry_date),
+            referenceNumber: (row.referenceNumber ?? row.reference_number ?? null) as string | null,
+            description: (row.description ?? null) as string | null,
+            isPosted: Boolean(row.isPosted ?? row.is_posted ?? false),
+            isDeleted: Boolean(row.isDeleted ?? row.is_deleted ?? false),
+            isLocked: Boolean(row.isLocked ?? row.is_locked ?? false),
+          } satisfies JournalEntryRow;
+        })
+        .filter((entry) => !entry.isDeleted)
+        .sort((a, b) => String(b.entryDate).localeCompare(String(a.entryDate)));
     },
+    enabled: Boolean(user),
   });
 
   const { data: entryLines } = useQuery({
     queryKey: ["journal-entry-lines", selectedEntry?.id],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("journal_entry_lines")
-        .select(`
-          *,
-          chart_of_accounts (
-            account_code,
-            account_name,
-            account_type
-          )
-        `)
-        .eq("journal_entry_id", selectedEntry?.id);
+      if (!selectedEntry) return [] as JournalLineWithAccount[];
 
-      if (error) throw error;
-      return data;
+      const linesRef = collection(firestore, COLLECTIONS.JOURNAL_LINES);
+      const linesSnapshot = await getDocs(
+        query(linesRef, where("entryId", "==", selectedEntry.id)),
+      );
+
+      const lines = linesSnapshot.docs.map((docSnap) => {
+        const row = docSnap.data() as Record<string, unknown>;
+        return {
+          id: docSnap.id,
+          entryId: String(row.entryId ?? row.journalEntryId ?? row.journal_entry_id ?? ""),
+          accountId: String(row.accountId ?? row.account_id ?? ""),
+          description: (row.description ?? null) as string | null,
+          debitAmount: Number(row.debit ?? row.debitAmount ?? row.debit_amount ?? 0),
+          creditAmount: Number(row.credit ?? row.creditAmount ?? row.credit_amount ?? 0),
+        } satisfies JournalEntryLineRow;
+      });
+
+      const accountIds = Array.from(new Set(lines.map((line) => line.accountId).filter(Boolean)));
+      const accountMap = new Map<string, AccountRow>();
+
+      if (accountIds.length > 0) {
+        const accountsRef = collection(firestore, COLLECTIONS.CHART_OF_ACCOUNTS);
+        const accountChunks = chunk(accountIds, 30);
+        const snapshots = await Promise.all(
+          accountChunks.map((ids) => getDocs(query(accountsRef, where(documentId(), "in", ids)))),
+        );
+
+        snapshots.forEach((snapshot) => {
+          snapshot.docs.forEach((docSnap) => {
+            const row = docSnap.data() as Record<string, unknown>;
+            accountMap.set(docSnap.id, {
+              id: docSnap.id,
+              accountCode: String(row.accountCode ?? row.account_code ?? ""),
+              accountName: String(row.accountName ?? row.account_name ?? ""),
+              accountType: String(row.accountType ?? row.account_type ?? ""),
+            });
+          });
+        });
+      }
+
+      return lines.map((line) => ({
+        ...line,
+        account: accountMap.get(line.accountId) ?? null,
+      }));
     },
-    enabled: !!selectedEntry?.id,
+    enabled: Boolean(selectedEntry?.id),
   });
 
-  const filteredEntries = journalEntries?.filter(entry => {
-    const matchesSearch = 
-      entry.reference_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+  const filteredEntries = journalEntries?.filter((entry) => {
+    const matchesSearch =
+      entry.referenceNumber?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       entry.description?.toLowerCase().includes(searchTerm.toLowerCase());
-    
-    const matchesStatus = 
-      statusFilter === "all" || 
-      (statusFilter === "posted" && entry.is_posted) ||
-      (statusFilter === "draft" && !entry.is_posted);
-    
-    return matchesSearch && matchesStatus;
+
+    const matchesStatus =
+      statusFilter === "all" ||
+      (statusFilter === "posted" && entry.isPosted) ||
+      (statusFilter === "draft" && !entry.isPosted);
+
+    return Boolean(matchesSearch || (!searchTerm && matchesStatus)) && matchesStatus;
   });
 
-  const totalDebits = entryLines?.reduce((sum, line) => sum + Number(line.debit_amount || 0), 0) || 0;
-  const totalCredits = entryLines?.reduce((sum, line) => sum + Number(line.credit_amount || 0), 0) || 0;
+  const totalDebits = entryLines?.reduce((sum, line) => sum + line.debitAmount, 0) || 0;
+  const totalCredits = entryLines?.reduce((sum, line) => sum + line.creditAmount, 0) || 0;
 
   const summaryStats = {
     total: journalEntries?.length || 0,
-    posted: journalEntries?.filter(e => e.is_posted).length || 0,
-    draft: journalEntries?.filter(e => !e.is_posted).length || 0,
+    posted: journalEntries?.filter((entry) => entry.isPosted).length || 0,
+    draft: journalEntries?.filter((entry) => !entry.isPosted).length || 0,
   };
 
   return (
@@ -101,7 +207,6 @@ export default function JournalEntries() {
         </div>
       </div>
 
-      {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card>
           <CardHeader className="pb-2">
@@ -126,7 +231,6 @@ export default function JournalEntries() {
         </Card>
       </div>
 
-      {/* Filters */}
       <div className="flex items-center gap-4">
         <div className="relative flex-1 max-w-sm">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -150,7 +254,6 @@ export default function JournalEntries() {
         </Select>
       </div>
 
-      {/* Journal Entries Table */}
       <Card>
         <CardHeader>
           <CardTitle>Journal Entries</CardTitle>
@@ -176,22 +279,20 @@ export default function JournalEntries() {
                 <TableBody>
                   {filteredEntries.map((entry) => (
                     <TableRow key={entry.id}>
-                      <TableCell>{format(new Date(entry.entry_date), "dd MMM yyyy")}</TableCell>
-                      <TableCell className="font-mono">{entry.reference_number || "-"}</TableCell>
+                      <TableCell>{entry.entryDate ? format(new Date(entry.entryDate), "dd MMM yyyy") : "-"}</TableCell>
+                      <TableCell className="font-mono">{entry.referenceNumber || "-"}</TableCell>
                       <TableCell>{entry.description || "-"}</TableCell>
                       <TableCell>
-                        {entry.is_posted ? (
+                        {entry.isPosted ? (
                           <Badge className="bg-green-600">Posted</Badge>
                         ) : (
-                          <Badge variant="outline" className="text-amber-600 border-amber-600">Draft</Badge>
+                          <Badge variant="outline" className="text-amber-600 border-amber-600">
+                            Draft
+                          </Badge>
                         )}
                       </TableCell>
                       <TableCell className="text-right">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setSelectedEntry(entry)}
-                        >
+                        <Button variant="ghost" size="sm" onClick={() => setSelectedEntry(entry)}>
                           <Eye className="h-4 w-4 mr-2" />
                           View
                         </Button>
@@ -211,7 +312,6 @@ export default function JournalEntries() {
         </CardContent>
       </Card>
 
-      {/* Entry Details Dialog */}
       <Dialog open={!!selectedEntry} onOpenChange={() => setSelectedEntry(null)}>
         <DialogContent className="max-w-3xl">
           <DialogHeader>
@@ -222,15 +322,16 @@ export default function JournalEntries() {
           </DialogHeader>
           {selectedEntry && (
             <div className="space-y-6">
-              {/* Entry Header */}
               <div className="grid grid-cols-2 gap-4 p-4 bg-muted/50 rounded-lg">
                 <div>
                   <p className="text-sm text-muted-foreground">Reference</p>
-                  <p className="font-mono font-medium">{selectedEntry.reference_number || "-"}</p>
+                  <p className="font-mono font-medium">{selectedEntry.referenceNumber || "-"}</p>
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground">Date</p>
-                  <p className="font-medium">{format(new Date(selectedEntry.entry_date), "dd MMM yyyy")}</p>
+                  <p className="font-medium">
+                    {selectedEntry.entryDate ? format(new Date(selectedEntry.entryDate), "dd MMM yyyy") : "-"}
+                  </p>
                 </div>
                 <div className="col-span-2">
                   <p className="text-sm text-muted-foreground">Description</p>
@@ -238,7 +339,7 @@ export default function JournalEntries() {
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground">Status</p>
-                  {selectedEntry.is_posted ? (
+                  {selectedEntry.isPosted ? (
                     <Badge className="bg-green-600">Posted</Badge>
                   ) : (
                     <Badge variant="outline" className="text-amber-600 border-amber-600">Draft</Badge>
@@ -246,15 +347,10 @@ export default function JournalEntries() {
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground">Locked</p>
-                  {selectedEntry.is_locked ? (
-                    <Badge variant="secondary">Yes</Badge>
-                  ) : (
-                    <Badge variant="outline">No</Badge>
-                  )}
+                  {selectedEntry.isLocked ? <Badge variant="secondary">Yes</Badge> : <Badge variant="outline">No</Badge>}
                 </div>
               </div>
 
-              {/* Entry Lines */}
               <div>
                 <h4 className="font-semibold mb-3">Entry Lines</h4>
                 <div className="border rounded-lg">
@@ -268,26 +364,23 @@ export default function JournalEntries() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {entryLines?.map((line: any) => (
+                      {entryLines?.map((line) => (
                         <TableRow key={line.id}>
                           <TableCell>
                             <div>
-                              <p className="font-medium">{line.chart_of_accounts?.account_name || "-"}</p>
-                              <p className="text-sm text-muted-foreground font-mono">
-                                {line.chart_of_accounts?.account_code}
-                              </p>
+                              <p className="font-medium">{line.account?.accountName || "-"}</p>
+                              <p className="text-sm text-muted-foreground font-mono">{line.account?.accountCode || ""}</p>
                             </div>
                           </TableCell>
                           <TableCell>{line.description || "-"}</TableCell>
                           <TableCell className="text-right">
-                            {Number(line.debit_amount) > 0 ? formatZMW(Number(line.debit_amount)) : "-"}
+                            {line.debitAmount > 0 ? formatZMW(line.debitAmount) : "-"}
                           </TableCell>
                           <TableCell className="text-right">
-                            {Number(line.credit_amount) > 0 ? formatZMW(Number(line.credit_amount)) : "-"}
+                            {line.creditAmount > 0 ? formatZMW(line.creditAmount) : "-"}
                           </TableCell>
                         </TableRow>
                       ))}
-                      {/* Totals Row */}
                       <TableRow className="bg-muted/50 font-medium">
                         <TableCell colSpan={2} className="text-right">Totals</TableCell>
                         <TableCell className="text-right">{formatZMW(totalDebits)}</TableCell>
@@ -296,16 +389,19 @@ export default function JournalEntries() {
                     </TableBody>
                   </Table>
                 </div>
-                
-                {/* Balance Check */}
-                <div className={`mt-4 p-3 rounded-lg ${totalDebits === totalCredits ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'}`}>
-                  {totalDebits === totalCredits ? (
-                    <p className="text-green-700 text-sm flex items-center gap-2">
-                      ✓ Entry is balanced (Debits = Credits)
-                    </p>
+
+                <div
+                  className={`mt-4 p-3 rounded-lg ${
+                    Math.abs(totalDebits - totalCredits) < 0.01
+                      ? "bg-green-50 border border-green-200"
+                      : "bg-red-50 border border-red-200"
+                  }`}
+                >
+                  {Math.abs(totalDebits - totalCredits) < 0.01 ? (
+                    <p className="text-green-700 text-sm">Entry is balanced (Debits = Credits)</p>
                   ) : (
-                    <p className="text-red-700 text-sm flex items-center gap-2">
-                      ✗ Entry is unbalanced - Difference: {formatZMW(Math.abs(totalDebits - totalCredits))}
+                    <p className="text-red-700 text-sm">
+                      Entry is unbalanced - Difference: {formatZMW(Math.abs(totalDebits - totalCredits))}
                     </p>
                   )}
                 </div>

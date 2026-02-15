@@ -1,6 +1,10 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/contexts/AuthContext";
+import { companyService } from "@/services/firebase";
+import { firestore } from "@/integrations/firebase/client";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { addDoc, collection, getDocs, query, serverTimestamp, where } from "firebase/firestore";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -42,27 +46,38 @@ interface Donor {
 
 // We'll use the existing projects table to derive donors
 export default function Donors() {
+  const { user } = useAuth();
   const queryClient = useQueryClient();
   const [searchQuery, setSearchQuery] = useState("");
   const [showImportDialog, setShowImportDialog] = useState(false);
 
-  const { data: user } = useQuery({
-    queryKey: ["current-user"],
+  const { data: companyId } = useQuery({
+    queryKey: ["donors-company-id", user?.id],
     queryFn: async () => {
-      const { data } = await supabase.auth.getUser();
-      return data.user;
+      if (!user) return null;
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      return membership?.companyId ?? null;
     },
+    enabled: Boolean(user),
   });
 
   // Fetch unique donors from projects
   const { data: donorData = [], isLoading } = useQuery({
-    queryKey: ["donors-from-projects"],
+    queryKey: ["donors-from-projects", companyId],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("projects")
-        .select("donor_name, grant_reference, budget, spent, status")
-        .order("donor_name");
-      if (error) throw error;
+      if (!companyId) return [];
+      const ref = collection(firestore, COLLECTIONS.PROJECTS);
+      const snapshot = await getDocs(query(ref, where("companyId", "==", companyId)));
+      const data = snapshot.docs.map((docSnap) => {
+        const row = docSnap.data() as Record<string, unknown>;
+        return {
+          donor_name: String(row.donorName ?? row.donor_name ?? ""),
+          grant_reference: (row.grantReference ?? row.grant_reference ?? null) as string | null,
+          budget: Number(row.budget ?? 0),
+          spent: Number(row.spent ?? 0),
+          status: String(row.status ?? "active"),
+        };
+      });
 
       // Aggregate by donor name
       const donorMap = new Map<string, { grants: number; totalBudget: number; activeGrants: number }>();
@@ -84,21 +99,36 @@ export default function Donors() {
         activeGrants: data.activeGrants
       }));
     },
-    enabled: !!user,
+    enabled: Boolean(companyId),
   });
 
   // Fetch all projects for the full list
   const { data: projects = [] } = useQuery({
-    queryKey: ["projects-for-donors"],
+    queryKey: ["projects-for-donors", companyId],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("projects")
-        .select("*")
-        .order("created_at", { ascending: false });
-      if (error) throw error;
-      return data;
+      if (!companyId) return [];
+      const ref = collection(firestore, COLLECTIONS.PROJECTS);
+      const snapshot = await getDocs(query(ref, where("companyId", "==", companyId)));
+      return snapshot.docs
+        .map((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          const createdAt = row.createdAt ?? row.created_at;
+          const createdAtIso = typeof createdAt === "string"
+            ? createdAt
+            : (createdAt as { toDate?: () => Date })?.toDate?.().toISOString() ?? "";
+          return {
+            id: docSnap.id,
+            ...row,
+            donor_name: (row.donorName ?? row.donor_name ?? null) as string | null,
+            grant_reference: (row.grantReference ?? row.grant_reference ?? null) as string | null,
+            start_date: (row.startDate ?? row.start_date ?? null) as string | null,
+            end_date: (row.endDate ?? row.end_date ?? null) as string | null,
+            created_at: createdAtIso,
+          };
+        })
+        .sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")));
     },
-    enabled: !!user,
+    enabled: Boolean(companyId),
   });
 
   const formatCurrency = (amount: number) => {
@@ -136,21 +166,25 @@ export default function Donors() {
   ];
 
   const handleDonorImport = async (data: any[]) => {
+    if (!companyId || !user) throw new Error("No active company context");
     for (const row of data) {
-      const { error } = await supabase.from("projects").insert({
+      await addDoc(collection(firestore, COLLECTIONS.PROJECTS), {
+        companyId,
         name: row.name,
-        donor_name: row.donor_name,
-        grant_reference: row.grant_reference || null,
+        donorName: row.donor_name,
+        grantReference: row.grant_reference || null,
         budget: parseFloat(row.budget) || 0,
-        start_date: row.start_date || null,
-        end_date: row.end_date || null,
+        spent: 0,
+        startDate: row.start_date || null,
+        endDate: row.end_date || null,
         status: "active",
-        user_id: user?.id,
+        createdBy: user.id,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
       });
-      if (error) throw error;
     }
-    queryClient.invalidateQueries({ queryKey: ["donors-from-projects"] });
-    queryClient.invalidateQueries({ queryKey: ["projects-for-donors"] });
+    queryClient.invalidateQueries({ queryKey: ["donors-from-projects", companyId] });
+    queryClient.invalidateQueries({ queryKey: ["projects-for-donors", companyId] });
   };
 
   if (isLoading) {

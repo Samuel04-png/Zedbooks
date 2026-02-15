@@ -11,32 +11,32 @@ export default function PublicNavbar() {
       <div className="container mx-auto flex h-16 items-center justify-between px-4">
         <div className="flex items-center gap-8">
           <Link to="/" className="flex items-center gap-2">
-            <Building2 className="h-8 w-8 text-primary" />
+            <img src="/zedbooklogo_transparent.png" alt="ZedBooks Logo" className="h-10 w-auto object-contain" />
             <span className="text-xl font-bold text-primary">ZedBooks</span>
           </Link>
-          
+
           <div className="hidden md:flex items-center gap-6">
-            <Link 
-              to="/" 
+            <Link
+              to="/"
               className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
             >
               Home
             </Link>
-            <Link 
-              to="/#about" 
+            <Link
+              to="/#about"
               className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
             >
               About Us
             </Link>
-            <Link 
-              to="/#pricing" 
+            <Link
+              to="/#pricing"
               className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
             >
               Pricing
             </Link>
           </div>
         </div>
-        
+
         <div className="flex items-center gap-3">
           {!isAuthPage && (
             <Link to="/auth">

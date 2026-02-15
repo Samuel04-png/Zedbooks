@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -13,39 +12,129 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Plus, Search, Eye } from "lucide-react";
+import { Plus, Search } from "lucide-react";
 import { Link } from "react-router-dom";
 import { format } from "date-fns";
+import { useAuth } from "@/contexts/AuthContext";
+import { companyService } from "@/services/firebase";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { collection, documentId, getDocs, query, where } from "firebase/firestore";
+import { firestore } from "@/integrations/firebase/client";
+
+interface InvoiceRecord {
+  id: string;
+  invoiceNumber: string;
+  invoiceDate: string;
+  dueDate: string | null;
+  customerId: string | null;
+  customerName: string;
+  total: number;
+  status: string;
+}
+
+const chunk = <T,>(items: T[], size: number): T[][] => {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+};
+
+const toDateString = (value: unknown): string => {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === "object" && value !== null && "toDate" in value) {
+    const ts = value as { toDate?: () => Date };
+    if (typeof ts.toDate === "function") {
+      return ts.toDate().toISOString();
+    }
+  }
+  return "";
+};
 
 export default function Invoices() {
   const [searchQuery, setSearchQuery] = useState("");
+  const { user } = useAuth();
 
   const { data: invoices, isLoading } = useQuery({
-    queryKey: ["invoices"],
+    queryKey: ["invoices", user?.id],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("invoices")
-        .select(`*, customers (name)`)
-        .order("invoice_date", { ascending: false });
-      if (error) throw error;
-      return data;
+      if (!user) return [] as InvoiceRecord[];
+
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      if (!membership?.companyId) return [] as InvoiceRecord[];
+
+      const invoicesRef = collection(firestore, COLLECTIONS.INVOICES);
+      const invoiceSnapshot = await getDocs(
+        query(invoicesRef, where("companyId", "==", membership.companyId)),
+      );
+
+      const invoicesWithoutCustomer = invoiceSnapshot.docs.map((docSnap) => {
+        const row = docSnap.data() as Record<string, unknown>;
+
+        return {
+          id: docSnap.id,
+          invoiceNumber: String(row.invoiceNumber ?? row.invoice_number ?? ""),
+          invoiceDate: toDateString(row.invoiceDate ?? row.invoice_date),
+          dueDate: toDateString(row.dueDate ?? row.due_date) || null,
+          customerId: (row.customerId ?? row.customer_id ?? null) as string | null,
+          customerName: "-",
+          total: Number(row.total ?? 0),
+          status: String(row.status ?? "draft"),
+        } satisfies InvoiceRecord;
+      });
+
+      const customerIds = Array.from(
+        new Set(invoicesWithoutCustomer.map((invoice) => invoice.customerId).filter(Boolean)),
+      ) as string[];
+
+      const customerMap = new Map<string, string>();
+      if (customerIds.length > 0) {
+        const customersRef = collection(firestore, COLLECTIONS.CUSTOMERS);
+        const customerChunks = chunk(customerIds, 30);
+
+        const customerSnapshots = await Promise.all(
+          customerChunks.map((ids) => getDocs(query(customersRef, where(documentId(), "in", ids)))),
+        );
+
+        customerSnapshots.forEach((snapshot) => {
+          snapshot.docs.forEach((docSnap) => {
+            const row = docSnap.data() as Record<string, unknown>;
+            customerMap.set(docSnap.id, String(row.name ?? "-"));
+          });
+        });
+      }
+
+      return invoicesWithoutCustomer
+        .map((invoice) => ({
+          ...invoice,
+          customerName: (invoice.customerId && customerMap.get(invoice.customerId)) || "-",
+        }))
+        .sort((a, b) => String(b.invoiceDate).localeCompare(String(a.invoiceDate)));
     },
+    enabled: Boolean(user),
   });
 
   const getStatusVariant = (status: string) => {
     switch (status) {
-      case "paid": return "default";
-      case "sent": return "secondary";
-      case "overdue": return "destructive";
-      case "draft": return "outline";
-      default: return "secondary";
+      case "paid":
+        return "default" as const;
+      case "sent":
+        return "secondary" as const;
+      case "overdue":
+        return "destructive" as const;
+      case "draft":
+        return "outline" as const;
+      default:
+        return "secondary" as const;
     }
   };
 
   const filteredInvoices = invoices?.filter(
-    (inv) =>
-      inv.invoice_number.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (inv.customers as any)?.name?.toLowerCase().includes(searchQuery.toLowerCase())
+    (invoice) =>
+      invoice.invoiceNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      invoice.customerName.toLowerCase().includes(searchQuery.toLowerCase()),
   );
 
   if (isLoading) return <div>Loading...</div>;
@@ -95,11 +184,15 @@ export default function Invoices() {
             <TableBody>
               {filteredInvoices?.map((invoice) => (
                 <TableRow key={invoice.id}>
-                  <TableCell className="font-medium">{invoice.invoice_number}</TableCell>
-                  <TableCell>{format(new Date(invoice.invoice_date), "dd MMM yyyy")}</TableCell>
-                  <TableCell>{(invoice.customers as any)?.name || "-"}</TableCell>
-                  <TableCell>{invoice.due_date ? format(new Date(invoice.due_date), "dd MMM yyyy") : "-"}</TableCell>
-                  <TableCell className="text-right font-medium">ZMW {Number(invoice.total).toFixed(2)}</TableCell>
+                  <TableCell className="font-medium">{invoice.invoiceNumber}</TableCell>
+                  <TableCell>
+                    {invoice.invoiceDate ? format(new Date(invoice.invoiceDate), "dd MMM yyyy") : "-"}
+                  </TableCell>
+                  <TableCell>{invoice.customerName || "-"}</TableCell>
+                  <TableCell>
+                    {invoice.dueDate ? format(new Date(invoice.dueDate), "dd MMM yyyy") : "-"}
+                  </TableCell>
+                  <TableCell className="text-right font-medium">ZMW {invoice.total.toFixed(2)}</TableCell>
                   <TableCell>
                     <Badge variant={getStatusVariant(invoice.status || "draft")}>{invoice.status}</Badge>
                   </TableCell>
@@ -107,7 +200,9 @@ export default function Invoices() {
               ))}
               {filteredInvoices?.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center text-muted-foreground">No invoices found</TableCell>
+                  <TableCell colSpan={6} className="text-center text-muted-foreground">
+                    No invoices found
+                  </TableCell>
                 </TableRow>
               )}
             </TableBody>

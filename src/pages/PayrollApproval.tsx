@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, CheckCircle, XCircle, Mail, Loader2 } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
@@ -9,6 +8,20 @@ import { formatZMW } from "@/utils/zambianTaxCalculations";
 import { format } from "date-fns";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
+import { useAuth } from "@/contexts/AuthContext";
+import { payrollService } from "@/services/firebase";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { firestore } from "@/integrations/firebase/client";
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  query,
+  serverTimestamp,
+  updateDoc,
+  where,
+} from "firebase/firestore";
 import {
   Table,
   TableBody,
@@ -29,7 +42,58 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 
+interface PayrollRunRecord {
+  id: string;
+  status: string | null;
+  period_start: string;
+  period_end: string;
+  approved_at: string | null;
+  total_gross: number | null;
+  total_deductions: number | null;
+  total_net: number | null;
+  notes: string | null;
+}
+
+interface PayrollEmployeeSummary {
+  id: string;
+  full_name: string;
+  employee_number: string;
+  position: string | null;
+  department: string | null;
+  email: string | null;
+  bank_account_number: string | null;
+}
+
+interface PayrollItemSummary {
+  id: string;
+  employee_id: string;
+  basic_salary: number;
+  housing_allowance: number;
+  transport_allowance: number;
+  other_allowances: number;
+  gross_salary: number;
+  napsa_employee: number;
+  nhima_employee: number;
+  paye: number;
+  advances_deducted: number | null;
+  total_deductions: number;
+  net_salary: number;
+  employees: PayrollEmployeeSummary | null;
+}
+
+interface PayrollAdditionSummary {
+  id: string;
+  type: string;
+  name: string;
+  amount: number;
+  employees: {
+    full_name: string;
+    employee_number: string;
+  } | null;
+}
+
 export default function PayrollApproval() {
+  const { user } = useAuth();
   const navigate = useNavigate();
   const { id } = useParams();
   const queryClient = useQueryClient();
@@ -38,75 +102,150 @@ export default function PayrollApproval() {
   const { data: payrollRun, isLoading } = useQuery({
     queryKey: ["payrollRun", id],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("payroll_runs")
-        .select("*")
-        .eq("id", id)
-        .single();
+      if (!id) return null;
+      const runSnap = await getDoc(doc(firestore, COLLECTIONS.PAYROLL_RUNS, id));
+      if (!runSnap.exists()) return null;
 
-      if (error) throw error;
-      return data;
+      const row = runSnap.data() as Record<string, unknown>;
+      return {
+        id: runSnap.id,
+        status: (row.status as string | null) ?? (row.payrollStatus as string | null) ?? "draft",
+        period_start: String(row.periodStart ?? row.period_start ?? ""),
+        period_end: String(row.periodEnd ?? row.period_end ?? ""),
+        approved_at: (row.approvedAt as string | null) ?? (row.approved_at as string | null) ?? null,
+        total_gross: Number(row.totalGross ?? row.total_gross ?? 0),
+        total_deductions: Number(row.totalDeductions ?? row.total_deductions ?? 0),
+        total_net: Number(row.totalNet ?? row.total_net ?? 0),
+        notes: (row.notes as string | null) ?? null,
+      } satisfies PayrollRunRecord;
     },
+    enabled: Boolean(user && id),
   });
 
   const { data: payrollItems } = useQuery({
     queryKey: ["payrollItems", id],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("payroll_items")
-        .select(`
-          *,
-          employees (
-            id,
-            full_name,
-            employee_number,
-            position,
-            department,
-            email,
-            bank_account_number
-          )
-        `)
-        .eq("payroll_run_id", id);
+      if (!id) return [] as PayrollItemSummary[];
 
-      if (error) throw error;
-      return data;
+      const itemsRef = collection(firestore, COLLECTIONS.PAYROLL_ITEMS);
+      let itemSnap = await getDocs(query(itemsRef, where("payrollRunId", "==", id)));
+      if (itemSnap.empty) {
+        itemSnap = await getDocs(query(itemsRef, where("payroll_run_id", "==", id)));
+      }
+
+      const rows = itemSnap.docs.map((docSnap) => ({
+        id: docSnap.id,
+        row: docSnap.data() as Record<string, unknown>,
+      }));
+
+      const employeeIds = Array.from(
+        new Set(rows.map(({ row }) => String(row.employeeId ?? row.employee_id ?? "")).filter(Boolean)),
+      );
+
+      const employeeDocs = await Promise.all(
+        employeeIds.map(async (employeeDocId) => {
+          const snap = await getDoc(doc(firestore, COLLECTIONS.EMPLOYEES, employeeDocId));
+          return { employeeDocId, snap };
+        }),
+      );
+
+      const employeeMap = new Map<string, PayrollEmployeeSummary>();
+      employeeDocs.forEach(({ employeeDocId, snap }) => {
+        if (!snap.exists()) return;
+        const row = snap.data() as Record<string, unknown>;
+        employeeMap.set(employeeDocId, {
+          id: snap.id,
+          full_name: String(row.fullName ?? row.full_name ?? ""),
+          employee_number: String(row.employeeNumber ?? row.employee_number ?? ""),
+          position: (row.position as string | null) ?? null,
+          department: (row.department as string | null) ?? null,
+          email: (row.email as string | null) ?? null,
+          bank_account_number: (row.bankAccountNumber as string | null) ?? (row.bank_account_number as string | null) ?? null,
+        });
+      });
+
+      return rows.map(({ id: itemId, row }) => {
+        const employeeId = String(row.employeeId ?? row.employee_id ?? "");
+        return {
+          id: itemId,
+          employee_id: employeeId,
+          basic_salary: Number(row.basicSalary ?? row.basic_salary ?? 0),
+          housing_allowance: Number(row.housingAllowance ?? row.housing_allowance ?? 0),
+          transport_allowance: Number(row.transportAllowance ?? row.transport_allowance ?? 0),
+          other_allowances: Number(row.otherAllowances ?? row.other_allowances ?? 0),
+          gross_salary: Number(row.grossSalary ?? row.gross_salary ?? 0),
+          napsa_employee: Number(row.napsaEmployee ?? row.napsa_employee ?? 0),
+          nhima_employee: Number(row.nhimaEmployee ?? row.nhima_employee ?? 0),
+          paye: Number(row.paye ?? 0),
+          advances_deducted: Number(row.advancesDeducted ?? row.advances_deducted ?? 0),
+          total_deductions: Number(row.totalDeductions ?? row.total_deductions ?? 0),
+          net_salary: Number(row.netSalary ?? row.net_salary ?? 0),
+          employees: employeeMap.get(employeeId) ?? null,
+        } satisfies PayrollItemSummary;
+      });
     },
+    enabled: Boolean(user && id),
   });
 
   const { data: payrollAdditions } = useQuery({
     queryKey: ["payrollAdditions", id],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("payroll_additions")
-        .select(`
-          *,
-          employees (
-            full_name,
-            employee_number
-          )
-        `)
-        .eq("payroll_run_id", id);
+      if (!id) return [] as PayrollAdditionSummary[];
 
-      if (error) throw error;
-      return data;
+      const additionsRef = collection(firestore, COLLECTIONS.PAYROLL_ADDITIONS);
+      let additionsSnap = await getDocs(query(additionsRef, where("payrollRunId", "==", id)));
+      if (additionsSnap.empty) {
+        additionsSnap = await getDocs(query(additionsRef, where("payroll_run_id", "==", id)));
+      }
+
+      const rows = additionsSnap.docs.map((docSnap) => ({
+        id: docSnap.id,
+        row: docSnap.data() as Record<string, unknown>,
+      }));
+
+      const employeeIds = Array.from(
+        new Set(rows.map(({ row }) => String(row.employeeId ?? row.employee_id ?? "")).filter(Boolean)),
+      );
+      const employeeDocs = await Promise.all(
+        employeeIds.map(async (employeeDocId) => {
+          const snap = await getDoc(doc(firestore, COLLECTIONS.EMPLOYEES, employeeDocId));
+          return { employeeDocId, snap };
+        }),
+      );
+
+      const employeeMap = new Map<string, PayrollAdditionSummary["employees"]>();
+      employeeDocs.forEach(({ employeeDocId, snap }) => {
+        if (!snap.exists()) return;
+        const row = snap.data() as Record<string, unknown>;
+        employeeMap.set(employeeDocId, {
+          full_name: String(row.fullName ?? row.full_name ?? ""),
+          employee_number: String(row.employeeNumber ?? row.employee_number ?? ""),
+        });
+      });
+
+      return rows.map(({ id: additionId, row }) => {
+        const employeeId = String(row.employeeId ?? row.employee_id ?? "");
+        return {
+          id: additionId,
+          type: String(row.type ?? ""),
+          name: String(row.name ?? ""),
+          amount: Number(row.amount ?? 0),
+          employees: employeeMap.get(employeeId) ?? null,
+        } satisfies PayrollAdditionSummary;
+      });
     },
+    enabled: Boolean(user && id),
   });
 
   const approveMutation = useMutation({
     mutationFn: async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("Not authenticated");
-
-      const { error } = await supabase
-        .from("payroll_runs")
-        .update({
-          status: "approved",
-          approved_at: new Date().toISOString(),
-          approved_by: user.id,
-        })
-        .eq("id", id);
-
-      if (error) throw error;
+      if (!id || !user) throw new Error("Not authenticated");
+      await updateDoc(doc(firestore, COLLECTIONS.PAYROLL_RUNS, id), {
+        status: "approved",
+        approvedAt: new Date().toISOString(),
+        approvedBy: user.id,
+        updatedAt: serverTimestamp(),
+      });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["payrollRun", id] });
@@ -119,14 +258,11 @@ export default function PayrollApproval() {
 
   const rejectMutation = useMutation({
     mutationFn: async () => {
-      const { error } = await supabase
-        .from("payroll_runs")
-        .update({
-          status: "draft",
-        })
-        .eq("id", id);
-
-      if (error) throw error;
+      if (!id) throw new Error("Payroll run not found");
+      await updateDoc(doc(firestore, COLLECTIONS.PAYROLL_RUNS, id), {
+        status: "draft",
+        updatedAt: serverTimestamp(),
+      });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["payrollRun", id] });
@@ -144,9 +280,7 @@ export default function PayrollApproval() {
       return;
     }
 
-    const employeesWithEmail = payrollItems.filter(
-      (item: any) => item.employees?.email && item.employees?.bank_account_number
-    );
+    const employeesWithEmail = payrollItems.filter((item) => Boolean(item.employees?.email));
 
     if (employeesWithEmail.length === 0) {
       toast.error("No employees have email addresses configured");
@@ -159,30 +293,13 @@ export default function PayrollApproval() {
 
     for (const item of employeesWithEmail) {
       try {
-        const { error } = await supabase.functions.invoke("send-payslip-email", {
-          body: {
-            employeeEmail: item.employees.email,
-            employeeName: item.employees.full_name,
-            payPeriod: `${format(new Date(payrollRun!.period_start), "dd MMM")} - ${format(new Date(payrollRun!.period_end), "dd MMM yyyy")}`,
-            basicSalary: item.basic_salary,
-            housingAllowance: item.housing_allowance,
-            transportAllowance: item.transport_allowance,
-            otherAllowances: item.other_allowances,
-            grossSalary: item.gross_salary,
-            napsaEmployee: item.napsa_employee,
-            nhimaEmployee: item.nhima_employee,
-            paye: item.paye,
-            advancesDeducted: item.advances_deducted,
-            totalDeductions: item.total_deductions,
-            netSalary: item.net_salary,
-            bankAccountNumber: item.employees.bank_account_number,
-          },
+        if (!id) continue;
+        await payrollService.sendPayslipEmail({
+          payrollRunId: id,
+          employeeId: item.employee_id,
         });
-
-        if (error) throw error;
         successCount++;
-      } catch (error) {
-        console.error(`Failed to send email to ${item.employees.email}:`, error);
+      } catch {
         failCount++;
       }
     }
@@ -208,20 +325,13 @@ export default function PayrollApproval() {
   const isApproved = payrollRun.status === "approved" || payrollRun.status === "completed";
 
   // Group additions by type
-  const additionsByType = payrollAdditions?.reduce((acc: any, addition: any) => {
-    const type = addition.type;
-    if (!acc[type]) acc[type] = [];
-    acc[type].push(addition);
-    return acc;
-  }, {}) || {};
-
   const totalAdditions = payrollAdditions?.reduce(
-    (sum: number, a: any) => sum + (a.type !== "advance" ? Number(a.amount) : 0),
+    (sum, addition) => sum + (addition.type !== "advance" ? Number(addition.amount) : 0),
     0
   ) || 0;
 
   const totalAdvances = payrollAdditions?.reduce(
-    (sum: number, a: any) => sum + (a.type === "advance" ? Number(a.amount) : 0),
+    (sum, addition) => sum + (addition.type === "advance" ? Number(addition.amount) : 0),
     0
   ) || 0;
 
@@ -339,7 +449,7 @@ export default function PayrollApproval() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {payrollAdditions.map((addition: any) => (
+                  {payrollAdditions.map((addition) => (
                     <TableRow key={addition.id}>
                       <TableCell>
                         <div>
@@ -390,17 +500,17 @@ export default function PayrollApproval() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {payrollItems?.map((item: any) => (
+                {payrollItems?.map((item) => (
                   <TableRow key={item.id}>
                     <TableCell>
                       <div>
-                        <p className="font-medium">{item.employees.full_name}</p>
+                        <p className="font-medium">{item.employees?.full_name || "Unknown"}</p>
                         <p className="text-sm text-muted-foreground">
-                          {item.employees.employee_number}
+                          {item.employees?.employee_number || "-"}
                         </p>
                       </div>
                     </TableCell>
-                    <TableCell>{item.employees.department || "-"}</TableCell>
+                    <TableCell>{item.employees?.department || "-"}</TableCell>
                     <TableCell className="text-right">
                       {formatZMW(Number(item.gross_salary))}
                     </TableCell>

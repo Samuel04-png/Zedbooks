@@ -24,8 +24,8 @@ export function AppLayout({ children }: AppLayoutProps) {
                 <Menu className="h-5 w-5" />
               </SidebarTrigger>
               <div className="flex items-center gap-2">
-                <div className="h-7 w-7 rounded-lg bg-gradient-to-r from-orange-500 to-orange-600 flex items-center justify-center">
-                  <span className="text-white text-xs font-bold">Z</span>
+                <div className="h-7 w-7 rounded-lg bg-primary flex items-center justify-center text-primary-foreground">
+                  <span className="text-xs font-bold">Z</span>
                 </div>
                 <span className="font-semibold text-foreground">ZedBooks</span>
               </div>

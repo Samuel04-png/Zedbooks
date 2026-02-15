@@ -1,13 +1,47 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ArrowLeft, Upload, Download } from "lucide-react";
 import { toast } from "sonner";
+import { useAuth } from "@/contexts/AuthContext";
+import { companyService } from "@/services/firebase";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { collection, doc, serverTimestamp, writeBatch } from "firebase/firestore";
+import { firestore } from "@/integrations/firebase/client";
+
+interface CsvEmployeeRow {
+  full_name?: string | null;
+  employee_number?: string | null;
+  position?: string | null;
+  department?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  basic_salary?: string | null;
+  housing_allowance?: string | null;
+  transport_allowance?: string | null;
+  other_allowances?: string | null;
+  employment_date?: string | null;
+  employment_status?: string | null;
+  tpin?: string | null;
+  napsa_number?: string | null;
+  nhima_number?: string | null;
+  bank_name?: string | null;
+  bank_branch?: string | null;
+  bank_account_number?: string | null;
+}
+
+const chunk = <T,>(items: T[], size: number): T[][] => {
+  const result: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    result.push(items.slice(index, index + size));
+  }
+  return result;
+};
 
 export default function BulkUploadEmployees() {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [file, setFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
 
@@ -62,6 +96,7 @@ export default function BulkUploadEmployees() {
     a.href = url;
     a.download = "employee_template.csv";
     a.click();
+    window.URL.revokeObjectURL(url);
     toast.success("Template downloaded");
   };
 
@@ -71,15 +106,15 @@ export default function BulkUploadEmployees() {
     }
   };
 
-  const parseCSV = (text: string): any[] => {
-    const lines = text.split("\n").filter(line => line.trim());
-    const headers = lines[0].split(",").map(h => h.trim());
-    
-    return lines.slice(1).map(line => {
-      const values = line.split(",").map(v => v.trim());
-      const obj: any = {};
+  const parseCSV = (text: string): CsvEmployeeRow[] => {
+    const lines = text.split("\n").filter((line) => line.trim());
+    const headers = lines[0].split(",").map((h) => h.trim());
+
+    return lines.slice(1).map((line) => {
+      const values = line.split(",").map((v) => v.trim());
+      const obj: CsvEmployeeRow = {};
       headers.forEach((header, index) => {
-        obj[header] = values[index] || null;
+        obj[header as keyof CsvEmployeeRow] = values[index] || null;
       });
       return obj;
     });
@@ -94,44 +129,55 @@ export default function BulkUploadEmployees() {
     setIsUploading(true);
 
     try {
+      if (!user) throw new Error("Not authenticated");
+
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      if (!membership?.companyId) {
+        throw new Error("No company profile found for your account");
+      }
+
       const text = await file.text();
       const employees = parseCSV(text);
 
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("Not authenticated");
-
-      const employeesToInsert = employees.map(emp => ({
-        user_id: user.id,
-        full_name: emp.full_name,
-        employee_number: emp.employee_number,
+      const employeesToInsert = employees.map((emp) => ({
+        userId: user.id,
+        companyId: membership.companyId,
+        fullName: emp.full_name || "",
+        employeeNumber: emp.employee_number || "",
         position: emp.position || null,
         department: emp.department || null,
         email: emp.email || null,
         phone: emp.phone || null,
-        basic_salary: parseFloat(emp.basic_salary),
-        housing_allowance: emp.housing_allowance ? parseFloat(emp.housing_allowance) : 0,
-        transport_allowance: emp.transport_allowance ? parseFloat(emp.transport_allowance) : 0,
-        other_allowances: emp.other_allowances ? parseFloat(emp.other_allowances) : 0,
-        employment_date: emp.employment_date,
-        employment_status: emp.employment_status || "active",
+        basicSalary: emp.basic_salary ? Number(emp.basic_salary) : 0,
+        housingAllowance: emp.housing_allowance ? Number(emp.housing_allowance) : 0,
+        transportAllowance: emp.transport_allowance ? Number(emp.transport_allowance) : 0,
+        otherAllowances: emp.other_allowances ? Number(emp.other_allowances) : 0,
+        employmentDate: emp.employment_date || null,
+        employmentStatus: emp.employment_status || "active",
         tpin: emp.tpin || null,
-        napsa_number: emp.napsa_number || null,
-        nhima_number: emp.nhima_number || null,
-        bank_name: emp.bank_name || null,
-        bank_branch: emp.bank_branch || null,
-        bank_account_number: emp.bank_account_number || null,
+        napsaNumber: emp.napsa_number || null,
+        nhimaNumber: emp.nhima_number || null,
+        bankName: emp.bank_name || null,
+        bankBranch: emp.bank_branch || null,
+        bankAccountNumber: emp.bank_account_number || null,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
       }));
 
-      const { error } = await supabase
-        .from("employees")
-        .insert(employeesToInsert);
+      const employeesRef = collection(firestore, COLLECTIONS.EMPLOYEES);
+      const batches = chunk(employeesToInsert, 400);
 
-      if (error) throw error;
+      for (const records of batches) {
+        const batch = writeBatch(firestore);
+        records.forEach((employee) => {
+          batch.set(doc(employeesRef), employee);
+        });
+        await batch.commit();
+      }
 
       toast.success(`Successfully uploaded ${employeesToInsert.length} employees`);
       navigate("/employees");
     } catch (error) {
-      console.error(error);
       toast.error("Failed to upload employees. Please check your CSV format.");
     } finally {
       setIsUploading(false);
@@ -157,7 +203,10 @@ export default function BulkUploadEmployees() {
           <ol className="list-decimal list-inside space-y-2 text-muted-foreground">
             <li>Download the CSV template below</li>
             <li>Fill in your employee data following the template format</li>
-            <li>Make sure all required fields are filled (full_name, employee_number, basic_salary, employment_date)</li>
+            <li>
+              Make sure all required fields are filled (full_name, employee_number, basic_salary,
+              employment_date)
+            </li>
             <li>Save your file as CSV format</li>
             <li>Upload your completed CSV file</li>
           </ol>
@@ -173,19 +222,10 @@ export default function BulkUploadEmployees() {
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-medium mb-2">Upload CSV File</label>
-            <Input
-              type="file"
-              accept=".csv"
-              onChange={handleFileChange}
-              disabled={isUploading}
-            />
+            <Input type="file" accept=".csv" onChange={handleFileChange} disabled={isUploading} />
           </div>
 
-          {file && (
-            <div className="text-sm text-muted-foreground">
-              Selected file: {file.name}
-            </div>
-          )}
+          {file && <div className="text-sm text-muted-foreground">Selected file: {file.name}</div>}
         </div>
 
         <div className="flex justify-end gap-4">

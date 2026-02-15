@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -19,7 +18,6 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 import {
   Select,
@@ -45,6 +43,21 @@ import {
 } from "lucide-react";
 import { LoadingState } from "@/components/ui/LoadingState";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { useAuth } from "@/contexts/AuthContext";
+import { companyService } from "@/services/firebase";
+import { firestore } from "@/integrations/firebase/client";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import {
+  addDoc,
+  collection,
+  deleteDoc,
+  doc,
+  getDocs,
+  query,
+  serverTimestamp,
+  updateDoc,
+  where,
+} from "firebase/firestore";
 
 interface Product {
   id: string;
@@ -62,7 +75,7 @@ interface Product {
   is_taxable: boolean;
   tax_rate: number;
   is_active: boolean;
-  created_at: string;
+  created_at: string | null;
 }
 
 interface PriceList {
@@ -93,7 +106,21 @@ const defaultProduct: Partial<Product> = {
   is_active: true,
 };
 
+const tsToIso = (value: unknown): string | null => {
+  if (!value) return null;
+  if (typeof value === "string") return value;
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === "object" && value !== null && "toDate" in value) {
+    const ts = value as { toDate?: () => Date };
+    if (typeof ts.toDate === "function") {
+      return ts.toDate().toISOString();
+    }
+  }
+  return null;
+};
+
 export default function Products() {
+  const { user } = useAuth();
   const [activeTab, setActiveTab] = useState("catalog");
   const [searchTerm, setSearchTerm] = useState("");
   const [typeFilter, setTypeFilter] = useState<string>("all");
@@ -102,81 +129,111 @@ export default function Products() {
   const [editingProduct, setEditingProduct] = useState<Partial<Product> | null>(null);
   const [editingPriceList, setEditingPriceList] = useState<Partial<PriceList> | null>(null);
   const queryClient = useQueryClient();
+  const { data: companyId } = useQuery({
+    queryKey: ["products-company", user?.id],
+    queryFn: async () => {
+      if (!user) return null;
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      return membership?.companyId ?? null;
+    },
+    enabled: Boolean(user),
+  });
 
-  // Fetch products
   const { data: products, isLoading: productsLoading } = useQuery({
-    queryKey: ["products", searchTerm, typeFilter],
+    queryKey: ["products", companyId],
     queryFn: async () => {
-      let query = supabase
-        .from("products_services")
-        .select("*")
-        .order("created_at", { ascending: false });
+      if (!companyId) return [] as Product[];
 
-      if (searchTerm) {
-        query = query.or(`name.ilike.%${searchTerm}%,sku.ilike.%${searchTerm}%`);
-      }
-      if (typeFilter !== "all") {
-        query = query.eq("type", typeFilter);
-      }
+      const snapshot = await getDocs(
+        query(collection(firestore, COLLECTIONS.PRODUCTS), where("companyId", "==", companyId)),
+      );
 
-      const { data, error } = await query;
-      if (error) throw error;
-      return data as Product[];
+      return snapshot.docs.map((docSnap) => {
+        const row = docSnap.data() as Record<string, unknown>;
+
+        return {
+          id: docSnap.id,
+          name: String(row.name ?? ""),
+          sku: (row.sku as string | null) ?? null,
+          description: (row.description as string | null) ?? null,
+          type: (row.type as "product" | "service") ?? "product",
+          category: (row.category as string | null) ?? null,
+          unit_of_measure: (row.unitOfMeasure as string | null) ?? (row.unit_of_measure as string | null) ?? null,
+          selling_price: Number(row.sellingPrice ?? row.selling_price ?? 0),
+          cost_price: Number(row.costPrice ?? row.cost_price ?? 0),
+          track_inventory: Boolean(row.trackInventory ?? row.track_inventory),
+          quantity_on_hand: Number(row.quantityOnHand ?? row.quantity_on_hand ?? 0),
+          reorder_point: Number(row.reorderPoint ?? row.reorder_point ?? 0),
+          is_taxable: Boolean(row.isTaxable ?? row.is_taxable),
+          tax_rate: Number(row.taxRate ?? row.tax_rate ?? 16),
+          is_active: row.isActive === undefined && row.is_active === undefined
+            ? true
+            : Boolean(row.isActive ?? row.is_active),
+          created_at: tsToIso(row.createdAt ?? row.created_at),
+        } satisfies Product;
+      });
     },
+    enabled: Boolean(companyId),
   });
 
-  // Fetch price lists
   const { data: priceLists, isLoading: priceListsLoading } = useQuery({
-    queryKey: ["priceLists"],
+    queryKey: ["priceLists", companyId],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("price_lists")
-        .select("*")
-        .order("created_at", { ascending: false });
-      if (error) throw error;
-      return data as PriceList[];
+      if (!companyId) return [] as PriceList[];
+
+      const snapshot = await getDocs(
+        query(collection(firestore, COLLECTIONS.PRICE_LISTS), where("companyId", "==", companyId)),
+      );
+
+      return snapshot.docs.map((docSnap) => {
+        const row = docSnap.data() as Record<string, unknown>;
+        return {
+          id: docSnap.id,
+          name: String(row.name ?? ""),
+          description: (row.description as string | null) ?? null,
+          currency: String(row.currency ?? "ZMW"),
+          is_default: Boolean(row.isDefault ?? row.is_default),
+          is_active: row.isActive === undefined && row.is_active === undefined
+            ? true
+            : Boolean(row.isActive ?? row.is_active),
+          valid_from: tsToIso(row.validFrom ?? row.valid_from),
+          valid_to: tsToIso(row.validTo ?? row.valid_to),
+        } satisfies PriceList;
+      });
     },
+    enabled: Boolean(companyId),
   });
 
-  // Save product mutation
   const saveProductMutation = useMutation({
     mutationFn: async (product: Partial<Product>) => {
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("company_id")
-        .single();
-
-      if (!profile?.company_id) throw new Error("No company found");
+      if (!companyId) throw new Error("No company found");
 
       const productData = {
+        companyId,
         name: product.name || "",
-        sku: product.sku,
-        description: product.description,
+        sku: product.sku || null,
+        description: product.description || null,
         type: product.type || "product",
-        category: product.category,
-        unit_of_measure: product.unit_of_measure,
-        selling_price: product.selling_price,
-        cost_price: product.cost_price,
-        track_inventory: product.track_inventory,
-        quantity_on_hand: product.quantity_on_hand,
-        reorder_point: product.reorder_point,
-        is_taxable: product.is_taxable,
-        tax_rate: product.tax_rate,
-        is_active: product.is_active,
-        company_id: profile.company_id,
+        category: product.category || null,
+        unitOfMeasure: product.unit_of_measure || "Unit",
+        sellingPrice: Number(product.selling_price || 0),
+        costPrice: Number(product.cost_price || 0),
+        trackInventory: Boolean(product.track_inventory),
+        quantityOnHand: Number(product.quantity_on_hand || 0),
+        reorderPoint: Number(product.reorder_point || 0),
+        isTaxable: Boolean(product.is_taxable),
+        taxRate: Number(product.tax_rate || 16),
+        isActive: product.is_active === undefined ? true : Boolean(product.is_active),
+        updatedAt: serverTimestamp(),
       };
 
       if (product.id) {
-        const { error } = await supabase
-          .from("products_services")
-          .update(productData)
-          .eq("id", product.id);
-        if (error) throw error;
+        await updateDoc(doc(firestore, COLLECTIONS.PRODUCTS, product.id), productData);
       } else {
-        const { error } = await supabase
-          .from("products_services")
-          .insert(productData);
-        if (error) throw error;
+        await addDoc(collection(firestore, COLLECTIONS.PRODUCTS), {
+          ...productData,
+          createdAt: serverTimestamp(),
+        });
       }
     },
     onSuccess: () => {
@@ -185,61 +242,47 @@ export default function Products() {
       setEditingProduct(null);
       toast.success(editingProduct?.id ? "Product updated" : "Product created");
     },
-    onError: (error) => {
+    onError: (error: Error) => {
       toast.error("Failed to save product: " + error.message);
     },
   });
 
-  // Delete product mutation
   const deleteProductMutation = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase
-        .from("products_services")
-        .delete()
-        .eq("id", id);
-      if (error) throw error;
+      await deleteDoc(doc(firestore, COLLECTIONS.PRODUCTS, id));
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["products"] });
       toast.success("Product deleted");
     },
-    onError: (error) => {
+    onError: (error: Error) => {
       toast.error("Failed to delete product: " + error.message);
     },
   });
 
-  // Save price list mutation
   const savePriceListMutation = useMutation({
     mutationFn: async (priceList: Partial<PriceList>) => {
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("company_id")
-        .single();
-
-      if (!profile?.company_id) throw new Error("No company found");
+      if (!companyId) throw new Error("No company found");
 
       const priceListData = {
+        companyId,
         name: priceList.name || "",
-        description: priceList.description,
-        currency: priceList.currency,
-        is_default: priceList.is_default,
-        is_active: priceList.is_active,
-        valid_from: priceList.valid_from,
-        valid_to: priceList.valid_to,
-        company_id: profile.company_id,
+        description: priceList.description || null,
+        currency: priceList.currency || "ZMW",
+        isDefault: Boolean(priceList.is_default),
+        isActive: priceList.is_active === undefined ? true : Boolean(priceList.is_active),
+        validFrom: priceList.valid_from || null,
+        validTo: priceList.valid_to || null,
+        updatedAt: serverTimestamp(),
       };
 
       if (priceList.id) {
-        const { error } = await supabase
-          .from("price_lists")
-          .update(priceListData)
-          .eq("id", priceList.id);
-        if (error) throw error;
+        await updateDoc(doc(firestore, COLLECTIONS.PRICE_LISTS, priceList.id), priceListData);
       } else {
-        const { error } = await supabase
-          .from("price_lists")
-          .insert(priceListData);
-        if (error) throw error;
+        await addDoc(collection(firestore, COLLECTIONS.PRICE_LISTS), {
+          ...priceListData,
+          createdAt: serverTimestamp(),
+        });
       }
     },
     onSuccess: () => {
@@ -248,25 +291,20 @@ export default function Products() {
       setEditingPriceList(null);
       toast.success(editingPriceList?.id ? "Price list updated" : "Price list created");
     },
-    onError: (error) => {
+    onError: (error: Error) => {
       toast.error("Failed to save price list: " + error.message);
     },
   });
 
-  // Delete price list mutation
   const deletePriceListMutation = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase
-        .from("price_lists")
-        .delete()
-        .eq("id", id);
-      if (error) throw error;
+      await deleteDoc(doc(firestore, COLLECTIONS.PRICE_LISTS, id));
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["priceLists"] });
       toast.success("Price list deleted");
     },
-    onError: (error) => {
+    onError: (error: Error) => {
       toast.error("Failed to delete price list: " + error.message);
     },
   });
@@ -302,6 +340,12 @@ export default function Products() {
   const lowStockItems = products?.filter(
     (p) => p.track_inventory && p.quantity_on_hand <= p.reorder_point
   ).length || 0;
+  const filteredProducts = (products || []).filter((product) => {
+    const text = `${product.name} ${product.sku || ""}`.toLowerCase();
+    const matchesSearch = !searchTerm || text.includes(searchTerm.toLowerCase());
+    const matchesType = typeFilter === "all" || product.type === typeFilter;
+    return matchesSearch && matchesType;
+  });
 
   return (
     <div className="space-y-6">
@@ -393,7 +437,7 @@ export default function Products() {
 
           {productsLoading ? (
             <LoadingState message="Loading products..." />
-          ) : !products?.length ? (
+          ) : !filteredProducts.length ? (
             <EmptyState
               icon={<Package className="h-8 w-8 text-muted-foreground" />}
               title="No products or services"
@@ -418,7 +462,7 @@ export default function Products() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {products.map((product) => (
+                  {filteredProducts.map((product) => (
                     <TableRow key={product.id}>
                       <TableCell className="font-medium">{product.name}</TableCell>
                       <TableCell>{product.sku || "-"}</TableCell>

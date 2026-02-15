@@ -1,6 +1,10 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/contexts/AuthContext";
+import { companyService } from "@/services/firebase";
+import { firestore } from "@/integrations/firebase/client";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { addDoc, collection, doc, getDocs, query, serverTimestamp, updateDoc, where, writeBatch } from "firebase/firestore";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -26,6 +30,7 @@ interface InventoryItem {
 }
 
 const Inventory = () => {
+  const { user } = useAuth();
   const queryClient = useQueryClient();
   const [searchTerm, setSearchTerm] = useState("");
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
@@ -49,37 +54,67 @@ const Inventory = () => {
     notes: "",
   });
 
-  const { data: user } = useQuery({
-    queryKey: ["user"],
+  const { data: companyId } = useQuery({
+    queryKey: ["inventory-company-id", user?.id],
     queryFn: async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      return user;
+      if (!user) return null;
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      return membership?.companyId ?? null;
     },
+    enabled: Boolean(user),
   });
 
   const { data: inventoryItems = [], isLoading } = useQuery({
-    queryKey: ["inventory-items"],
+    queryKey: ["inventory-items", companyId],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("inventory_items")
-        .select("*")
-        .order("name");
-      if (error) throw error;
-      return data as InventoryItem[];
+      if (!companyId) return [] as InventoryItem[];
+
+      const ref = collection(firestore, COLLECTIONS.INVENTORY_ITEMS);
+      const snapshot = await getDocs(query(ref, where("companyId", "==", companyId)));
+
+      return snapshot.docs
+        .map((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          return {
+            id: docSnap.id,
+            name: String(row.name ?? ""),
+            sku: (row.sku ?? null) as string | null,
+            category: (row.category ?? null) as string | null,
+            description: (row.description ?? null) as string | null,
+            unit_of_measure: (row.unitOfMeasure ?? row.unit_of_measure ?? "units") as string | null,
+            quantity_on_hand: Number(row.quantityOnHand ?? row.quantity_on_hand ?? 0),
+            reorder_point: Number(row.reorderPoint ?? row.reorder_point ?? 0),
+            unit_cost: Number(row.unitCost ?? row.unit_cost ?? 0),
+            selling_price: Number(row.sellingPrice ?? row.selling_price ?? 0),
+          } satisfies InventoryItem;
+        })
+        .sort((a, b) => a.name.localeCompare(b.name));
     },
-    enabled: !!user,
+    enabled: Boolean(companyId),
   });
 
   const addItemMutation = useMutation({
     mutationFn: async (item: typeof newItem) => {
-      const { error } = await supabase.from("inventory_items").insert({
-        ...item,
-        user_id: user?.id,
+      if (!companyId || !user) throw new Error("No active company context");
+
+      await addDoc(collection(firestore, COLLECTIONS.INVENTORY_ITEMS), {
+        companyId,
+        name: item.name,
+        sku: item.sku || null,
+        category: item.category || null,
+        description: item.description || null,
+        unitOfMeasure: item.unit_of_measure || "units",
+        quantityOnHand: item.quantity_on_hand,
+        reorderPoint: item.reorder_point,
+        unitCost: item.unit_cost,
+        sellingPrice: item.selling_price,
+        createdBy: user.id,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
       });
-      if (error) throw error;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["inventory-items"] });
+      queryClient.invalidateQueries({ queryKey: ["inventory-items", companyId] });
       toast.success("Item added successfully");
       setIsAddDialogOpen(false);
       setNewItem({
@@ -101,6 +136,8 @@ const Inventory = () => {
 
   const stockMovementMutation = useMutation({
     mutationFn: async ({ itemId, movementData }: { itemId: string; movementData: { movement_type: string; quantity: number; reference_number: string; notes: string } }) => {
+      if (!companyId || !user) throw new Error("No active company context");
+
       const item = inventoryItems.find(i => i.id === itemId);
       if (!item) throw new Error("Item not found");
 
@@ -113,24 +150,30 @@ const Inventory = () => {
         newQuantity = movementData.quantity;
       }
 
-      const { error: movementError } = await supabase.from("stock_movements").insert({
-        inventory_item_id: itemId,
-        user_id: user?.id,
-        movement_type: movementData.movement_type,
-        quantity: movementData.quantity,
-        reference_number: movementData.reference_number || null,
-        notes: movementData.notes || null,
-      });
-      if (movementError) throw movementError;
+      const batch = writeBatch(firestore);
+      const movementRef = doc(collection(firestore, COLLECTIONS.STOCK_MOVEMENTS));
+      const itemRef = doc(firestore, COLLECTIONS.INVENTORY_ITEMS, itemId);
 
-      const { error: updateError } = await supabase
-        .from("inventory_items")
-        .update({ quantity_on_hand: newQuantity })
-        .eq("id", itemId);
-      if (updateError) throw updateError;
+      batch.set(movementRef, {
+        companyId,
+        inventoryItemId: itemId,
+        movementType: movementData.movement_type,
+        quantity: movementData.quantity,
+        referenceNumber: movementData.reference_number || null,
+        notes: movementData.notes || null,
+        createdBy: user.id,
+        createdAt: serverTimestamp(),
+      });
+
+      batch.update(itemRef, {
+        quantityOnHand: newQuantity,
+        updatedAt: serverTimestamp(),
+      });
+
+      await batch.commit();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["inventory-items"] });
+      queryClient.invalidateQueries({ queryKey: ["inventory-items", companyId] });
       toast.success("Stock movement recorded");
       setIsMovementDialogOpen(false);
       setSelectedItem(null);

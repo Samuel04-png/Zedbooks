@@ -1,6 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
+import { collection, getDocs, limit, query, where } from "firebase/firestore";
+import { firestore, isFirebaseConfigured } from "@/integrations/firebase/client";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
 
 export type AppRole = 
   | "admin"
@@ -23,32 +25,85 @@ export interface UserRole {
   user_id: string;
 }
 
+const rolePriority: AppRole[] = [
+  "super_admin",
+  "admin",
+  "financial_manager",
+  "accountant",
+  "bookkeeper",
+  "assistant_accountant",
+  "finance_officer",
+  "hr_manager",
+  "project_manager",
+  "inventory_manager",
+  "cashier",
+  "auditor",
+  "staff",
+  "read_only",
+];
+
+const resolveHighestRole = (roles: AppRole[]): AppRole => {
+  if (!roles.length) return "read_only";
+
+  for (const candidate of rolePriority) {
+    if (roles.includes(candidate)) {
+      return candidate;
+    }
+  }
+
+  return "read_only";
+};
+
 export function useUserRole() {
   const { user, isAuthenticated } = useAuth();
   
   return useQuery({
     queryKey: ["user-role", user?.id],
     queryFn: async () => {
-      if (!user) return "read_only" as AppRole;
+      if (!user || !isFirebaseConfigured) return "read_only" as AppRole;
 
-      const { data, error } = await supabase
-        .from("user_roles")
-        .select("role")
-        .eq("user_id", user.id)
-        .maybeSingle();
+      try {
+        const roles = new Set<AppRole>();
 
-      if (error) {
-        console.error("Error fetching user role:", error);
-        // Default to super_admin if no role found (for first user)
-        return "super_admin" as AppRole;
+        const companyUsersRef = collection(firestore, COLLECTIONS.COMPANY_USERS);
+        const membershipQueries = [
+          query(companyUsersRef, where("userId", "==", user.id), where("status", "==", "active"), limit(20)),
+          query(companyUsersRef, where("user_id", "==", user.id), where("status", "==", "active"), limit(20)),
+          query(companyUsersRef, where("userId", "==", user.id), limit(20)),
+          query(companyUsersRef, where("user_id", "==", user.id), limit(20)),
+        ];
+
+        for (const membershipQuery of membershipQueries) {
+          const membershipSnapshot = await getDocs(membershipQuery);
+          membershipSnapshot.docs.forEach((docSnap) => {
+            const role = docSnap.data().role as AppRole | undefined;
+            if (role) roles.add(role);
+          });
+          if (roles.size) break;
+        }
+
+        if (!roles.size) {
+          const userRolesRef = collection(firestore, COLLECTIONS.USER_ROLES);
+          const roleQueries = [
+            query(userRolesRef, where("userId", "==", user.id), limit(20)),
+            query(userRolesRef, where("user_id", "==", user.id), limit(20)),
+          ];
+
+          for (const roleQuery of roleQueries) {
+            const roleSnapshot = await getDocs(roleQuery);
+            roleSnapshot.docs.forEach((docSnap) => {
+              const role = docSnap.data().role as AppRole | undefined;
+              if (role) roles.add(role);
+            });
+            if (roles.size) break;
+          }
+        }
+
+        if (!roles.size) return "read_only" as AppRole;
+        return resolveHighestRole(Array.from(roles));
+      } catch (error) {
+        return "read_only" as AppRole;
       }
-
-      // If no role record exists, default to super_admin
-      if (!data) {
-        return "super_admin" as AppRole;
-      }
-
-      return data.role as AppRole;
     },
     enabled: isAuthenticated && !!user,
     staleTime: 1000 * 60 * 5, // Cache for 5 minutes
@@ -78,6 +133,7 @@ export const rolePermissions: Record<AppRole, string[]> = {
     "dashboard", "invoices", "customers", "estimates", "sales-orders",
     "vendors", "bills", "purchase-orders", "expenses", "bank-accounts",
     "reconciliation", "reports", "settings", "chart-of-accounts", "journal-entries",
+    "accounts-payable", "accounts-receivable",
     "payroll", "payroll-reports", "employees", "fixed-assets", "asset-depreciation",
     "financial-periods", "zra-compliance", "tax-calculator"
   ],
@@ -85,20 +141,23 @@ export const rolePermissions: Record<AppRole, string[]> = {
     "dashboard", "invoices", "customers", "estimates", "sales-orders",
     "vendors", "bills", "purchase-orders", "expenses", "bank-accounts",
     "reconciliation", "reports", "settings", "chart-of-accounts", "journal-entries",
+    "accounts-payable", "accounts-receivable",
     "fixed-assets", "asset-depreciation", "financial-periods", "tax-calculator"
   ],
   assistant_accountant: [
     "dashboard", "invoices", "customers", "estimates", "sales-orders",
-    "vendors", "bills", "purchase-orders", "expenses", "chart-of-accounts"
+    "vendors", "bills", "purchase-orders", "expenses", "chart-of-accounts",
+    "accounts-payable", "accounts-receivable"
   ],
   finance_officer: [
     "dashboard", "invoices", "expenses", "bills", "bank-accounts",
-    "reconciliation", "reports", "chart-of-accounts", "journal-entries"
+    "reconciliation", "reports", "chart-of-accounts", "journal-entries",
+    "accounts-payable", "accounts-receivable"
   ],
   bookkeeper: [
     "dashboard", "invoices", "customers", "estimates", "sales-orders",
     "vendors", "bills", "purchase-orders", "expenses", "chart-of-accounts",
-    "reconciliation"
+    "reconciliation", "accounts-payable", "accounts-receivable"
   ],
   cashier: [
     "dashboard", "bank-accounts", "expenses", "reconciliation"

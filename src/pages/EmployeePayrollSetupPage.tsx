@@ -1,27 +1,42 @@
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft } from "lucide-react";
 import { EmployeePayrollSetup } from "@/components/payroll/EmployeePayrollSetup";
 import { LoadingState } from "@/components/ui/LoadingState";
+import { useAuth } from "@/contexts/AuthContext";
+import { companyService } from "@/services/firebase";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { doc, getDoc } from "firebase/firestore";
+import { firestore } from "@/integrations/firebase/client";
 
 export default function EmployeePayrollSetupPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const { user } = useAuth();
 
   const { data: employee, isLoading } = useQuery({
-    queryKey: ["employee", id],
+    queryKey: ["employee", id, user?.id],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("employees")
-        .select("*")
-        .eq("id", id)
-        .single();
-      if (error) throw error;
-      return data;
+      if (!id || !user) return null;
+
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      if (!membership?.companyId) return null;
+
+      const employeeRef = doc(firestore, COLLECTIONS.EMPLOYEES, id);
+      const employeeSnap = await getDoc(employeeRef);
+      if (!employeeSnap.exists()) return null;
+
+      const data = employeeSnap.data() as Record<string, unknown>;
+      const companyId = (data.companyId ?? data.company_id) as string | undefined;
+      if (companyId && companyId !== membership.companyId) return null;
+
+      return {
+        id: employeeSnap.id,
+        ...data,
+      } as Record<string, unknown>;
     },
-    enabled: !!id,
+    enabled: Boolean(id && user),
   });
 
   if (isLoading) {
@@ -49,10 +64,10 @@ export default function EmployeePayrollSetupPage() {
       </div>
 
       <EmployeePayrollSetup
-        employeeId={employee.id}
-        employeeName={employee.full_name}
-        contractType={employee.contract_type || undefined}
-        basicSalary={Number(employee.basic_salary)}
+        employeeId={String(employee.id)}
+        employeeName={String(employee.fullName ?? employee.full_name ?? "Employee")}
+        contractType={String(employee.contractType ?? employee.contract_type ?? "") || undefined}
+        basicSalary={Number(employee.basicSalary ?? employee.basic_salary ?? 0)}
         onClose={() => navigate("/employees")}
       />
     </div>

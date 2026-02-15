@@ -3,7 +3,6 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { useNavigate } from "react-router-dom";
-import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Form } from "@/components/ui/form";
 import { toast } from "sonner";
@@ -16,6 +15,11 @@ import { Label } from "@/components/ui/label";
 import { EmployeePersonalTab } from "@/components/payroll/EmployeePersonalTab";
 import { EmployeeEngagementTab } from "@/components/payroll/EmployeeEngagementTab";
 import { EmployeePayTab } from "@/components/payroll/EmployeePayTab";
+import { useAuth } from "@/contexts/AuthContext";
+import { authService, companyService } from "@/services/firebase";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { addDoc, collection, doc, serverTimestamp, setDoc } from "firebase/firestore";
+import { firestore } from "@/integrations/firebase/client";
 
 const employeeSchema = z.object({
   // Personal Details
@@ -69,6 +73,7 @@ type EmployeeFormData = z.infer<typeof employeeSchema>;
 export default function NewEmployee() {
   const navigate = useNavigate();
   const { data: companySettings } = useCompanySettings();
+  const { user } = useAuth();
   const [activeTab, setActiveTab] = React.useState("personal");
   const [isSubmitting, setIsSubmitting] = React.useState(false);
 
@@ -84,122 +89,102 @@ export default function NewEmployee() {
     },
   });
 
-  const generateTemporaryPassword = () => {
-    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
-    let password = "";
-    for (let i = 0; i < 12; i++) {
-      password += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return password;
-  };
-
   const onSubmit = async (data: EmployeeFormData) => {
     setIsSubmitting(true);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
         toast.error("You must be logged in");
         return;
       }
 
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("company_id")
-        .eq("id", user.id)
-        .single();
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      if (!membership?.companyId) {
+        toast.error("No company profile found for your account");
+        return;
+      }
 
-      const { data: employee, error } = await supabase.from("employees").insert([{
+      const employeeRef = await addDoc(collection(firestore, COLLECTIONS.EMPLOYEES), {
         // Personal
-        employee_number: data.employee_number,
-        nrc_number: data.nrc_number || null,
+        employeeNumber: data.employee_number,
+        nrcNumber: data.nrc_number || null,
         tpin: data.tpin || null,
-        napsa_number: data.napsa_number || null,
-        nhima_number: data.nhima_number || null,
-        full_name: data.full_name,
-        date_of_birth: data.date_of_birth || null,
+        napsaNumber: data.napsa_number || null,
+        nhimaNumber: data.nhima_number || null,
+        fullName: data.full_name,
+        dateOfBirth: data.date_of_birth || null,
         gender: data.gender || null,
         nationality: data.nationality || null,
-        marital_status: data.marital_status || null,
+        maritalStatus: data.marital_status || null,
         phone: data.phone || null,
         address: data.address || null,
         email: data.email || null,
         department: data.department || null,
         division: data.division || null,
         position: data.position || null,
-        job_grade: data.job_grade || null,
-        cost_centre: data.cost_centre || null,
+        jobGrade: data.job_grade || null,
+        costCentre: data.cost_centre || null,
         
         // Engagement
-        contract_type: data.contract_type || null,
-        employment_status: data.employment_status || 'active',
-        employment_date: data.employment_date,
-        contract_end_date: data.contract_end_date || null,
-        has_gratuity: data.has_gratuity || false,
-        gratuity_rate: data.gratuity_rate ? Number(data.gratuity_rate) : 0,
-        bank_name: data.bank_name || null,
-        bank_branch: data.bank_branch || null,
-        bank_account_number: data.bank_account_number || null,
+        contractType: data.contract_type || null,
+        employmentStatus: data.employment_status || "active",
+        employmentDate: data.employment_date,
+        contractEndDate: data.contract_end_date || null,
+        hasGratuity: data.has_gratuity || false,
+        gratuityRate: data.gratuity_rate ? Number(data.gratuity_rate) : 0,
+        bankName: data.bank_name || null,
+        bankBranch: data.bank_branch || null,
+        bankAccountNumber: data.bank_account_number || null,
         
         // Pay
-        basic_salary: Number(data.basic_salary),
-        housing_allowance: data.housing_allowance ? Number(data.housing_allowance) : 0,
-        transport_allowance: data.transport_allowance ? Number(data.transport_allowance) : 0,
-        other_allowances: data.other_allowances ? Number(data.other_allowances) : 0,
+        basicSalary: Number(data.basic_salary),
+        housingAllowance: data.housing_allowance ? Number(data.housing_allowance) : 0,
+        transportAllowance: data.transport_allowance ? Number(data.transport_allowance) : 0,
+        otherAllowances: data.other_allowances ? Number(data.other_allowances) : 0,
         
-        user_id: user.id,
-        company_id: profile?.company_id,
-      }]).select().single();
-
-      if (error) {
-        toast.error("Failed to create employee");
-        console.error(error);
-        return;
-      }
+        userId: user.id,
+        companyId: membership.companyId,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
 
       // Create payroll profile with default settings
       const isConsultant = data.contract_type === "consultant";
-      await supabase.from("employee_payroll_profiles").insert({
-        employee_id: employee.id,
-        company_id: profile?.company_id,
-        rate_type: data.rate_type,
-        pay_rate: data.pay_rate ? Number(data.pay_rate) : null,
-        overtime_rate_multiplier: data.overtime_rate_multiplier ? Number(data.overtime_rate_multiplier) : 1.5,
+      await setDoc(doc(firestore, COLLECTIONS.EMPLOYEE_PAYROLL_PROFILES, `${membership.companyId}_${employeeRef.id}`), {
+        employeeId: employeeRef.id,
+        companyId: membership.companyId,
+        rateType: data.rate_type,
+        payRate: data.pay_rate ? Number(data.pay_rate) : null,
+        overtimeRateMultiplier: data.overtime_rate_multiplier ? Number(data.overtime_rate_multiplier) : 1.5,
         currency: data.currency,
-        apply_paye: !isConsultant,
-        apply_napsa: !isConsultant,
-        apply_nhima: !isConsultant,
-        is_consultant: isConsultant,
-        apply_wht: isConsultant,
-        consultant_type: isConsultant ? "local" : null,
+        applyPaye: !isConsultant,
+        applyNapsa: !isConsultant,
+        applyNhima: !isConsultant,
+        isConsultant: isConsultant,
+        applyWht: isConsultant,
+        consultantType: isConsultant ? "local" : null,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
       });
 
       // Send invite email if option is checked and email is provided
       if (data.send_invite && data.email) {
-        const tempPassword = generateTemporaryPassword();
         try {
-          const { error: inviteError } = await supabase.functions.invoke("send-employee-invite", {
-            body: {
-              employeeName: data.full_name,
-              employeeEmail: data.email,
-              companyName: companySettings?.company_name || "ZedBooks",
-              temporaryPassword: tempPassword,
-              loginUrl: `${window.location.origin}/auth`,
-            },
+          await authService.sendInvitation({
+            inviteeName: data.full_name,
+            email: data.email,
+            role: "staff",
+            loginUrl: `${window.location.origin}/auth`,
           });
-
-          if (inviteError) {
-            toast.warning("Employee created but invite email failed to send");
-          }
         } catch (err) {
-          toast.warning("Employee created but invite email failed to send");
+          const companyName = companySettings?.companyName || "ZedBooks";
+          toast.warning(`Employee created, but invite setup failed for ${companyName}`);
         }
       }
 
       toast.success("Employee created successfully");
       // Navigate to payroll setup for this employee
-      navigate(`/employees/${employee.id}/payroll-setup`);
+      navigate(`/employees/${employeeRef.id}/payroll-setup`);
     } catch (error) {
-      console.error(error);
       toast.error("Failed to create employee");
     } finally {
       setIsSubmitting(false);

@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -17,6 +16,11 @@ import { Plus, Trash2, Save, Send, FileText } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { useCompanySettings } from "@/hooks/useCompanySettings";
+import { useAuth } from "@/contexts/AuthContext";
+import { companyService } from "@/services/firebase";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { addDoc, collection, getDocs, query, serverTimestamp, where } from "firebase/firestore";
+import { firestore } from "@/integrations/firebase/client";
 
 interface QuoteLine {
   id: string;
@@ -26,45 +30,61 @@ interface QuoteLine {
   amount: number;
 }
 
+interface CustomerRecord {
+  id: string;
+  name: string;
+  email?: string;
+  address?: string;
+}
+
 export default function NewQuotation() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const customerId = searchParams.get("customer");
+  const { user } = useAuth();
   const { data: settings } = useCompanySettings();
-  
+
   const [selectedCustomer, setSelectedCustomer] = useState(customerId || "");
   const [quoteNumber, setQuoteNumber] = useState(`QT-${Date.now()}`);
   const [quoteDate, setQuoteDate] = useState(new Date().toISOString().split("T")[0]);
   const [validUntil, setValidUntil] = useState("");
   const [notes, setNotes] = useState("");
   const [terms, setTerms] = useState("This quotation is valid for 30 days from the date of issue.");
-  
+
   const [lines, setLines] = useState<QuoteLine[]>([
     { id: "1", description: "", quantity: 1, rate: 0, amount: 0 },
   ]);
 
   const { data: customers } = useQuery({
-    queryKey: ["customers"],
+    queryKey: ["customers", user?.id],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("customers")
-        .select("id, name, email, address")
-        .order("name");
-      if (error) throw error;
-      return data;
+      if (!user) return [] as CustomerRecord[];
+
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      if (!membership?.companyId) return [] as CustomerRecord[];
+
+      const customersRef = collection(firestore, COLLECTIONS.CUSTOMERS);
+      const snapshot = await getDocs(
+        query(customersRef, where("companyId", "==", membership.companyId)),
+      );
+
+      return snapshot.docs
+        .map((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          return {
+            id: docSnap.id,
+            name: String(row.name ?? ""),
+            email: row.email ? String(row.email) : undefined,
+            address: row.address ? String(row.address) : undefined,
+          } satisfies CustomerRecord;
+        })
+        .sort((a, b) => a.name.localeCompare(b.name));
     },
+    enabled: Boolean(user),
   });
 
-  const { data: user } = useQuery({
-    queryKey: ["current-user"],
-    queryFn: async () => {
-      const { data } = await supabase.auth.getUser();
-      return data.user;
-    },
-  });
-
-  const isVatRegistered = settings?.is_vat_registered || false;
-  const vatRate = settings?.vat_rate || 16;
+  const isVatRegistered = settings?.isVatRegistered || false;
+  const vatRate = settings?.vatRate || 16;
 
   const addLine = () => {
     setLines([
@@ -90,7 +110,7 @@ export default function NewQuotation() {
           return updated;
         }
         return line;
-      })
+      }),
     );
   };
 
@@ -98,36 +118,42 @@ export default function NewQuotation() {
   const vatAmount = isVatRegistered ? subtotal * (vatRate / 100) : 0;
   const total = subtotal + vatAmount;
 
-  const selectedCustomerData = customers?.find(c => c.id === selectedCustomer);
+  const selectedCustomerData = customers?.find((c) => c.id === selectedCustomer);
 
   const saveMutation = useMutation({
     mutationFn: async (status: string) => {
-      const { data: order, error: orderError } = await supabase
-        .from("sales_orders")
-        .insert({
-          user_id: user?.id,
-          customer_id: selectedCustomer || null,
-          order_number: quoteNumber,
-          order_date: quoteDate,
-          order_type: "quote",
-          subtotal,
-          vat_amount: vatAmount,
-          total,
-          status,
-          notes: `${notes}\n\nTerms: ${terms}\nValid Until: ${validUntil}`,
-        })
-        .select()
-        .single();
+      if (!user) throw new Error("You must be logged in");
 
-      if (orderError) throw orderError;
-      return order;
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      if (!membership?.companyId) {
+        throw new Error("No company profile found for your account");
+      }
+
+      await addDoc(collection(firestore, COLLECTIONS.SALES_ORDERS), {
+        companyId: membership.companyId,
+        userId: user.id,
+        customerId: selectedCustomer || null,
+        orderNumber: quoteNumber,
+        orderDate: quoteDate,
+        orderType: "quote",
+        subtotal,
+        vatAmount,
+        total,
+        status,
+        notes,
+        terms,
+        validUntil: validUntil || null,
+        lineItems: lines,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
     },
     onSuccess: (_, status) => {
       toast.success(status === "sent" ? "Quotation sent successfully" : "Quotation saved as draft");
       navigate("/sales-orders");
     },
     onError: (error) => {
-      toast.error("Failed to save quotation: " + error.message);
+      toast.error("Failed to save quotation: " + (error instanceof Error ? error.message : "Unknown error"));
     },
   });
 
@@ -206,11 +232,7 @@ export default function NewQuotation() {
 
                 <div className="space-y-2">
                   <Label htmlFor="quoteNumber">Quotation Number *</Label>
-                  <Input
-                    id="quoteNumber"
-                    value={quoteNumber}
-                    onChange={(e) => setQuoteNumber(e.target.value)}
-                  />
+                  <Input id="quoteNumber" value={quoteNumber} onChange={(e) => setQuoteNumber(e.target.value)} />
                 </div>
 
                 <div className="space-y-2">
@@ -292,11 +314,7 @@ export default function NewQuotation() {
                       />
                     </div>
                     <div className="md:col-span-2">
-                      <Input
-                        value={formatCurrency(line.amount)}
-                        disabled
-                        className="bg-muted"
-                      />
+                      <Input value={formatCurrency(line.amount)} disabled className="bg-muted" />
                     </div>
                     <div className="md:col-span-1">
                       <Button
@@ -376,11 +394,11 @@ export default function NewQuotation() {
               <CardTitle>Actions</CardTitle>
             </CardHeader>
             <CardContent className="space-y-2">
-              <Button 
-                variant="outline" 
-                className="w-full gap-2" 
+              <Button
+                variant="outline"
+                className="w-full gap-2"
                 onClick={convertToInvoice}
-                disabled={!selectedCustomer || lines.every(l => !l.description)}
+                disabled={!selectedCustomer || lines.every((l) => !l.description)}
               >
                 <FileText className="h-4 w-4" />
                 Convert to Invoice

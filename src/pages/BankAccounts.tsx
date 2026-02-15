@@ -1,6 +1,10 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/contexts/AuthContext";
+import { companyService } from "@/services/firebase";
+import { firestore } from "@/integrations/firebase/client";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { addDoc, collection, doc, getDocs, query, serverTimestamp, updateDoc, where, writeBatch } from "firebase/firestore";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -37,6 +41,7 @@ interface BankTransaction {
 }
 
 const BankAccounts = () => {
+  const { user } = useAuth();
   const queryClient = useQueryClient();
   const [isAccountDialogOpen, setIsAccountDialogOpen] = useState(false);
   const [isTransactionDialogOpen, setIsTransactionDialogOpen] = useState(false);
@@ -58,53 +63,105 @@ const BankAccounts = () => {
     transaction_date: new Date().toISOString().split("T")[0],
   });
 
-  const { data: user } = useQuery({
-    queryKey: ["user"],
+  const { data: companyId } = useQuery({
+    queryKey: ["bank-accounts-company-id", user?.id],
     queryFn: async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      return user;
+      if (!user) return null;
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      return membership?.companyId ?? null;
     },
+    enabled: Boolean(user),
   });
 
   const { data: bankAccounts = [], isLoading: accountsLoading } = useQuery({
-    queryKey: ["bank-accounts"],
+    queryKey: ["bank-accounts", companyId],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("bank_accounts")
-        .select("*")
-        .order("account_name");
-      if (error) throw error;
-      return data as BankAccount[];
+      if (!companyId) return [] as BankAccount[];
+
+      const ref = collection(firestore, COLLECTIONS.BANK_ACCOUNTS);
+      const snapshot = await getDocs(query(ref, where("companyId", "==", companyId)));
+
+      return snapshot.docs
+        .map((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          return {
+            id: docSnap.id,
+            account_name: String(row.accountName ?? row.account_name ?? ""),
+            account_number: (row.accountNumber ?? row.account_number ?? null) as string | null,
+            bank_name: String(row.bankName ?? row.bank_name ?? ""),
+            branch: (row.branch ?? null) as string | null,
+            account_type: (row.accountType ?? row.account_type ?? null) as string | null,
+            currency: (row.currency ?? "ZMW") as string | null,
+            opening_balance: Number(row.openingBalance ?? row.opening_balance ?? 0),
+            current_balance: Number(row.currentBalance ?? row.current_balance ?? 0),
+            is_active: Boolean(row.isActive ?? row.is_active ?? true),
+          } satisfies BankAccount;
+        })
+        .sort((a, b) => a.account_name.localeCompare(b.account_name));
     },
-    enabled: !!user,
+    enabled: Boolean(companyId),
   });
 
   const { data: transactions = [] } = useQuery({
-    queryKey: ["bank-transactions", selectedAccount?.id],
+    queryKey: ["bank-transactions", companyId, selectedAccount?.id],
     queryFn: async () => {
-      if (!selectedAccount) return [];
-      const { data, error } = await supabase
-        .from("bank_transactions")
-        .select("*")
-        .eq("bank_account_id", selectedAccount.id)
-        .order("transaction_date", { ascending: false });
-      if (error) throw error;
-      return data as BankTransaction[];
+      if (!selectedAccount || !companyId) return [] as BankTransaction[];
+
+      const ref = collection(firestore, COLLECTIONS.BANK_TRANSACTIONS);
+      const snapshot = await getDocs(
+        query(
+          ref,
+          where("companyId", "==", companyId),
+          where("bankAccountId", "==", selectedAccount.id),
+        ),
+      );
+
+      return snapshot.docs
+        .map((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          const transactionDate = row.transactionDate ?? row.transaction_date;
+          const normalizedDate = typeof transactionDate === "string"
+            ? transactionDate
+            : (transactionDate as { toDate?: () => Date })?.toDate?.().toISOString().slice(0, 10) ?? "";
+
+          return {
+            id: docSnap.id,
+            bank_account_id: String(row.bankAccountId ?? row.bank_account_id ?? ""),
+            transaction_type: String(row.transactionType ?? row.transaction_type ?? ""),
+            amount: Number(row.amount ?? 0),
+            description: (row.description ?? null) as string | null,
+            reference_number: (row.referenceNumber ?? row.reference_number ?? null) as string | null,
+            transaction_date: normalizedDate,
+            is_reconciled: Boolean(row.isReconciled ?? row.is_reconciled ?? false),
+          } satisfies BankTransaction;
+        })
+        .sort((a, b) => b.transaction_date.localeCompare(a.transaction_date));
     },
-    enabled: !!selectedAccount,
+    enabled: Boolean(selectedAccount && companyId),
   });
 
   const addAccountMutation = useMutation({
     mutationFn: async (account: typeof newAccount) => {
-      const { error } = await supabase.from("bank_accounts").insert({
-        ...account,
-        current_balance: account.opening_balance,
-        user_id: user?.id,
+      if (!companyId || !user) throw new Error("No active company context");
+
+      await addDoc(collection(firestore, COLLECTIONS.BANK_ACCOUNTS), {
+        companyId,
+        accountName: account.account_name,
+        accountNumber: account.account_number || null,
+        bankName: account.bank_name,
+        branch: account.branch || null,
+        accountType: account.account_type || "checking",
+        currency: account.currency || "ZMW",
+        openingBalance: account.opening_balance,
+        currentBalance: account.opening_balance,
+        isActive: true,
+        createdBy: user.id,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
       });
-      if (error) throw error;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["bank-accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["bank-accounts", companyId] });
       toast.success("Bank account added successfully");
       setIsAccountDialogOpen(false);
       setNewAccount({
@@ -124,28 +181,40 @@ const BankAccounts = () => {
 
   const addTransactionMutation = useMutation({
     mutationFn: async (transaction: typeof newTransaction) => {
-      if (!selectedAccount) throw new Error("No account selected");
+      if (!selectedAccount || !companyId || !user) throw new Error("No account selected");
 
       const newBalance = transaction.transaction_type === "deposit"
         ? selectedAccount.current_balance + transaction.amount
         : selectedAccount.current_balance - transaction.amount;
 
-      const { error: transError } = await supabase.from("bank_transactions").insert({
-        ...transaction,
-        bank_account_id: selectedAccount.id,
-        user_id: user?.id,
-      });
-      if (transError) throw transError;
+      const batch = writeBatch(firestore);
+      const transRef = doc(collection(firestore, COLLECTIONS.BANK_TRANSACTIONS));
+      const accountRef = doc(firestore, COLLECTIONS.BANK_ACCOUNTS, selectedAccount.id);
 
-      const { error: updateError } = await supabase
-        .from("bank_accounts")
-        .update({ current_balance: newBalance })
-        .eq("id", selectedAccount.id);
-      if (updateError) throw updateError;
+      batch.set(transRef, {
+        companyId,
+        bankAccountId: selectedAccount.id,
+        transactionType: transaction.transaction_type,
+        amount: transaction.amount,
+        description: transaction.description || null,
+        referenceNumber: transaction.reference_number || null,
+        transactionDate: transaction.transaction_date,
+        isReconciled: false,
+        createdBy: user.id,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+
+      batch.update(accountRef, {
+        currentBalance: newBalance,
+        updatedAt: serverTimestamp(),
+      });
+
+      await batch.commit();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["bank-accounts"] });
-      queryClient.invalidateQueries({ queryKey: ["bank-transactions"] });
+      queryClient.invalidateQueries({ queryKey: ["bank-accounts", companyId] });
+      queryClient.invalidateQueries({ queryKey: ["bank-transactions", companyId, selectedAccount?.id] });
       toast.success("Transaction recorded");
       setIsTransactionDialogOpen(false);
       setNewTransaction({

@@ -1,6 +1,10 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/contexts/AuthContext";
+import { accountingService, companyService } from "@/services/firebase";
+import { firestore } from "@/integrations/firebase/client";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { addDoc, collection, getDocs, query, serverTimestamp, where } from "firebase/firestore";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -30,6 +34,7 @@ interface InvoiceLine {
 }
 
 export default function NewInvoice() {
+  const { user } = useAuth();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
@@ -50,27 +55,37 @@ export default function NewInvoice() {
   ]);
 
   const { data: customers } = useQuery({
-    queryKey: ["customers"],
+    queryKey: ["customers", user?.id],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("customers")
-        .select("id, name")
-        .order("name");
-      if (error) throw error;
-      return data;
+      if (!user) return [];
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      if (!membership?.companyId) return [];
+      const snapshot = await getDocs(query(collection(firestore, COLLECTIONS.CUSTOMERS), where("companyId", "==", membership.companyId)));
+      return snapshot.docs
+        .map((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          return {
+            id: docSnap.id,
+            name: String(row.name ?? ""),
+          };
+        })
+        .sort((a, b) => a.name.localeCompare(b.name));
     },
+    enabled: Boolean(user),
   });
 
-  const { data: user } = useQuery({
-    queryKey: ["current-user"],
+  const { data: companyId } = useQuery({
+    queryKey: ["new-invoice-company-id", user?.id],
     queryFn: async () => {
-      const { data } = await supabase.auth.getUser();
-      return data.user;
+      if (!user) return null;
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      return membership?.companyId ?? null;
     },
+    enabled: Boolean(user),
   });
 
-  const isVatRegistered = settings?.is_vat_registered || false;
-  const vatRate = settings?.vat_rate || 16;
+  const isVatRegistered = settings?.isVatRegistered || false;
+  const vatRate = settings?.vatRate || 16;
 
   const addLine = () => {
     setLines([
@@ -106,52 +121,43 @@ export default function NewInvoice() {
 
   const saveMutation = useMutation({
     mutationFn: async (status: string) => {
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("company_id")
-        .eq("id", user?.id)
-        .single();
+      if (!companyId || !user) throw new Error("No company context found");
 
-      const { data: invoice, error: invoiceError } = await supabase
-        .from("invoices")
-        .insert({
-          user_id: user?.id,
-          company_id: profile?.company_id,
-          customer_id: selectedCustomer || null,
-          invoice_number: invoiceNumber,
-          invoice_date: invoiceDate,
-          due_date: dueDate || null,
+      const invoiceRef = await addDoc(collection(firestore, COLLECTIONS.INVOICES), {
+          companyId,
+          customerId: selectedCustomer || null,
+          invoiceNumber: invoiceNumber,
+          invoiceDate: invoiceDate,
+          dueDate: dueDate || null,
           subtotal,
-          vat_amount: vatAmount,
+          vatAmount: vatAmount,
           total,
           status,
           notes,
           terms,
-          zra_submission_status: isVatRegistered && submitToZRAOnSend && status === "sent" ? "pending" : null,
-        })
-        .select()
-        .single();
-
-      if (invoiceError) throw invoiceError;
+          zraStatus: isVatRegistered && submitToZRAOnSend && status === "sent" ? "pending" : null,
+          createdBy: user.id,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
 
       const invoiceItems = lines
         .filter((line) => line.description)
         .map((line) => ({
-          invoice_id: invoice.id,
+          companyId,
+          invoiceId: invoiceRef.id,
           description: line.description,
           quantity: line.quantity,
-          unit_price: line.rate,
+          unitPrice: line.rate,
           amount: line.amount,
+          createdAt: serverTimestamp(),
         }));
 
       if (invoiceItems.length > 0) {
-        const { error: itemsError } = await supabase
-          .from("invoice_items")
-          .insert(invoiceItems);
-        if (itemsError) throw itemsError;
+        await Promise.all(invoiceItems.map((item) => addDoc(collection(firestore, COLLECTIONS.INVOICE_ITEMS), item)));
       }
 
-      return invoice;
+      return { id: invoiceRef.id, status };
     },
     onSuccess: async (invoice, status) => {
       // If VAT registered and sending, submit to ZRA
@@ -161,6 +167,14 @@ export default function NewInvoice() {
         } catch (e) {
           // Invoice saved but ZRA submission queued
           console.log("ZRA submission queued for retry");
+        }
+      }
+
+      if (status === "sent") {
+        try {
+          await accountingService.postInvoiceToGL(invoice.id);
+        } catch {
+          // Keep invoice workflow successful even if GL posting is queued/retried by backoffice.
         }
       }
       

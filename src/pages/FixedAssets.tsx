@@ -1,6 +1,10 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/contexts/AuthContext";
+import { companyService } from "@/services/firebase";
+import { firestore } from "@/integrations/firebase/client";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { addDoc, collection, getDocs, query, serverTimestamp, where } from "firebase/firestore";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -36,6 +40,7 @@ import { format } from "date-fns";
 import { formatZMW } from "@/utils/zambianTaxCalculations";
 
 export default function FixedAssets() {
+  const { user } = useAuth();
   const queryClient = useQueryClient();
   const [searchTerm, setSearchTerm] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -53,76 +58,130 @@ export default function FixedAssets() {
     serial_number: "",
   });
 
-  const { data: assets, isLoading } = useQuery({
-    queryKey: ["fixed-assets"],
+  const { data: companyId } = useQuery({
+    queryKey: ["fixed-assets-company-id", user?.id],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("fixed_assets")
-        .select(`
-          *,
-          asset_categories (
-            name,
-            depreciation_method,
-            useful_life_years
-          )
-        `)
-        .eq("is_deleted", false)
-        .order("created_at", { ascending: false });
-
-      if (error) throw error;
-      return data;
+      if (!user) return null;
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      return membership?.companyId ?? null;
     },
+    enabled: Boolean(user),
+  });
+
+  const { data: assets, isLoading } = useQuery({
+    queryKey: ["fixed-assets", companyId],
+    queryFn: async () => {
+      if (!companyId) return [];
+
+      const assetsRef = collection(firestore, COLLECTIONS.FIXED_ASSETS);
+      const categoriesRef = collection(firestore, COLLECTIONS.ASSET_CATEGORIES);
+      const [assetsSnapshot, categoriesSnapshot] = await Promise.all([
+        getDocs(query(assetsRef, where("companyId", "==", companyId))),
+        getDocs(query(categoriesRef, where("companyId", "==", companyId))),
+      ]);
+
+      const categoryMap = new Map<string, { name: string; depreciation_method: string | null; useful_life_years: number | null }>();
+      categoriesSnapshot.docs.forEach((docSnap) => {
+        const row = docSnap.data() as Record<string, unknown>;
+        categoryMap.set(docSnap.id, {
+          name: String(row.name ?? ""),
+          depreciation_method: (row.depreciationMethod ?? row.depreciation_method ?? null) as string | null,
+          useful_life_years: Number(row.usefulLifeYears ?? row.useful_life_years ?? 0) || null,
+        });
+      });
+
+      return assetsSnapshot.docs
+        .map((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          const createdAt = row.createdAt ?? row.created_at;
+          const createdAtIso = typeof createdAt === "string"
+            ? createdAt
+            : (createdAt as { toDate?: () => Date })?.toDate?.().toISOString() ?? "";
+          const categoryId = (row.categoryId ?? row.category_id ?? null) as string | null;
+          return {
+            id: docSnap.id,
+            user_id: String(row.userId ?? row.user_id ?? ""),
+            company_id: String(row.companyId ?? row.company_id ?? ""),
+            asset_number: String(row.assetNumber ?? row.asset_number ?? ""),
+            name: String(row.name ?? ""),
+            description: (row.description ?? null) as string | null,
+            category_id: categoryId,
+            purchase_date: String(row.purchaseDate ?? row.purchase_date ?? ""),
+            purchase_cost: Number(row.purchaseCost ?? row.purchase_cost ?? 0),
+            residual_value: Number(row.residualValue ?? row.residual_value ?? 0),
+            useful_life_months: Number(row.usefulLifeMonths ?? row.useful_life_months ?? 0),
+            depreciation_method: String(row.depreciationMethod ?? row.depreciation_method ?? "straight_line"),
+            location: (row.location ?? null) as string | null,
+            serial_number: (row.serialNumber ?? row.serial_number ?? null) as string | null,
+            net_book_value: Number(row.netBookValue ?? row.net_book_value ?? row.purchaseCost ?? row.purchase_cost ?? 0),
+            accumulated_depreciation: Number(row.accumulatedDepreciation ?? row.accumulated_depreciation ?? 0),
+            status: String(row.status ?? "active"),
+            is_deleted: Boolean(row.isDeleted ?? row.is_deleted ?? false),
+            created_at: createdAtIso,
+            asset_categories: categoryId ? categoryMap.get(categoryId) ?? null : null,
+          };
+        })
+        .filter((asset) => !asset.is_deleted)
+        .sort((a, b) => b.created_at.localeCompare(a.created_at));
+    },
+    enabled: Boolean(companyId),
   });
 
   const { data: categories } = useQuery({
-    queryKey: ["asset-categories"],
+    queryKey: ["asset-categories", companyId],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("asset_categories")
-        .select("*")
-        .order("name");
-
-      if (error) throw error;
-      return data;
+      if (!companyId) return [];
+      const categoriesRef = collection(firestore, COLLECTIONS.ASSET_CATEGORIES);
+      const snapshot = await getDocs(query(categoriesRef, where("companyId", "==", companyId)));
+      return snapshot.docs
+        .map((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          return {
+            id: docSnap.id,
+            name: String(row.name ?? ""),
+          };
+        })
+        .sort((a, b) => a.name.localeCompare(b.name));
     },
+    enabled: Boolean(companyId),
   });
 
   const createAssetMutation = useMutation({
     mutationFn: async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("Not authenticated");
-
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("company_id")
-        .eq("id", user.id)
-        .single();
+      if (!user || !companyId) throw new Error("Not authenticated");
 
       const purchaseCost = parseFloat(newAsset.purchase_cost);
       const residualValue = parseFloat(newAsset.residual_value) || 0;
+      const usefulLifeMonths = parseInt(newAsset.useful_life_months, 10);
+      const monthlyDepreciation = usefulLifeMonths > 0
+        ? Math.max(0, (purchaseCost - residualValue) / usefulLifeMonths)
+        : 0;
 
-      const { error } = await supabase.from("fixed_assets").insert({
-        user_id: user.id,
-        company_id: profile?.company_id,
-        asset_number: newAsset.asset_number,
+      await addDoc(collection(firestore, COLLECTIONS.FIXED_ASSETS), {
+        userId: user.id,
+        companyId,
+        assetNumber: newAsset.asset_number,
         name: newAsset.name,
         description: newAsset.description || null,
-        category_id: newAsset.category_id || null,
-        purchase_date: newAsset.purchase_date,
-        purchase_cost: purchaseCost,
-        residual_value: residualValue,
-        useful_life_months: parseInt(newAsset.useful_life_months),
-        depreciation_method: newAsset.depreciation_method as any,
+        categoryId: newAsset.category_id || null,
+        purchaseDate: newAsset.purchase_date,
+        purchaseCost: purchaseCost,
+        residualValue: residualValue,
+        usefulLifeMonths: usefulLifeMonths,
+        depreciationMethod: newAsset.depreciation_method,
         location: newAsset.location || null,
-        serial_number: newAsset.serial_number || null,
-        net_book_value: purchaseCost,
-        accumulated_depreciation: 0,
+        serialNumber: newAsset.serial_number || null,
+        monthlyDepreciation,
+        netBookValue: purchaseCost,
+        accumulatedDepreciation: 0,
+        status: "active",
+        isDeleted: false,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
       });
-
-      if (error) throw error;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["fixed-assets"] });
+      queryClient.invalidateQueries({ queryKey: ["fixed-assets", companyId] });
       toast.success("Asset created successfully");
       setIsDialogOpen(false);
       setNewAsset({

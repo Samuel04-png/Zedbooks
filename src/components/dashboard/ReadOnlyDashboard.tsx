@@ -1,22 +1,34 @@
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DollarSign, TrendingUp, TrendingDown, Users, Eye } from "lucide-react";
 import { formatZMW } from "@/utils/zambianTaxCalculations";
+import { useAuth } from "@/contexts/AuthContext";
+import { dashboardService } from "@/services/firebase";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { readNumber, readString } from "@/components/dashboard/dashboardDataUtils";
 
 export function ReadOnlyDashboard() {
+  const { user } = useAuth();
+
   const { data: stats } = useQuery({
-    queryKey: ["readonly-dashboard-stats"],
+    queryKey: ["readonly-dashboard-stats", user?.id],
+    enabled: Boolean(user),
     queryFn: async () => {
-      const [invoices, expenses] = await Promise.all([
-        supabase.from("invoices").select("total, status"),
-        supabase.from("expenses").select("amount"),
-      ]);
+      if (!user) {
+        return { totalRevenue: 0, totalExpenses: 0, invoiceCount: 0 };
+      }
+
+      const { invoices, expenses } = await dashboardService.runQueries(user.id, {
+        invoices: { collectionName: COLLECTIONS.INVOICES },
+        expenses: { collectionName: COLLECTIONS.EXPENSES },
+      });
 
       return {
-        totalRevenue: invoices.data?.filter(i => i.status === 'paid').reduce((s, i) => s + (i.total || 0), 0) || 0,
-        totalExpenses: expenses.data?.reduce((s, e) => s + (e.amount || 0), 0) || 0,
-        invoiceCount: invoices.data?.length || 0,
+        totalRevenue: invoices
+          .filter((i) => readString(i, ["status"]) === "paid")
+          .reduce((sum, i) => sum + readNumber(i, ["total", "grandTotal", "amount"]), 0),
+        totalExpenses: expenses.reduce((sum, e) => sum + readNumber(e, ["amount", "total"]), 0),
+        invoiceCount: invoices.length,
       };
     },
   });

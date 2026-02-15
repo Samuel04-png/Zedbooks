@@ -1,5 +1,7 @@
 // Payroll Calculation Engine - Configuration-driven
-import { supabase } from "@/integrations/supabase/client";
+import { collection, getDocs, orderBy, query, where } from "firebase/firestore";
+import { firestore } from "@/integrations/firebase/client";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
 
 export interface PayrollConfig {
   payeBands: Array<{
@@ -70,60 +72,70 @@ const DEFAULT_CONFIG: PayrollConfig = {
  */
 export async function fetchPayrollConfig(companyId: string): Promise<PayrollConfig> {
   try {
-    // Fetch PAYE bands
-    const { data: bands } = await supabase
-      .from("paye_tax_bands")
-      .select("min_amount, max_amount, rate")
-      .eq("company_id", companyId)
-      .eq("is_active", true)
-      .order("band_order");
+    const bandsSnapshot = await getDocs(
+      query(
+        collection(firestore, COLLECTIONS.PAYE_TAX_BANDS),
+        where("companyId", "==", companyId),
+        where("isActive", "==", true),
+        orderBy("bandOrder", "asc"),
+      ),
+    );
 
-    // Fetch statutory rates
-    const { data: rates } = await supabase
-      .from("payroll_statutory_rates")
-      .select("rate_type, employee_rate, employer_rate, cap_amount")
-      .eq("company_id", companyId)
-      .eq("is_active", true);
+    const ratesSnapshot = await getDocs(
+      query(
+        collection(firestore, COLLECTIONS.PAYROLL_STATUTORY_RATES),
+        where("companyId", "==", companyId),
+        where("isActive", "==", true),
+      ),
+    );
+
+    const bands = bandsSnapshot.docs.map((docSnap) => docSnap.data() as Record<string, unknown>);
+    const rates = ratesSnapshot.docs.map((docSnap) => docSnap.data() as Record<string, unknown>);
 
     const config: PayrollConfig = { ...DEFAULT_CONFIG };
 
     if (bands && bands.length > 0) {
       config.payeBands = bands.map(b => ({
-        min_amount: Number(b.min_amount),
-        max_amount: b.max_amount ? Number(b.max_amount) : null,
-        rate: Number(b.rate),
+        min_amount: Number(b.minAmount ?? b.min_amount ?? 0),
+        max_amount: b.maxAmount ?? b.max_amount ? Number(b.maxAmount ?? b.max_amount) : null,
+        rate: Number(b.rate ?? 0),
       }));
     }
 
     if (rates) {
       for (const rate of rates) {
-        switch (rate.rate_type) {
+        const rateType = String(rate.rateType ?? rate.rate_type ?? "");
+        const employeeRate = Number(rate.employeeRate ?? rate.employee_rate ?? 0);
+        const employerRate = Number(rate.employerRate ?? rate.employer_rate ?? 0);
+        const capAmount = rate.capAmount ?? rate.cap_amount;
+
+        switch (rateType) {
           case "napsa":
             config.napsa = {
-              employeeRate: Number(rate.employee_rate),
-              employerRate: Number(rate.employer_rate),
-              cap: rate.cap_amount ? Number(rate.cap_amount) : null,
+              employeeRate,
+              employerRate,
+              cap: capAmount ? Number(capAmount) : null,
             };
             break;
           case "nhima":
             config.nhima = {
-              employeeRate: Number(rate.employee_rate),
-              employerRate: Number(rate.employer_rate),
-              cap: rate.cap_amount ? Number(rate.cap_amount) : null,
+              employeeRate,
+              employerRate,
+              cap: capAmount ? Number(capAmount) : null,
             };
             break;
           case "pension":
             config.pension = {
-              employeeRate: Number(rate.employee_rate),
-              employerRate: Number(rate.employer_rate),
-              cap: rate.cap_amount ? Number(rate.cap_amount) : null,
+              employeeRate,
+              employerRate,
+              cap: capAmount ? Number(capAmount) : null,
             };
             break;
           case "wht_local":
-            config.whtLocal = Number(rate.employee_rate);
+            config.whtLocal = employeeRate;
             break;
           case "wht_nonresident":
-            config.whtNonResident = Number(rate.employee_rate);
+            config.whtNonResident = employeeRate;
             break;
         }
       }

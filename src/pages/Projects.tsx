@@ -1,6 +1,10 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/contexts/AuthContext";
+import { companyService } from "@/services/firebase";
+import { firestore } from "@/integrations/firebase/client";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { addDoc, collection, deleteDoc, doc, getDocs, query, serverTimestamp, setDoc, where } from "firebase/firestore";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -51,6 +55,7 @@ interface Project {
 }
 
 export default function Projects() {
+  const { user } = useAuth();
   const queryClient = useQueryClient();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
@@ -66,45 +71,75 @@ export default function Projects() {
     grant_reference: "",
   });
 
-  const { data: user } = useQuery({
-    queryKey: ["user"],
+  const { data: companyId } = useQuery({
+    queryKey: ["projects-company-id", user?.id],
     queryFn: async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      return user;
+      if (!user) return null;
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      return membership?.companyId ?? null;
     },
+    enabled: Boolean(user),
   });
 
   const { data: projects = [], isLoading } = useQuery({
-    queryKey: ["projects"],
+    queryKey: ["projects", companyId],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("projects")
-        .select("*")
-        .order("created_at", { ascending: false });
-      if (error) throw error;
-      return data as Project[];
+      if (!companyId) return [] as Project[];
+
+      const ref = collection(firestore, COLLECTIONS.PROJECTS);
+      const snapshot = await getDocs(query(ref, where("companyId", "==", companyId)));
+
+      return snapshot.docs
+        .map((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          const createdAt = row.createdAt ?? row.created_at;
+          const createdAtIso = typeof createdAt === "string"
+            ? createdAt
+            : (createdAt as { toDate?: () => Date })?.toDate?.().toISOString() ?? new Date().toISOString();
+
+          return {
+            id: docSnap.id,
+            name: String(row.name ?? ""),
+            code: (row.code ?? null) as string | null,
+            description: (row.description ?? null) as string | null,
+            status: (row.status ?? "active") as string | null,
+            start_date: (row.startDate ?? row.start_date ?? null) as string | null,
+            end_date: (row.endDate ?? row.end_date ?? null) as string | null,
+            budget: Number(row.budget ?? 0),
+            spent: Number(row.spent ?? 0),
+            donor_name: (row.donorName ?? row.donor_name ?? null) as string | null,
+            grant_reference: (row.grantReference ?? row.grant_reference ?? null) as string | null,
+            created_at: createdAtIso,
+          } satisfies Project;
+        })
+        .sort((a, b) => b.created_at.localeCompare(a.created_at));
     },
-    enabled: !!user,
+    enabled: Boolean(companyId),
   });
 
   const createMutation = useMutation({
     mutationFn: async (data: typeof formData) => {
-      const { error } = await supabase.from("projects").insert({
+      if (!companyId || !user) throw new Error("No active company context");
+
+      await addDoc(collection(firestore, COLLECTIONS.PROJECTS), {
+        companyId,
         name: data.name,
         code: data.code || null,
         description: data.description || null,
         status: data.status,
-        start_date: data.start_date || null,
-        end_date: data.end_date || null,
+        startDate: data.start_date || null,
+        endDate: data.end_date || null,
         budget: data.budget ? parseFloat(data.budget) : 0,
-        donor_name: data.donor_name || null,
-        grant_reference: data.grant_reference || null,
-        user_id: user?.id,
+        spent: 0,
+        donorName: data.donor_name || null,
+        grantReference: data.grant_reference || null,
+        createdBy: user.id,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
       });
-      if (error) throw error;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["projects"] });
+      queryClient.invalidateQueries({ queryKey: ["projects", companyId] });
       toast.success("Project created successfully");
       resetForm();
     },
@@ -115,24 +150,21 @@ export default function Projects() {
 
   const updateMutation = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: typeof formData }) => {
-      const { error } = await supabase
-        .from("projects")
-        .update({
-          name: data.name,
-          code: data.code || null,
-          description: data.description || null,
-          status: data.status,
-          start_date: data.start_date || null,
-          end_date: data.end_date || null,
-          budget: data.budget ? parseFloat(data.budget) : 0,
-          donor_name: data.donor_name || null,
-          grant_reference: data.grant_reference || null,
-        })
-        .eq("id", id);
-      if (error) throw error;
+      await setDoc(doc(firestore, COLLECTIONS.PROJECTS, id), {
+        name: data.name,
+        code: data.code || null,
+        description: data.description || null,
+        status: data.status,
+        startDate: data.start_date || null,
+        endDate: data.end_date || null,
+        budget: data.budget ? parseFloat(data.budget) : 0,
+        donorName: data.donor_name || null,
+        grantReference: data.grant_reference || null,
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["projects"] });
+      queryClient.invalidateQueries({ queryKey: ["projects", companyId] });
       toast.success("Project updated successfully");
       resetForm();
     },
@@ -143,11 +175,10 @@ export default function Projects() {
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.from("projects").delete().eq("id", id);
-      if (error) throw error;
+      await deleteDoc(doc(firestore, COLLECTIONS.PROJECTS, id));
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["projects"] });
+      queryClient.invalidateQueries({ queryKey: ["projects", companyId] });
       toast.success("Project deleted successfully");
     },
     onError: (error) => {

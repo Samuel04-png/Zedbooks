@@ -62,6 +62,7 @@ const navigation: NavSection[] = [
     items: [
       { title: "Customers", icon: Users, href: "/customers" },
       { title: "Invoices", icon: FileText, href: "/invoices" },
+      { title: "Accounts Receivable", icon: Wallet, href: "/accounts-receivable" },
       { title: "Estimates", icon: FileText, href: "/estimates" },
       { title: "Sales Orders", icon: ShoppingCart, href: "/sales-orders" },
     ],
@@ -71,6 +72,7 @@ const navigation: NavSection[] = [
     items: [
       { title: "Vendors", icon: Users, href: "/vendors" },
       { title: "Bills", icon: FileText, href: "/bills" },
+      { title: "Accounts Payable", icon: Wallet, href: "/accounts-payable" },
       { title: "Purchase Orders", icon: ShoppingCart, href: "/purchase-orders" },
       { title: "Expenses", icon: DollarSign, href: "/expenses" },
     ],
@@ -129,15 +131,23 @@ const navigation: NavSection[] = [
     items: [
       { title: "Users & Roles", icon: Users, href: "/users" },
       { title: "Audit Logs", icon: FileText, href: "/audit-logs" },
+      { title: "Payroll Settings", icon: Settings, href: "/payroll-settings" },
       { title: "Company Settings", icon: Settings, href: "/company-settings" },
     ],
   },
 ];
 
 function filterNavigationByRole(navSections: NavSection[], role: AppRole | null): NavSection[] {
-  // If no role, show everything (will be filtered by RoleProtectedRoute)
-  if (!role) return navSections;
-  
+  // Fail closed if role is not yet known.
+  if (!role) {
+    return navSections
+      .map((section) => ({
+        ...section,
+        items: section.items.filter((item) => item.href === "/dashboard"),
+      }))
+      .filter((section) => section.items.length > 0);
+  }
+
   // Super admin and admin see everything
   if (role === "super_admin" || role === "admin") {
     return navSections;
@@ -153,25 +163,26 @@ function filterNavigationByRole(navSections: NavSection[], role: AppRole | null)
 
 export function AppSidebar() {
   const location = useLocation();
-  const { data: userRole, isLoading } = useUserRole();
+  const { data: userRole } = useUserRole();
 
-  // Always show navigation, even while loading - just use default super_admin view
-  const filteredNavigation = filterNavigationByRole(navigation, userRole || "super_admin");
+  const filteredNavigation = filterNavigationByRole(navigation, userRole || null);
 
   return (
     <Sidebar className="border-r border-sidebar-border">
       <SidebarHeader className="border-b border-sidebar-border p-4">
         <Link to="/dashboard" className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-amber-400 to-orange-500 shadow-lg">
-            <Building2 className="h-6 w-6 text-white" />
-          </div>
-          <div className="flex flex-col">
-            <span className="text-base font-bold text-sidebar-foreground">ZedBooks</span>
-            <span className="text-xs text-sidebar-foreground/60">Accountability with Purpose</span>
+          <div className="flex items-center gap-3 px-2 py-2">
+            <div className="h-10 w-10 relative flex items-center justify-center">
+              <img src="/logo_new.png" alt="ZedBooks" className="h-9 w-auto object-contain" />
+            </div>
+            <div className="flex flex-col">
+              <span className="font-bold text-lg text-sidebar-foreground leading-none tracking-tight">ZedBooks</span>
+              <span className="text-[10px] text-sidebar-foreground/60 font-medium uppercase tracking-wider">Purpose Ledger</span>
+            </div>
           </div>
         </Link>
       </SidebarHeader>
-      
+
       <SidebarContent>
         <ScrollArea className="h-full">
           <div className="space-y-1 p-2">
@@ -179,7 +190,7 @@ export function AppSidebar() {
               const hasActiveItem = section.items.some(
                 (item) => location.pathname === item.href
               );
-              
+
               return (
                 <Collapsible
                   key={section.title}
