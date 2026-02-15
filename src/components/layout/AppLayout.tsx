@@ -4,6 +4,7 @@ import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/s
 import { ProtectedRoute } from "./ProtectedRoute";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { Menu } from "lucide-react";
+import { ByteBerryWatermark } from "@/components/common/ByteBerryWatermark";
 
 interface AppLayoutProps {
   children: ReactNode;
@@ -33,6 +34,9 @@ export function AppLayout({ children }: AppLayoutProps) {
             <main className="flex flex-col gap-4 p-4 md:p-6 lg:p-8">
               {children}
             </main>
+
+            {/* Watermark - Global */}
+            <ByteBerryWatermark />
           </SidebarInset>
         </div>
       </SidebarProvider>

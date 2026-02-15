@@ -16,6 +16,7 @@ import {
   Laptop
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { ByteBerryWatermark } from "@/components/common/ByteBerryWatermark";
 
 const features = [
   {
@@ -338,6 +339,7 @@ export default function Landing() {
           <p className="text-slate-500 text-sm">© {new Date().getFullYear()} Byte & Berry. All rights reserved.</p>
         </div>
       </footer>
+      <ByteBerryWatermark />
     </div>
   );
 }

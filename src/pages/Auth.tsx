@@ -12,6 +12,7 @@ import { z } from "zod";
 import { applyActionCode, confirmPasswordReset, verifyPasswordResetCode } from "firebase/auth";
 import { firebaseAuth, isFirebaseConfigured } from "@/integrations/firebase/client";
 import { authService, companyService } from "@/services/firebase";
+import { ByteBerryWatermark } from "@/components/common/ByteBerryWatermark";
 
 const loginSchema = z.object({
   email: z.string().email("Invalid email address"),
@@ -414,6 +415,7 @@ export default function Auth() {
             </Button>
           </div>
         </div>
+        <ByteBerryWatermark className="text-slate-400/40 hover:text-primary" />
       </div>
     );
   }
@@ -485,6 +487,7 @@ export default function Auth() {
             </form>
           </div>
         </div>
+        <ByteBerryWatermark className="text-slate-400/40 hover:text-primary" />
       </div>
     );
   }
@@ -558,6 +561,7 @@ export default function Auth() {
             </form>
           </div>
         </div>
+        <ByteBerryWatermark className="text-slate-400/40 hover:text-primary" />
       </div>
     );
   }
@@ -810,6 +814,7 @@ export default function Auth() {
             </Link>
           </div>
         </div>
+        <ByteBerryWatermark />
       </div>
     </div>
   );
