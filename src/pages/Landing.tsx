@@ -18,7 +18,6 @@ import {
 import { useEffect, useState } from "react";
 import { ByteBerryWatermark } from "@/components/common/ByteBerryWatermark";
 import { Logo } from "@/components/common/Logo";
-import { Logo } from "@/components/common/Logo";
 
 const features = [
   {
