@@ -74,7 +74,7 @@ export default function Landing() {
         <div className="container mx-auto px-4 lg:px-6 flex items-center justify-between h-20">
           <Link to="/" className="flex items-center gap-3">
             <div className="h-10 w-10 relative flex items-center justify-center">
-              <img src="/logo_new.png" alt="ZedBooks" className="h-9 w-auto object-contain" />
+              <img src={`${import.meta.env.BASE_URL}logo_new.png`} alt="ZedBooks" className="h-9 w-auto object-contain" />
             </div>
             <span className="font-bold text-xl tracking-tight text-slate-900">ZedBooks</span>
           </Link>
@@ -333,7 +333,7 @@ export default function Landing() {
       <footer className="py-12 bg-white border-t border-slate-200">
         <div className="container mx-auto px-4 text-center">
           <div className="flex items-center justify-center gap-2 mb-4">
-            <img src="/logo_new.png" alt="ZedBooks" className="h-8 w-auto opacity-50 grayscale hover:grayscale-0 transition-all" />
+            <img src={`${import.meta.env.BASE_URL}logo_new.png`} alt="ZedBooks" className="h-8 w-auto opacity-50 grayscale hover:grayscale-0 transition-all" />
             <span className="font-bold text-lg text-slate-400">ZedBooks</span>
           </div>
           <p className="text-slate-500 text-sm">© {new Date().getFullYear()} Byte & Berry. All rights reserved.</p>

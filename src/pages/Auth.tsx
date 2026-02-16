@@ -355,7 +355,7 @@ export default function Auth() {
             <div className="text-center text-white">
               <div className="flex items-center justify-center gap-3 mb-4">
                 <div className="h-16 w-16 rounded-2xl bg-white/5 backdrop-blur-sm flex items-center justify-center border border-white/10">
-                  <img src="/zedbooklogo_transparent.png" alt="ZedBooks Logo" className="h-10 w-10 object-contain" />
+                  <img src={`${import.meta.env.BASE_URL}zedbooklogo_transparent.png`} alt="ZedBooks Logo" className="h-10 w-10 object-contain" />
                 </div>
               </div>
               <h2 className="text-4xl font-bold tracking-tight">ZedBooks</h2>
@@ -581,7 +581,7 @@ export default function Auth() {
           <div className="text-center text-white">
             <div className="flex items-center justify-center gap-3 mb-4">
               <div className="h-16 w-16 rounded-2xl bg-white/5 backdrop-blur-sm flex items-center justify-center border border-white/10">
-                <img src="/logo_new.png" alt="ZedBooks Logo" className="h-12 w-auto object-contain" />
+                <img src={`${import.meta.env.BASE_URL}logo_new.png`} alt="ZedBooks Logo" className="h-12 w-auto object-contain" />
               </div>
             </div>
             <h2 className="text-4xl font-bold tracking-tight">ZedBooks</h2>
@@ -596,7 +596,7 @@ export default function Auth() {
           {/* Mobile logo */}
           <div className="lg:hidden flex items-center justify-center gap-2 mb-8">
             <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center">
-              <img src="/logo_new.png" alt="ZedBooks Logo" className="h-8 w-auto object-contain" />
+              <img src={`${import.meta.env.BASE_URL}logo_new.png`} alt="ZedBooks Logo" className="h-8 w-auto object-contain" />
             </div>
             <span className="text-xl font-bold">ZedBooks</span>
           </div>
