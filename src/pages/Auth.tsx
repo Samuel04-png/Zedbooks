@@ -211,12 +211,14 @@ export default function Auth() {
     try {
       const validated = loginSchema.parse(loginForm);
       const credential = await authService.signIn(validated.email, validated.password);
-      if (!credential.user.emailVerified) {
-        setPendingVerificationEmail(validated.email);
-        setAuthView("verify-email");
-        toast.error("Please verify your email before signing in.");
-        await authService.logout();
-      } else {
+      // Email verification check disabled by user request
+      // if (!credential.user.emailVerified) {
+      //   setPendingVerificationEmail(validated.email);
+      //   setAuthView("verify-email");
+      //   toast.error("Please verify your email before signing in.");
+      //   await authService.logout();
+      // } else {
+      {
         toast.success("Logged in successfully");
       }
     } catch (error) {
