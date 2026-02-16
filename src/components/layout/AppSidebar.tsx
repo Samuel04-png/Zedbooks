@@ -172,8 +172,8 @@ export function AppSidebar() {
       <SidebarHeader className="border-b border-sidebar-border p-4">
         <Link to="/dashboard" className="flex items-center gap-3">
           <div className="flex items-center gap-3 px-2 py-2">
-            <div className="h-10 w-10 relative flex items-center justify-center">
-              <img src={`${import.meta.env.BASE_URL}logo_new.png`} alt="ZedBooks" className="h-9 w-auto object-contain" />
+            <div className="h-12 w-12 relative flex items-center justify-center">
+              <img src={`${import.meta.env.BASE_URL}logo_new.png`} alt="ZedBooks" className="h-full w-full object-contain" />
             </div>
             <div className="flex flex-col">
               <span className="font-bold text-lg text-sidebar-foreground leading-none tracking-tight">ZedBooks</span>

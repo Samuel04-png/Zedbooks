@@ -83,6 +83,8 @@ const DEFAULT_ACCOUNTS = [
   { code: 5400, name: "Utilities Expense", type: "expense", description: "Electricity, internet, water bills" },
   { code: 5500, name: "Depreciation Expense", type: "expense", description: "Periodic asset depreciation" },
   { code: 5600, name: "Bank Charges", type: "expense", description: "Bank fees and charges" },
+  { code: 5700, name: "Travel Expense", type: "expense", description: "Business travel costs" },
+  { code: 5800, name: "Marketing Expense", type: "expense", description: "Advertising and promotion" },
 ] as const;
 
 interface Account {
