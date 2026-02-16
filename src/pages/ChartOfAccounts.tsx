@@ -296,10 +296,35 @@ export default function ChartOfAccounts() {
     });
   };
 
+  const getAccountRange = (type: string) => {
+    switch (normalizeType(type)) {
+      case "asset": return { min: 1000, max: 1999, label: "1000-1999" };
+      case "liability": return { min: 2000, max: 2999, label: "2000-2999" };
+      case "equity": return { min: 3000, max: 3999, label: "3000-3999" };
+      case "income": return { min: 4000, max: 4999, label: "4000-4999" };
+      case "expense": return { min: 5000, max: 9999, label: "5000-9999" };
+      default: return null;
+    }
+  };
+
   const handleSubmit = () => {
     if (!formData.account_code || !formData.account_name || !formData.account_type) {
       toast.error("Please fill in all required fields");
       return;
+    }
+
+    const accountCode = Number(formData.account_code);
+    if (!Number.isFinite(accountCode)) {
+      toast.error("Account number must be numeric");
+      return;
+    }
+
+    const range = getAccountRange(formData.account_type);
+    if (range) {
+      if (accountCode < range.min || accountCode > range.max) {
+        toast.error(`Invalid account code for ${formData.account_type}. Must be between ${range.label}`);
+        return;
+      }
     }
 
     if (editingAccount) {

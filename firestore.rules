@@ -86,7 +86,7 @@ service cloud.firestore {
         || (accountType == "Liability" && accountCode >= 2000 && accountCode <= 2999)
         || (accountType == "Equity" && accountCode >= 3000 && accountCode <= 3999)
         || (accountType == "Income" && accountCode >= 4000 && accountCode <= 4999)
-        || (accountType == "Expense" && accountCode >= 5000 && accountCode <= 5999);
+        || (accountType == "Expense" && accountCode >= 5000 && accountCode <= 9999);
     }
 
     match /users/{uid} {
