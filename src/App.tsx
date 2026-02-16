@@ -87,17 +87,17 @@ const App = () => (
       <TooltipProvider>
         <Toaster />
         <Sonner />
-        <BrowserRouter>
+        <BrowserRouter basename={import.meta.env.BASE_URL}>
           <AuthProvider>
             <Routes>
               <Route path="/" element={<Landing />} />
               <Route path="/auth" element={<Auth />} />
               <Route path="/setup" element={<ProtectedRoute><CompanySetup /></ProtectedRoute>} />
-              
+
               <Route path="/dashboard" element={<ProtectedRoute><AppLayout><Dashboard /></AppLayout></ProtectedRoute>} />
               <Route path="/invoices" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><Invoices /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/invoices/new" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><NewInvoice /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
-              
+
               <Route path="/customers" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><Customers /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/estimates" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><Estimates /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/quotations/new" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><NewQuotation /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
@@ -141,7 +141,7 @@ const App = () => (
               <Route path="/financial-periods" element={<ProtectedRoute><AppLayout><RoleProtectedRoute allowedRoles={["super_admin", "admin", "accountant"]}><FinancialPeriods /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/journal-entries" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><Suspense fallback={lazyPageFallback}><JournalEntries /></Suspense></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/chart-of-accounts" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><Suspense fallback={lazyPageFallback}><ChartOfAccounts /></Suspense></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
-              
+
               {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
               <Route path="*" element={<NotFound />} />
             </Routes>
