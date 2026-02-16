@@ -298,11 +298,11 @@ export default function ChartOfAccounts() {
 
   const getAccountRange = (type: string) => {
     switch (normalizeType(type)) {
-      case "asset": return { min: 1000, max: 1999, label: "1000-1999" };
-      case "liability": return { min: 2000, max: 2999, label: "2000-2999" };
-      case "equity": return { min: 3000, max: 3999, label: "3000-3999" };
-      case "income": return { min: 4000, max: 4999, label: "4000-4999" };
-      case "expense": return { min: 5000, max: 9999, label: "5000-9999" };
+      case "asset": return { min: 1000, max: 19999, label: "1000-19999" };
+      case "liability": return { min: 2000, max: 29999, label: "2000-29999" };
+      case "equity": return { min: 3000, max: 39999, label: "3000-39999" };
+      case "income": return { min: 4000, max: 49999, label: "4000-49999" };
+      case "expense": return { min: 5000, max: 99999, label: "5000-99999" };
       default: return null;
     }
   };

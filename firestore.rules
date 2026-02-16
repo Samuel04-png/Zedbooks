@@ -82,11 +82,11 @@ service cloud.firestore {
     }
 
     function validAccountRange(accountType, accountCode) {
-      return (accountType == "Asset" && accountCode >= 1000 && accountCode <= 1999)
-        || (accountType == "Liability" && accountCode >= 2000 && accountCode <= 2999)
-        || (accountType == "Equity" && accountCode >= 3000 && accountCode <= 3999)
-        || (accountType == "Income" && accountCode >= 4000 && accountCode <= 4999)
-        || (accountType == "Expense" && accountCode >= 5000 && accountCode <= 9999);
+      return (accountType == "Asset" && accountCode >= 1000 && accountCode <= 19999)
+        || (accountType == "Liability" && accountCode >= 2000 && accountCode <= 29999)
+        || (accountType == "Equity" && accountCode >= 3000 && accountCode <= 39999)
+        || (accountType == "Income" && accountCode >= 4000 && accountCode <= 49999)
+        || (accountType == "Expense" && accountCode >= 5000 && accountCode <= 99999);
     }
 
     match /users/{uid} {
