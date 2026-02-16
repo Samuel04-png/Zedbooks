@@ -170,9 +170,11 @@ export function AppSidebar() {
 
   return (
     <Sidebar className="border-r border-sidebar-border">
-      <Link to="/dashboard" className="flex items-center gap-3 px-2 py-2">
-        <Logo variant="text" size="lg" className="text-sidebar-foreground" />
-      </Link>
+      <SidebarHeader className="border-b border-sidebar-border p-4">
+        <Link to="/dashboard" className="flex items-center gap-3">
+          <Logo variant="full" size="lg" />
+        </Link>
+      </SidebarHeader>
 
       <SidebarContent>
         <ScrollArea className="h-full">
