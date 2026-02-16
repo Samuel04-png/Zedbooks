@@ -4,13 +4,15 @@ import { getFirestore } from "firebase/firestore";
 import { getFunctions } from "firebase/functions";
 import { getStorage } from "firebase/storage";
 
+const clean = (val: string | undefined) => val?.replace(/^"|"$/g, '').replace(/^'|'$/g, '');
+
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY ?? "FIREBASE_API_KEY_PLACEHOLDER",
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN ?? "FIREBASE_AUTH_DOMAIN_PLACEHOLDER",
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID ?? "FIREBASE_PROJECT_ID_PLACEHOLDER",
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET ?? "FIREBASE_STORAGE_BUCKET_PLACEHOLDER",
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID ?? "FIREBASE_MESSAGING_SENDER_ID_PLACEHOLDER",
-  appId: import.meta.env.VITE_FIREBASE_APP_ID ?? "FIREBASE_APP_ID_PLACEHOLDER",
+  apiKey: clean(import.meta.env.VITE_FIREBASE_API_KEY) ?? "FIREBASE_API_KEY_PLACEHOLDER",
+  authDomain: clean(import.meta.env.VITE_FIREBASE_AUTH_DOMAIN) ?? "FIREBASE_AUTH_DOMAIN_PLACEHOLDER",
+  projectId: clean(import.meta.env.VITE_FIREBASE_PROJECT_ID) ?? "FIREBASE_PROJECT_ID_PLACEHOLDER",
+  storageBucket: clean(import.meta.env.VITE_FIREBASE_STORAGE_BUCKET) ?? "FIREBASE_STORAGE_BUCKET_PLACEHOLDER",
+  messagingSenderId: clean(import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID) ?? "FIREBASE_MESSAGING_SENDER_ID_PLACEHOLDER",
+  appId: clean(import.meta.env.VITE_FIREBASE_APP_ID) ?? "FIREBASE_APP_ID_PLACEHOLDER",
 };
 
 const functionsRegion = import.meta.env.VITE_FIREBASE_FUNCTIONS_REGION ?? "us-central1";
