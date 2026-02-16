@@ -38,6 +38,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
+import { Logo } from "@/components/common/Logo";
 
 interface NavItem {
   title: string;
@@ -171,15 +172,7 @@ export function AppSidebar() {
     <Sidebar className="border-r border-sidebar-border">
       <SidebarHeader className="border-b border-sidebar-border p-4">
         <Link to="/dashboard" className="flex items-center gap-3">
-          <div className="flex items-center gap-3 px-2 py-2">
-            <div className="h-12 w-12 relative flex items-center justify-center">
-              <img src={`${import.meta.env.BASE_URL}logo_new.png`} alt="ZedBooks" className="h-full w-full object-contain" />
-            </div>
-            <div className="flex flex-col">
-              <span className="font-bold text-lg text-sidebar-foreground leading-none tracking-tight">ZedBooks</span>
-              <span className="text-[10px] text-sidebar-foreground/60 font-medium uppercase tracking-wider">Purpose Ledger</span>
-            </div>
-          </div>
+          <Logo variant="full" size="lg" />
         </Link>
       </SidebarHeader>
 

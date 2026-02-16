@@ -13,6 +13,7 @@ import { applyActionCode, confirmPasswordReset, verifyPasswordResetCode } from "
 import { firebaseAuth, isFirebaseConfigured } from "@/integrations/firebase/client";
 import { authService, companyService } from "@/services/firebase";
 import { ByteBerryWatermark } from "@/components/common/ByteBerryWatermark";
+import { Logo } from "@/components/common/Logo";
 
 const loginSchema = z.object({
   email: z.string().email("Invalid email address"),
@@ -346,6 +347,7 @@ export default function Auth() {
     return (
       <div className="min-h-screen flex">
         {/* Left side - Gradient blob design */}
+        {/* Left side - Gradient blob design */}
         <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden bg-slate-900">
           <div className="absolute -left-32 -top-32 w-96 h-96 bg-blue-900/20 rounded-full blur-3xl opacity-20" />
           <div className="absolute left-20 top-1/4 w-64 h-64 bg-indigo-900/20 rounded-full blur-3xl opacity-20" />
@@ -355,12 +357,7 @@ export default function Auth() {
           {/* Logo overlay */}
           <div className="absolute inset-0 flex items-center justify-center">
             <div className="text-center text-white">
-              <div className="flex items-center justify-center gap-3 mb-4">
-                <div className="h-16 w-16 rounded-2xl bg-white/5 backdrop-blur-sm flex items-center justify-center border border-white/10">
-                  <img src={`${import.meta.env.BASE_URL}zedbooklogo_transparent.png`} alt="ZedBooks Logo" className="h-10 w-10 object-contain" />
-                </div>
-              </div>
-              <h2 className="text-4xl font-bold tracking-tight">ZedBooks</h2>
+              <Logo variant="full" size="xl" className="text-white mb-6" />
               <p className="text-white/60 mt-2 font-medium">Accountability with Purpose</p>
             </div>
           </div>
@@ -433,14 +430,10 @@ export default function Auth() {
           <div className="absolute -left-16 bottom-1/4 w-80 h-80 bg-slate-800/20 rounded-full blur-3xl opacity-20" />
           <div className="absolute right-10 bottom-10 w-48 h-48 bg-blue-800/20 rounded-full blur-3xl opacity-20" />
 
+          {/* Logo overlay */}
           <div className="absolute inset-0 flex items-center justify-center">
             <div className="text-center text-white">
-              <div className="flex items-center justify-center gap-3 mb-4">
-                <div className="h-16 w-16 rounded-2xl bg-white/5 backdrop-blur-sm flex items-center justify-center border border-white/10">
-                  <Building2 className="h-10 w-10 text-white" />
-                </div>
-              </div>
-              <h2 className="text-4xl font-bold tracking-tight">ZedBooks</h2>
+              <Logo variant="full" size="xl" className="text-white mb-6" />
               <p className="text-white/60 mt-2 font-medium">Accountability with Purpose</p>
             </div>
           </div>
@@ -505,15 +498,11 @@ export default function Auth() {
           <div className="absolute -left-16 bottom-1/4 w-80 h-80 bg-slate-800/20 rounded-full blur-3xl opacity-20" />
           <div className="absolute right-10 bottom-10 w-48 h-48 bg-blue-800/20 rounded-full blur-3xl opacity-20" />
 
+          {/* Logo overlay */}
           <div className="absolute inset-0 flex items-center justify-center">
             <div className="text-center text-white">
-              <div className="flex items-center justify-center gap-3 mb-4">
-                <div className="h-16 w-16 rounded-2xl bg-white/20 backdrop-blur flex items-center justify-center">
-                  <Building2 className="h-10 w-10 text-white" />
-                </div>
-              </div>
-              <h2 className="text-4xl font-bold">ZedBooks</h2>
-              <p className="text-white/80 mt-2">Accountability with Purpose</p>
+              <Logo variant="full" size="xl" className="text-white mb-6" />
+              <p className="text-white/80 mt-2 font-medium">Accountability with Purpose</p>
             </div>
           </div>
         </div>
