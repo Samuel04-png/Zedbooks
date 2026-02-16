@@ -1,4 +1,4 @@
-// ... imports
+import { cn } from "@/lib/utils";
 
 interface LogoProps {
     variant?: "full" | "icon" | "text";
