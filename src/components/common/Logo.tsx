@@ -47,7 +47,7 @@ export function Logo({ variant = "full", size = "md", className }: LogoProps) {
                     <span className={cn("font-bold leading-none tracking-tight", textSizes[size])}>
                         ZedBooks
                     </span>
-                    <span className={cn("font-medium uppercase tracking-wider opacity-60", subTextSizes[size])}>
+                    <span className={cn("font-medium uppercase tracking-[0.2em] opacity-70", subTextSizes[size])}>
                         Purpose Ledger
                     </span>
                 </div>
