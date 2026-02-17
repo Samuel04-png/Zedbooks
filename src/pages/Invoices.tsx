@@ -20,6 +20,7 @@ import { companyService } from "@/services/firebase";
 import { COLLECTIONS } from "@/services/firebase/collectionNames";
 import { collection, documentId, getDocs, query, where } from "firebase/firestore";
 import { firestore } from "@/integrations/firebase/client";
+import { useIsMobile } from "@/hooks/use-mobile";
 
 interface InvoiceRecord {
   id: string;
@@ -56,6 +57,7 @@ const toDateString = (value: unknown): string => {
 export default function Invoices() {
   const [searchQuery, setSearchQuery] = useState("");
   const { user } = useAuth();
+  const isMobile = useIsMobile();
 
   const { data: invoices, isLoading } = useQuery({
     queryKey: ["invoices", user?.id],
@@ -158,55 +160,107 @@ export default function Invoices() {
         <CardHeader>
           <div className="flex items-center justify-between">
             <CardTitle>All Invoices</CardTitle>
-            <div className="relative w-64">
+            {!isMobile && (
+              <div className="relative w-64">
+                <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search invoices..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="pl-8"
+                />
+              </div>
+            )}
+          </div>
+          {isMobile && (
+            <div className="relative mt-4">
               <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
               <Input
                 placeholder="Search invoices..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-8"
+                className="pl-8 w-full"
               />
             </div>
-          </div>
+          )}
         </CardHeader>
         <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Invoice #</TableHead>
-                <TableHead>Date</TableHead>
-                <TableHead>Customer</TableHead>
-                <TableHead>Due Date</TableHead>
-                <TableHead className="text-right">Amount</TableHead>
-                <TableHead>Status</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
+          {isMobile ? (
+            /* Mobile Card View */
+            <div className="space-y-4">
               {filteredInvoices?.map((invoice) => (
-                <TableRow key={invoice.id}>
-                  <TableCell className="font-medium">{invoice.invoiceNumber}</TableCell>
-                  <TableCell>
-                    {invoice.invoiceDate ? format(new Date(invoice.invoiceDate), "dd MMM yyyy") : "-"}
-                  </TableCell>
-                  <TableCell>{invoice.customerName || "-"}</TableCell>
-                  <TableCell>
-                    {invoice.dueDate ? format(new Date(invoice.dueDate), "dd MMM yyyy") : "-"}
-                  </TableCell>
-                  <TableCell className="text-right font-medium">ZMW {invoice.total.toFixed(2)}</TableCell>
-                  <TableCell>
+                <div key={invoice.id} className="border rounded-lg p-4 space-y-3 bg-card shadow-sm">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <span className="font-semibold text-foreground">{invoice.invoiceNumber}</span>
+                      <p className="text-sm text-muted-foreground">{invoice.customerName || "-"}</p>
+                    </div>
                     <Badge variant={getStatusVariant(invoice.status || "draft")}>{invoice.status}</Badge>
-                  </TableCell>
-                </TableRow>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 text-sm">
+                    <div>
+                      <p className="text-xs text-muted-foreground">Date</p>
+                      <p>{invoice.invoiceDate ? format(new Date(invoice.invoiceDate), "dd MMM yyyy") : "-"}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">Due Date</p>
+                      <p>{invoice.dueDate ? format(new Date(invoice.dueDate), "dd MMM yyyy") : "-"}</p>
+                    </div>
+                  </div>
+
+                  <div className="pt-2 border-t flex items-center justify-between">
+                    <span className="text-sm font-medium text-muted-foreground">Total Amount</span>
+                    <span className="text-lg font-bold text-primary">ZMW {invoice.total.toFixed(2)}</span>
+                  </div>
+                </div>
               ))}
               {filteredInvoices?.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={6} className="text-center text-muted-foreground">
-                    No invoices found
-                  </TableCell>
-                </TableRow>
+                <div className="text-center p-4 text-muted-foreground">
+                  No invoices found
+                </div>
               )}
-            </TableBody>
-          </Table>
+            </div>
+          ) : (
+            /* Desktop Table View */
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Invoice #</TableHead>
+                  <TableHead>Date</TableHead>
+                  <TableHead>Customer</TableHead>
+                  <TableHead>Due Date</TableHead>
+                  <TableHead className="text-right">Amount</TableHead>
+                  <TableHead>Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filteredInvoices?.map((invoice) => (
+                  <TableRow key={invoice.id}>
+                    <TableCell className="font-medium">{invoice.invoiceNumber}</TableCell>
+                    <TableCell>
+                      {invoice.invoiceDate ? format(new Date(invoice.invoiceDate), "dd MMM yyyy") : "-"}
+                    </TableCell>
+                    <TableCell>{invoice.customerName || "-"}</TableCell>
+                    <TableCell>
+                      {invoice.dueDate ? format(new Date(invoice.dueDate), "dd MMM yyyy") : "-"}
+                    </TableCell>
+                    <TableCell className="text-right font-medium">ZMW {invoice.total.toFixed(2)}</TableCell>
+                    <TableCell>
+                      <Badge variant={getStatusVariant(invoice.status || "draft")}>{invoice.status}</Badge>
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {filteredInvoices?.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={6} className="text-center text-muted-foreground">
+                      No invoices found
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          )}
         </CardContent>
       </Card>
     </div>

@@ -242,86 +242,7 @@ const ensureTemplateAccounts = async (companyId, templateKey) => {
   await batch.commit();
 };
 
-const validateJournalLines = (lines) => {
-  if (!Array.isArray(lines) || lines.length < 2) {
-    throw new HttpsError("invalid-argument", "A journal entry must contain at least two lines.");
-  }
 
-  const normalized = lines.map((line, index) => {
-    if (!line || typeof line !== "object") {
-      throw new HttpsError("invalid-argument", `Line ${index + 1} is invalid.`);
-    }
-
-    if (!line.accountId || typeof line.accountId !== "string") {
-      throw new HttpsError("invalid-argument", `Line ${index + 1} is missing accountId.`);
-    }
-
-    const debit = normalizeMoney(line.debit || 0);
-    const credit = normalizeMoney(line.credit || 0);
-
-    if (debit < 0 || credit < 0) {
-      throw new HttpsError("invalid-argument", `Line ${index + 1} cannot have negative values.`);
-    }
-
-    if ((debit === 0 && credit === 0) || (debit > 0 && credit > 0)) {
-      throw new HttpsError(
-        "invalid-argument",
-        `Line ${index + 1} must contain either a debit or a credit value.`,
-      );
-    }
-
-    return {
-      accountId: line.accountId,
-      debit,
-      credit,
-      description: line.description || null,
-    };
-  });
-
-  const debitTotal = normalizeMoney(normalized.reduce((sum, line) => sum + line.debit, 0));
-  const creditTotal = normalizeMoney(normalized.reduce((sum, line) => sum + line.credit, 0));
-
-  if (Math.abs(debitTotal - creditTotal) > 0.009) {
-    throw new HttpsError(
-      "invalid-argument",
-      `Journal entry is unbalanced. Debits (${debitTotal}) must equal credits (${creditTotal}).`,
-    );
-  }
-
-  return {
-    normalized,
-    debitTotal,
-    creditTotal,
-  };
-};
-
-const validateLineAccounts = async (companyId, lines) => {
-  const uniqueIds = [...new Set(lines.map((line) => line.accountId))];
-  const docs = await Promise.all(uniqueIds.map((id) => db.collection("chartOfAccounts").doc(id).get()));
-  const accountMap = new Map();
-
-  docs.forEach((snap) => {
-    if (snap.exists) {
-      accountMap.set(snap.id, snap.data());
-    }
-  });
-
-  lines.forEach((line) => {
-    const account = accountMap.get(line.accountId);
-    if (!account) {
-      throw new HttpsError("failed-precondition", `Account ${line.accountId} does not exist.`);
-    }
-    if (account.companyId !== companyId) {
-      throw new HttpsError("permission-denied", "Journal line account belongs to another company.");
-    }
-    if (!validateAccountTypeRange(account.accountType, account.accountCode)) {
-      throw new HttpsError(
-        "failed-precondition",
-        `Account ${account.accountCode} does not match numbering rules for ${account.accountType}.`,
-      );
-    }
-  });
-};
 
 const createAuditLog = async (companyId, actorUid, action, details = {}) => {
   await db.collection("auditLogs").add({
@@ -333,190 +254,7 @@ const createAuditLog = async (companyId, actorUid, action, details = {}) => {
   });
 };
 
-const createPostedJournalEntry = async ({
-  companyId,
-  entryDate,
-  description,
-  referenceNumber,
-  sourceType,
-  sourceId,
-  createdByUid,
-  lines,
-  metadata,
-}) => {
-  const { normalized, debitTotal, creditTotal } = validateJournalLines(lines);
-  await validateLineAccounts(companyId, normalized);
 
-  const normalizedEntryDate = formatDateOnly(entryDate);
-  const entryRef = db.collection("journalEntries").doc();
-  const lineRefs = normalized.map(() => db.collection("journalLines").doc());
-
-  await db.runTransaction(async (tx) => {
-    tx.set(entryRef, {
-      companyId,
-      entryDate: normalizedEntryDate,
-      description: description || null,
-      referenceNumber: referenceNumber || null,
-      sourceType: sourceType || null,
-      sourceId: sourceId || null,
-      isPosted: true,
-      debitTotal,
-      creditTotal,
-      createdBy: createdByUid,
-      postedBy: createdByUid,
-      metadata: metadata || null,
-      createdAt: FieldValue.serverTimestamp(),
-      updatedAt: FieldValue.serverTimestamp(),
-      postedAt: FieldValue.serverTimestamp(),
-    });
-
-    normalized.forEach((line, index) => {
-      tx.set(lineRefs[index], {
-        companyId,
-        entryId: entryRef.id,
-        lineNumber: index + 1,
-        accountId: line.accountId,
-        debit: line.debit,
-        credit: line.credit,
-        description: line.description,
-        entryDate: normalizedEntryDate,
-        isPosted: true,
-        createdAt: FieldValue.serverTimestamp(),
-        updatedAt: FieldValue.serverTimestamp(),
-      });
-    });
-  });
-
-  await createAuditLog(companyId, createdByUid, "journal_entry_posted", {
-    entryId: entryRef.id,
-    sourceType: sourceType || null,
-    sourceId: sourceId || null,
-    debitTotal,
-    creditTotal,
-  });
-
-  return entryRef.id;
-};
-
-const getDefaultAccountId = async (companyId, accountType) => {
-  const snap = await db
-    .collection("chartOfAccounts")
-    .where("companyId", "==", companyId)
-    .where("accountType", "==", accountType)
-    .where("status", "==", "active")
-    .orderBy("accountCode", "asc")
-    .limit(1)
-    .get();
-
-  if (snap.empty) {
-    throw new HttpsError(
-      "failed-precondition",
-      `No active ${accountType} account configured for company ${companyId}.`,
-    );
-  }
-
-  return snap.docs[0].id;
-};
-
-const resolveAccountIdFromSource = async (companyId, sourceData, preferredFields, fallbackType) => {
-  for (const field of preferredFields) {
-    const value = sourceData[field];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-  return getDefaultAccountId(companyId, fallbackType);
-};
-
-const resolveAmountFromSource = (sourceData, fields) => {
-  for (const field of fields) {
-    const value = normalizeMoney(sourceData[field]);
-    if (Number.isFinite(value) && value > 0) {
-      return value;
-    }
-  }
-  throw new HttpsError("failed-precondition", "Source document does not contain a valid posting amount.");
-};
-
-const postSourceDocumentToGl = async ({
-  sourceCollection,
-  sourceId,
-  sourceType,
-  debitFields,
-  debitFallbackType,
-  creditFields,
-  creditFallbackType,
-  amountFields,
-  actorUid,
-}) => {
-  const sourceRef = db.collection(sourceCollection).doc(sourceId);
-  const sourceSnap = await sourceRef.get();
-
-  if (!sourceSnap.exists) {
-    throw new HttpsError("not-found", `${sourceType} ${sourceId} was not found.`);
-  }
-
-  const sourceData = sourceSnap.data();
-  const companyId = sourceData.companyId;
-  if (!companyId) {
-    throw new HttpsError("failed-precondition", `${sourceType} is missing companyId.`);
-  }
-
-  await assertCompanyRole(actorUid, companyId, JOURNAL_POSTING_ROLES);
-
-  if (sourceData.journalEntryId) {
-    return {
-      companyId,
-      journalEntryId: sourceData.journalEntryId,
-      alreadyPosted: true,
-    };
-  }
-
-  const amount = resolveAmountFromSource(sourceData, amountFields);
-  const debitAccountId = await resolveAccountIdFromSource(
-    companyId,
-    sourceData,
-    debitFields,
-    debitFallbackType,
-  );
-  const creditAccountId = await resolveAccountIdFromSource(
-    companyId,
-    sourceData,
-    creditFields,
-    creditFallbackType,
-  );
-
-  const journalEntryId = await createPostedJournalEntry({
-    companyId,
-    entryDate: sourceData.invoiceDate || sourceData.billDate || sourceData.expenseDate || new Date().toISOString(),
-    description: sourceData.description || `${sourceType} posting`,
-    referenceNumber: sourceData.invoiceNumber || sourceData.billNumber || sourceData.referenceNumber || null,
-    sourceType,
-    sourceId,
-    createdByUid: actorUid,
-    lines: [
-      { accountId: debitAccountId, debit: amount, credit: 0 },
-      { accountId: creditAccountId, debit: 0, credit: amount },
-    ],
-    metadata: { sourceCollection },
-  });
-
-  await sourceRef.set(
-    {
-      journalEntryId,
-      glPostedAt: FieldValue.serverTimestamp(),
-      glPostedBy: actorUid,
-      updatedAt: FieldValue.serverTimestamp(),
-    },
-    { merge: true },
-  );
-
-  return {
-    companyId,
-    journalEntryId,
-    alreadyPosted: false,
-  };
-};
 
 exports.bootstrapUserAccount = onCall(async (request) => {
   const uid = assertAuthenticated(request);
@@ -1014,216 +752,16 @@ exports.removeCompanyUser = onCall(async (request) => {
   return { success: true };
 });
 
-exports.postJournalEntry = onCall(async (request) => {
-  const uid = assertAuthenticated(request);
-  const payload = request.data || {};
-  const companyId = payload.companyId;
+// --- ACCOUNTING MODULE EXPORTS ---
 
-  if (!companyId || typeof companyId !== "string") {
-    throw new HttpsError("invalid-argument", "companyId is required.");
-  }
+exports.postJournalEntry = onCall(accounting.postJournalEntry);
+exports.postInvoiceToGL = onCall(accounting.postInvoiceToGL);
+exports.postExpenseToGL = onCall(accounting.postExpenseToGL);
+exports.postBillToGL = onCall(accounting.postBillToGL);
+exports.getGLBalances = onCall(accounting.getGLBalances);
+exports.getTrialBalance = onCall(accounting.getTrialBalance);
 
-  await assertCompanyRole(uid, companyId, JOURNAL_POSTING_ROLES);
-
-  const entryId = await createPostedJournalEntry({
-    companyId,
-    entryDate: payload.entryDate || new Date().toISOString(),
-    description: payload.description || null,
-    referenceNumber: payload.referenceNumber || null,
-    sourceType: payload.sourceType || null,
-    sourceId: payload.sourceId || null,
-    createdByUid: uid,
-    lines: payload.lines || [],
-    metadata: payload.metadata || null,
-  });
-
-  return { entryId };
-});
-
-exports.getGLBalances = onCall(async (request) => {
-  const uid = assertAuthenticated(request);
-  const payload = request.data || {};
-  const companyId = payload.companyId;
-  const startDate = payload.startDate;
-  const endDate = payload.endDate;
-
-  if (!companyId || typeof companyId !== "string") {
-    throw new HttpsError("invalid-argument", "companyId is required.");
-  }
-
-  await getMembership(uid, companyId);
-
-  let linesQuery = db
-    .collection("journalLines")
-    .where("companyId", "==", companyId)
-    .where("isPosted", "==", true);
-
-  if (startDate) linesQuery = linesQuery.where("entryDate", ">=", formatDateOnly(startDate));
-  if (endDate) linesQuery = linesQuery.where("entryDate", "<=", formatDateOnly(endDate));
-
-  const linesSnap = await linesQuery.get();
-  const balances = new Map();
-  linesSnap.docs.forEach((docSnap) => {
-    const line = docSnap.data();
-    const accountId = line.accountId;
-    if (!balances.has(accountId)) balances.set(accountId, { debitTotal: 0, creditTotal: 0 });
-    const current = balances.get(accountId);
-    current.debitTotal = normalizeMoney(current.debitTotal + normalizeMoney(line.debit || 0));
-    current.creditTotal = normalizeMoney(current.creditTotal + normalizeMoney(line.credit || 0));
-  });
-
-  const accountIds = [...balances.keys()];
-  const accountDocs = await Promise.all(accountIds.map((accountId) => db.collection("chartOfAccounts").doc(accountId).get()));
-  const accountById = new Map();
-  accountDocs.forEach((snap) => {
-    if (snap.exists) accountById.set(snap.id, snap.data());
-  });
-
-  const rows = accountIds.map((accountId) => {
-    const totals = balances.get(accountId);
-    const account = accountById.get(accountId) || {};
-    return {
-      accountId,
-      accountCode: String(account.accountCode || ""),
-      accountName: account.accountName || "Unknown Account",
-      accountType: account.accountType || "Unknown",
-      debitTotal: totals.debitTotal,
-      creditTotal: totals.creditTotal,
-      netMovement: normalizeMoney(totals.debitTotal - totals.creditTotal),
-    };
-  });
-
-  rows.sort((a, b) => Number(a.accountCode || 0) - Number(b.accountCode || 0));
-  return rows;
-});
-
-exports.getTrialBalance = onCall(async (request) => {
-  const uid = assertAuthenticated(request);
-  const payload = request.data || {};
-  const companyId = payload.companyId;
-  const asOfDate = payload.asOfDate;
-
-  if (!companyId || typeof companyId !== "string") {
-    throw new HttpsError("invalid-argument", "companyId is required.");
-  }
-
-  await getMembership(uid, companyId);
-
-  let linesQuery = db
-    .collection("journalLines")
-    .where("companyId", "==", companyId)
-    .where("isPosted", "==", true);
-  if (asOfDate) linesQuery = linesQuery.where("entryDate", "<=", formatDateOnly(asOfDate));
-
-  const linesSnap = await linesQuery.get();
-  const balances = new Map();
-  linesSnap.docs.forEach((docSnap) => {
-    const line = docSnap.data();
-    const accountId = line.accountId;
-    if (!balances.has(accountId)) balances.set(accountId, { debitTotal: 0, creditTotal: 0 });
-    const current = balances.get(accountId);
-    current.debitTotal = normalizeMoney(current.debitTotal + normalizeMoney(line.debit || 0));
-    current.creditTotal = normalizeMoney(current.creditTotal + normalizeMoney(line.credit || 0));
-  });
-
-  const accountIds = [...balances.keys()];
-  const accountDocs = await Promise.all(accountIds.map((accountId) => db.collection("chartOfAccounts").doc(accountId).get()));
-  const accountById = new Map();
-  accountDocs.forEach((snap) => {
-    if (snap.exists) accountById.set(snap.id, snap.data());
-  });
-
-  const rows = accountIds.map((accountId) => {
-    const totals = balances.get(accountId);
-    const account = accountById.get(accountId) || {};
-    const net = normalizeMoney(totals.debitTotal - totals.creditTotal);
-    return {
-      accountId,
-      accountCode: String(account.accountCode || ""),
-      accountName: account.accountName || "Unknown Account",
-      debitBalance: net >= 0 ? net : 0,
-      creditBalance: net < 0 ? Math.abs(net) : 0,
-    };
-  });
-
-  rows.sort((a, b) => Number(a.accountCode || 0) - Number(b.accountCode || 0));
-  return rows;
-});
-
-exports.postInvoiceToGL = onCall(async (request) => {
-  const uid = assertAuthenticated(request);
-  const invoiceId = request.data?.invoiceId;
-  if (!invoiceId || typeof invoiceId !== "string") {
-    throw new HttpsError("invalid-argument", "invoiceId is required.");
-  }
-
-  const result = await postSourceDocumentToGl({
-    sourceCollection: "invoices",
-    sourceId: invoiceId,
-    sourceType: "invoice",
-    debitFields: ["debitAccountId", "accountsReceivableAccountId", "receivableAccountId"],
-    debitFallbackType: "Asset",
-    creditFields: ["creditAccountId", "revenueAccountId", "incomeAccountId"],
-    creditFallbackType: "Income",
-    amountFields: ["total", "grandTotal", "amount", "netAmount"],
-    actorUid: uid,
-  });
-
-  return {
-    journalEntryId: result.journalEntryId,
-    alreadyPosted: result.alreadyPosted,
-  };
-});
-
-exports.postBillToGL = onCall(async (request) => {
-  const uid = assertAuthenticated(request);
-  const billId = request.data?.billId;
-  if (!billId || typeof billId !== "string") {
-    throw new HttpsError("invalid-argument", "billId is required.");
-  }
-
-  const result = await postSourceDocumentToGl({
-    sourceCollection: "bills",
-    sourceId: billId,
-    sourceType: "bill",
-    debitFields: ["debitAccountId", "expenseAccountId", "assetAccountId"],
-    debitFallbackType: "Expense",
-    creditFields: ["creditAccountId", "accountsPayableAccountId", "payableAccountId"],
-    creditFallbackType: "Liability",
-    amountFields: ["total", "amount", "netAmount"],
-    actorUid: uid,
-  });
-
-  return {
-    journalEntryId: result.journalEntryId,
-    alreadyPosted: result.alreadyPosted,
-  };
-});
-
-exports.postExpenseToGL = onCall(async (request) => {
-  const uid = assertAuthenticated(request);
-  const expenseId = request.data?.expenseId;
-  if (!expenseId || typeof expenseId !== "string") {
-    throw new HttpsError("invalid-argument", "expenseId is required.");
-  }
-
-  const result = await postSourceDocumentToGl({
-    sourceCollection: "expenses",
-    sourceId: expenseId,
-    sourceType: "expense",
-    debitFields: ["debitAccountId", "expenseAccountId", "assetAccountId"],
-    debitFallbackType: "Expense",
-    creditFields: ["creditAccountId", "cashAccountId", "bankAccountId", "paymentAccountId"],
-    creditFallbackType: "Asset",
-    amountFields: ["amount", "total", "netAmount"],
-    actorUid: uid,
-  });
-
-  return {
-    journalEntryId: result.journalEntryId,
-    alreadyPosted: result.alreadyPosted,
-  };
-});
+// --- END ACCOUNTING MODULE ---
 
 exports.createPayrollDraft = onCall(async (request) => {
   const uid = assertAuthenticated(request);
@@ -1306,20 +844,20 @@ exports.finalizePayroll = onCall(async (request) => {
   const totalNet = normalizeMoney(payroll.totalNet || 0);
 
   if (!journalEntryId && totalNet > 0) {
-    const debitAccountId = await resolveAccountIdFromSource(
+    const debitAccountId = await accounting.resolveAccountIdFromSource(
       companyId,
       payroll,
       ["salaryExpenseAccountId", "debitAccountId"],
       "Expense",
     );
-    const creditAccountId = await resolveAccountIdFromSource(
+    const creditAccountId = await accounting.resolveAccountIdFromSource(
       companyId,
       payroll,
       ["cashAccountId", "payrollPayableAccountId", "creditAccountId"],
       "Liability",
     );
 
-    journalEntryId = await createPostedJournalEntry({
+    journalEntryId = await accounting.createPostedJournalEntry({
       companyId,
       entryDate: payroll.runDate || new Date().toISOString(),
       description: `Payroll Finalization ${payroll.payrollNumber || payrollRunId}`,
@@ -1780,6 +1318,13 @@ exports.analyzeTransactionAnomaly = ai.analyzeTransactionAnomaly;
 
 // Export Notification Functions
 exports.sendEmail = notifications.sendEmail;
+
+// Export ZRA Functions
+exports.signInvoice = require("./zra").signInvoice;
+
+// Export AI Functions
+exports.askDeepSeek = ai.askDeepSeek;
+exports.analyzeTransactionAnomaly = ai.analyzeTransactionAnomaly;
 
 // Firestore Triggers
 /**

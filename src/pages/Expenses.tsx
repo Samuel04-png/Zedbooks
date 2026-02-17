@@ -4,7 +4,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { companyService } from "@/services/firebase";
 import { firestore } from "@/integrations/firebase/client";
 import { COLLECTIONS } from "@/services/firebase/collectionNames";
-import { addDoc, collection, deleteDoc, doc, getDocs, query, serverTimestamp, setDoc, where } from "firebase/firestore";
+import { collection, addDoc, getDocs, query, where, serverTimestamp, setDoc, deleteDoc, doc } from "firebase/firestore";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -173,8 +173,12 @@ export default function Expenses() {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
+      return docRef.id;
     },
-    onSuccess: () => {
+    onSuccess: async (result) => {
+      // The addDoc returns a DocumentReference, so we have the ID to post to GL
+      // However, addDoc result is not currently captured in the mutationFn return
+      // We need to adjust mutationFn to return the ID.
       queryClient.invalidateQueries({ queryKey: ["expenses", companyId] });
       toast.success("Expense recorded successfully");
       resetForm();
@@ -197,10 +201,21 @@ export default function Expenses() {
         notes: data.notes || null,
         updatedAt: serverTimestamp(),
       }, { merge: true });
+      return id;
     },
-    onSuccess: () => {
+    onSuccess: async (expenseId) => {
       queryClient.invalidateQueries({ queryKey: ["expenses", companyId] });
       toast.success("Expense updated successfully");
+
+      // Auto-post to GL
+      try {
+        await accountingService.postExpenseToGL(expenseId);
+        toast.success("Posted to General Ledger");
+      } catch (error) {
+        console.error("GL Posting failed:", error);
+        toast.warning("Expense updated, but failed to post to Ledger. Please retry from list.");
+      }
+
       resetForm();
     },
     onError: (error) => {
@@ -356,135 +371,135 @@ export default function Expenses() {
                 Add Expense
               </Button>
             </DialogTrigger>
-          <DialogContent className="max-w-lg">
-            <DialogHeader>
-              <DialogTitle>
-                {editingExpense ? "Edit Expense" : "Record New Expense"}
-              </DialogTitle>
-            </DialogHeader>
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="space-y-2 md:col-span-2">
-                  <Label htmlFor="description">Description *</Label>
-                  <Input
-                    id="description"
-                    value={formData.description}
+            <DialogContent className="max-w-lg">
+              <DialogHeader>
+                <DialogTitle>
+                  {editingExpense ? "Edit Expense" : "Record New Expense"}
+                </DialogTitle>
+              </DialogHeader>
+              <form onSubmit={handleSubmit} className="space-y-4">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="space-y-2 md:col-span-2">
+                    <Label htmlFor="description">Description *</Label>
+                    <Input
+                      id="description"
+                      value={formData.description}
+                      onChange={(e) =>
+                        setFormData({ ...formData, description: e.target.value })
+                      }
+                      placeholder="What was this expense for?"
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="category">Category *</Label>
+                    <Select
+                      value={formData.category}
+                      onValueChange={(value) =>
+                        setFormData({ ...formData, category: value })
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select category" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {expenseCategories.map((category) => (
+                          <SelectItem key={category} value={category}>
+                            {category}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="amount">Amount (ZMW) *</Label>
+                    <Input
+                      id="amount"
+                      type="number"
+                      step="0.01"
+                      value={formData.amount}
+                      onChange={(e) =>
+                        setFormData({ ...formData, amount: e.target.value })
+                      }
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="expense_date">Date *</Label>
+                    <Input
+                      id="expense_date"
+                      type="date"
+                      value={formData.expense_date}
+                      onChange={(e) =>
+                        setFormData({ ...formData, expense_date: e.target.value })
+                      }
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="vendor_name">Vendor/Payee</Label>
+                    <Input
+                      id="vendor_name"
+                      value={formData.vendor_name}
+                      onChange={(e) =>
+                        setFormData({ ...formData, vendor_name: e.target.value })
+                      }
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="payment_method">Payment Method</Label>
+                    <Select
+                      value={formData.payment_method}
+                      onValueChange={(value) =>
+                        setFormData({ ...formData, payment_method: value })
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="cash">Cash</SelectItem>
+                        <SelectItem value="bank_transfer">Bank Transfer</SelectItem>
+                        <SelectItem value="mobile_money">Mobile Money</SelectItem>
+                        <SelectItem value="cheque">Cheque</SelectItem>
+                        <SelectItem value="card">Card</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="reference_number">Reference #</Label>
+                    <Input
+                      id="reference_number"
+                      value={formData.reference_number}
+                      onChange={(e) =>
+                        setFormData({ ...formData, reference_number: e.target.value })
+                      }
+                      placeholder="Receipt/Invoice number"
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="notes">Notes</Label>
+                  <Textarea
+                    id="notes"
+                    value={formData.notes}
                     onChange={(e) =>
-                      setFormData({ ...formData, description: e.target.value })
+                      setFormData({ ...formData, notes: e.target.value })
                     }
-                    placeholder="What was this expense for?"
-                    required
+                    rows={2}
                   />
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="category">Category *</Label>
-                  <Select
-                    value={formData.category}
-                    onValueChange={(value) =>
-                      setFormData({ ...formData, category: value })
-                    }
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select category" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {expenseCategories.map((category) => (
-                        <SelectItem key={category} value={category}>
-                          {category}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                <div className="flex justify-end gap-2">
+                  <Button type="button" variant="outline" onClick={resetForm}>
+                    Cancel
+                  </Button>
+                  <Button type="submit">
+                    {editingExpense ? "Update" : "Record"} Expense
+                  </Button>
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="amount">Amount (ZMW) *</Label>
-                  <Input
-                    id="amount"
-                    type="number"
-                    step="0.01"
-                    value={formData.amount}
-                    onChange={(e) =>
-                      setFormData({ ...formData, amount: e.target.value })
-                    }
-                    required
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="expense_date">Date *</Label>
-                  <Input
-                    id="expense_date"
-                    type="date"
-                    value={formData.expense_date}
-                    onChange={(e) =>
-                      setFormData({ ...formData, expense_date: e.target.value })
-                    }
-                    required
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="vendor_name">Vendor/Payee</Label>
-                  <Input
-                    id="vendor_name"
-                    value={formData.vendor_name}
-                    onChange={(e) =>
-                      setFormData({ ...formData, vendor_name: e.target.value })
-                    }
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="payment_method">Payment Method</Label>
-                  <Select
-                    value={formData.payment_method}
-                    onValueChange={(value) =>
-                      setFormData({ ...formData, payment_method: value })
-                    }
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="cash">Cash</SelectItem>
-                      <SelectItem value="bank_transfer">Bank Transfer</SelectItem>
-                      <SelectItem value="mobile_money">Mobile Money</SelectItem>
-                      <SelectItem value="cheque">Cheque</SelectItem>
-                      <SelectItem value="card">Card</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="reference_number">Reference #</Label>
-                  <Input
-                    id="reference_number"
-                    value={formData.reference_number}
-                    onChange={(e) =>
-                      setFormData({ ...formData, reference_number: e.target.value })
-                    }
-                    placeholder="Receipt/Invoice number"
-                  />
-                </div>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="notes">Notes</Label>
-                <Textarea
-                  id="notes"
-                  value={formData.notes}
-                  onChange={(e) =>
-                    setFormData({ ...formData, notes: e.target.value })
-                  }
-                  rows={2}
-                />
-              </div>
-              <div className="flex justify-end gap-2">
-                <Button type="button" variant="outline" onClick={resetForm}>
-                  Cancel
-                </Button>
-                <Button type="submit">
-                  {editingExpense ? "Update" : "Record"} Expense
-                </Button>
-              </div>
-            </form>
-          </DialogContent>
-        </Dialog>
+              </form>
+            </DialogContent>
+          </Dialog>
         </div>
       </div>
 

@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { Suspense, lazy } from "react";
 import { AuthProvider } from "@/contexts/AuthContext";
-import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { ErrorBoundary } from "@/components/common/ErrorBoundary";
 import { LoadingState } from "@/components/ui/LoadingState";
 import { AppLayout } from "./components/layout/AppLayout";
 import { ProtectedRoute } from "./components/layout/ProtectedRoute";
@@ -44,6 +44,7 @@ import TimeTracking from "./pages/TimeTracking";
 import UserManagement from "./pages/UserManagement";
 import Projects from "./pages/Projects";
 import ProjectExpenses from "./pages/ProjectExpenses";
+import ProjectActivityLog from "./pages/ProjectActivityLog";
 import CompanySetup from "./pages/CompanySetup";
 import Landing from "./pages/Landing";
 import Donors from "./pages/Donors";
@@ -124,6 +125,7 @@ const App = () => (
               <Route path="/time-tracking" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><TimeTracking /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/projects" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><Projects /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/projects/:projectId/expenses" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><ProjectExpenses /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+              <Route path="/projects/:projectId/activity-log" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><ProjectActivityLog /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/donors" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><Donors /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/accounts-payable" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><AccountsPayable /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/accounts-receivable" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><AccountsReceivable /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />

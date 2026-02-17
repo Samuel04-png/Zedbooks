@@ -5,6 +5,7 @@ import { ProtectedRoute } from "./ProtectedRoute";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { Menu } from "lucide-react";
 import { ByteBerryWatermark } from "@/components/common/ByteBerryWatermark";
+import { AIAssistant } from "@/components/ai/AIAssistant";
 
 interface AppLayoutProps {
   children: ReactNode;
@@ -37,6 +38,9 @@ export function AppLayout({ children }: AppLayoutProps) {
 
             {/* Watermark - Global */}
             <ByteBerryWatermark />
+
+            {/* AI Assistant - Global */}
+            <AIAssistant />
           </SidebarInset>
         </div>
       </SidebarProvider>

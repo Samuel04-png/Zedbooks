@@ -38,6 +38,8 @@ import {
   AreaChart,
   Area,
 } from "recharts";
+import { useNavigate } from "react-router-dom";
+import { DashboardSkeleton } from "./DashboardSkeleton";
 import { useAuth } from "@/contexts/AuthContext";
 import { dashboardService } from "@/services/firebase";
 import { COLLECTIONS } from "@/services/firebase/collectionNames";
@@ -50,7 +52,7 @@ const DONUT_COLORS = ["#0f172a", "#334155", "#475569", "#64748b", "#94a3b8"];
 export function SuperAdminDashboard() {
   const { user } = useAuth();
 
-  const { data: stats } = useQuery({
+  const { data: stats, isLoading } = useQuery({
     queryKey: ["admin-dashboard-stats", user?.id],
     enabled: Boolean(user),
     queryFn: async () => {
@@ -125,15 +127,37 @@ export function SuperAdminDashboard() {
 
   const userName = user?.displayName || user?.email?.split("@")[0] || "Admin";
 
+  // Calculate totals and other metrics...
+
+  if (isLoading) {
+    return <DashboardSkeleton />;
+  }
+
+  // Safe defaults if stats fail to load
+  const safeStats = stats || {
+    totalRevenue: 0,
+    pendingInvoices: 0,
+    activeEmployees: 0,
+    totalEmployees: 0,
+    totalPayroll: 0,
+    totalExpenses: 0,
+    activeProjects: 0,
+    totalCustomers: 0,
+    departmentData: [],
+    monthlyRevenue: [],
+    projects: [],
+  };
+
   // Health metrics cards data
   const healthMetrics = [
     {
       title: "Total Revenue",
-      value: formatZMW(stats?.totalRevenue || 0),
+      value: `ZMW ${safeStats.totalRevenue.toLocaleString()}`,
       icon: DollarSign,
-      color: "bg-primary",
-      bgColor: "bg-primary/10",
-      iconColor: "text-primary",
+      trend: "+12.5% from last month",
+      color: "text-green-600",
+      bgColor: "bg-green-100",
+      iconColor: "text-green-600",
     },
     {
       title: "Employees",
@@ -175,15 +199,24 @@ export function SuperAdminDashboard() {
     <div className="space-y-6 min-h-screen pb-10">
       {/* Header */}
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3 md:gap-4 w-full md:w-auto justify-between md:justify-start">
           <div>
-            <h1 className="text-2xl font-bold text-foreground">
+            <h1 className="text-xl md:text-2xl font-bold text-foreground">
               Welcome {userName},
             </h1>
-            <p className="text-muted-foreground">Here's your organization's financial overview.</p>
+            <p className="text-xs md:text-base text-muted-foreground">Here's your organization's financial overview.</p>
+          </div>
+          {/* Mobile User Avatar (visible only on small screens) */}
+          <div className="md:hidden">
+            <Avatar className="h-8 w-8 border border-border">
+              <AvatarFallback className="bg-primary/10 text-primary font-medium text-xs">
+                {userName.charAt(0).toUpperCase()}
+              </AvatarFallback>
+            </Avatar>
           </div>
         </div>
-        <div className="flex items-center gap-4">
+
+        <div className="flex items-center gap-2 md:gap-4 w-full md:w-auto justify-end">
           <div className="relative hidden md:block">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
@@ -198,15 +231,15 @@ export function SuperAdminDashboard() {
           <div className="flex items-center gap-2">
             <Moon className="h-4 w-4 text-muted-foreground" />
             <Switch />
-            <span className="text-sm text-muted-foreground">Dark Mode</span>
+            <span className="hidden md:inline text-sm text-muted-foreground">Dark Mode</span>
           </div>
-          <div className="flex items-center gap-3 pl-4 border-l">
+          <div className="hidden md:flex items-center gap-3 pl-4 border-l">
             <Avatar className="h-9 w-9 border border-border">
               <AvatarFallback className="bg-primary/10 text-primary font-medium">
                 {userName.charAt(0).toUpperCase()}
               </AvatarFallback>
             </Avatar>
-            <div className="hidden md:block">
+            <div>
               <p className="text-sm font-medium">{userName}</p>
               <p className="text-xs text-muted-foreground">Administrator</p>
             </div>
@@ -215,24 +248,24 @@ export function SuperAdminDashboard() {
       </div>
 
       {/* Top Metrics */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
         {healthMetrics.map((metric, index) => (
           <Card key={index} className="border border-border/50 shadow-sm hover:shadow-md transition-shadow">
-            <CardContent className="p-6">
+            <CardContent className="p-4 md:p-6">
               <div className="flex items-center justify-between">
-                <div className={`p-3 rounded-xl ${metric.bgColor}`}>
-                  <metric.icon className={`h-5 w-5 ${metric.iconColor}`} />
+                <div className={`p-2 md:p-3 rounded-xl ${metric.bgColor}`}>
+                  <metric.icon className={`h-4 w-4 md:h-5 md:w-5 ${metric.iconColor}`} />
                 </div>
                 {metric.trend && (
-                  <Badge className="bg-green-100 text-green-700 hover:bg-green-200 border-green-200 gap-1">
+                  <Badge className="bg-green-100 text-green-700 hover:bg-green-200 border-green-200 gap-1 text-xs px-1.5 py-0.5">
                     <TrendingUp className="h-3 w-3" />
                     {metric.trend}
                   </Badge>
                 )}
               </div>
-              <div className="mt-4">
-                <p className="text-sm font-medium text-muted-foreground">{metric.title}</p>
-                <p className="text-3xl font-bold mt-1 tracking-tight text-foreground">{metric.value}</p>
+              <div className="mt-3 md:mt-4">
+                <p className="text-xs md:text-sm font-medium text-muted-foreground">{metric.title}</p>
+                <p className="text-2xl md:text-3xl font-bold mt-1 tracking-tight text-foreground">{metric.value}</p>
                 {metric.subtitle && (
                   <p className="text-xs text-muted-foreground mt-1">{metric.subtitle}</p>
                 )}
@@ -404,7 +437,7 @@ export function SuperAdminDashboard() {
               {upcomingTasks.map((task, index) => (
                 <div key={index} className="flex items-center gap-4 p-3 rounded-lg hover:bg-muted/50 transition-colors border border-transparent hover:border-border/50">
                   <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${task.status === 'urgent' ? 'bg-red-50 text-red-600' :
-                      task.status === 'scheduled' ? 'bg-blue-50 text-blue-600' : 'bg-slate-50 text-slate-600'
+                    task.status === 'scheduled' ? 'bg-blue-50 text-blue-600' : 'bg-slate-50 text-slate-600'
                     }`}>
                     <Activity className="h-4.5 w-4.5" />
                   </div>

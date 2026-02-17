@@ -4,6 +4,7 @@ export { accountingService } from "@/services/firebase/accountingService";
 export { payrollService } from "@/services/firebase/payrollService";
 export { storageService } from "@/services/firebase/storageService";
 export { dashboardService } from "@/services/firebase/dashboardService";
+export { projectActivityService } from "@/services/firebase/projectActivityService";
 
 export type {
   AppRole,

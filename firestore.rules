@@ -332,6 +332,14 @@ service cloud.firestore {
       allow delete: if canManageCompany(resource.data.companyId);
     }
 
+    match /projectActivityLogs/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create: if canManageProjects(request.resource.data.companyId);
+      allow update: if canManageProjects(resource.data.companyId)
+        && request.resource.data.companyId == resource.data.companyId;
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
     match /products/{docId} {
       allow read: if isCompanyMember(resource.data.companyId);
       allow create: if canManageInventory(request.resource.data.companyId);

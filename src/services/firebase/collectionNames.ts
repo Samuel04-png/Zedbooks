@@ -33,6 +33,7 @@ export const COLLECTIONS = {
   CUSTOMERS: "customers",
   VENDORS: "vendors",
   PROJECTS: "projects",
+  PROJECT_ACTIVITY_LOGS: "projectActivityLogs",
   PROJECT_EXPENSES: "projectExpenses",
   APPROVAL_REQUESTS: "approvalRequests",
   PRODUCTS: "products",

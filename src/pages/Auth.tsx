@@ -24,7 +24,7 @@ export default function Auth() {
   const [pendingVerificationEmail, setPendingVerificationEmail] = useState("");
   const [resetActionCode, setResetActionCode] = useState<string | null>(null);
 
-  // Invite handling (legacy logic kept for redundant safety)
+  // Invite handling
   const [inviteToken, setInviteToken] = useState<string | null>(null);
 
   const checkCompanySetupAndRedirect = useCallback(async (userId: string) => {
@@ -57,10 +57,17 @@ export default function Auth() {
     try {
       await authService.acceptInvitation(token);
       toast.success("Invitation accepted. Your company access is configured.");
+      // Clear token from storage after successful use
+      sessionStorage.removeItem("pendingInviteToken");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to accept invitation";
+      // Don't show error if it's just "user already in company" or similar benign errors
+      // But since we can't easily parse that here without error codes, we'll show it.
+      // Ideally backend returns structured error codes.
       toast.error(`Invitation link error: ${message}`);
     }
+
+    // Clean up URL
     const url = new URL(window.location.href);
     url.searchParams.delete("invite");
     window.history.replaceState({}, "", url.toString());
@@ -72,7 +79,18 @@ export default function Auth() {
     const mode = searchParams.get("mode");
     const oobCode = searchParams.get("oobCode");
     const tokenFromUrl = searchParams.get("invite");
-    setInviteToken(tokenFromUrl);
+
+    // Persist token if found in URL
+    if (tokenFromUrl) {
+      setInviteToken(tokenFromUrl);
+      sessionStorage.setItem("pendingInviteToken", tokenFromUrl);
+    } else {
+      // Check storage for pending token
+      const storedToken = sessionStorage.getItem("pendingInviteToken");
+      if (storedToken) {
+        setInviteToken(storedToken);
+      }
+    }
 
     let mounted = true;
 
@@ -123,8 +141,10 @@ export default function Auth() {
       // Check Current User
       const currentUser = authService.getCurrentUser();
       if (currentUser) {
-        if (tokenFromUrl) {
-          await acceptInvitationIfPresent(tokenFromUrl);
+        // Check for token from URL OR storage
+        const tokenToProcess = tokenFromUrl || sessionStorage.getItem("pendingInviteToken");
+        if (tokenToProcess) {
+          await acceptInvitationIfPresent(tokenToProcess);
         }
         await checkCompanySetupAndRedirect(currentUser.uid);
       } else if (mounted) {
@@ -141,8 +161,11 @@ export default function Auth() {
         setIsCheckingAuth(false);
         return;
       }
-      if (tokenFromUrl) {
-        await acceptInvitationIfPresent(tokenFromUrl);
+
+      // Check for token from URL OR storage
+      const tokenToProcess = tokenFromUrl || sessionStorage.getItem("pendingInviteToken");
+      if (tokenToProcess) {
+        await acceptInvitationIfPresent(tokenToProcess);
       }
       // Small delay to ensure Firestore is ready
       setTimeout(() => {

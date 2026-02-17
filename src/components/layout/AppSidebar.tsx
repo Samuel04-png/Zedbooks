@@ -31,6 +31,7 @@ import {
   SidebarMenuItem,
   SidebarHeader,
   SidebarFooter,
+  useSidebar,
 } from "@/components/ui/sidebar";
 import {
   Collapsible,
@@ -39,6 +40,7 @@ import {
 } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { Logo } from "@/components/common/Logo";
+import { useIsMobile } from "@/hooks/use-mobile";
 
 interface NavItem {
   title: string;
@@ -162,16 +164,27 @@ function filterNavigationByRole(navSections: NavSection[], role: AppRole | null)
     .filter((section) => section.items.length > 0);
 }
 
+import { useSidebar } from "@/components/ui/sidebar";
+import { useIsMobile } from "@/hooks/use-mobile";
+
 export function AppSidebar() {
   const location = useLocation();
   const { data: userRole } = useUserRole();
+  const { setOpenMobile } = useSidebar();
+  const isMobile = useIsMobile();
 
   const filteredNavigation = filterNavigationByRole(navigation, userRole || null);
+
+  const handleLinkClick = () => {
+    if (isMobile) {
+      setOpenMobile(false);
+    }
+  };
 
   return (
     <Sidebar className="border-r border-sidebar-border">
       <SidebarHeader className="border-b border-sidebar-border p-4">
-        <Link to="/dashboard" className="flex items-center gap-3">
+        <Link to="/dashboard" className="flex items-center gap-3" onClick={handleLinkClick}>
           <Logo variant="full" size="lg" />
         </Link>
       </SidebarHeader>
@@ -201,17 +214,19 @@ export function AppSidebar() {
                           {section.items.map((item) => {
                             const isActive = location.pathname === item.href;
                             return (
-                              <SidebarMenuItem key={item.href}>
+                              <SidebarMenuItem key={item.title}>
                                 <SidebarMenuButton
                                   asChild
                                   isActive={isActive}
                                   className={cn(
-                                    "ml-2 transition-all",
-                                    isActive && "bg-primary/10 text-primary font-medium border-l-2 border-primary"
+                                    "w-full transition-colors",
+                                    isActive
+                                      ? "bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground"
+                                      : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
                                   )}
                                 >
-                                  <Link to={item.href}>
-                                    <item.icon className="h-4 w-4" />
+                                  <Link to={item.href} onClick={handleLinkClick} className="flex items-center gap-2">
+                                    <item.icon className={cn("h-4 w-4", isActive ? "text-primary-foreground" : "")} />
                                     <span>{item.title}</span>
                                   </Link>
                                 </SidebarMenuButton>
@@ -230,17 +245,10 @@ export function AppSidebar() {
       </SidebarContent>
 
       <SidebarFooter className="border-t border-sidebar-border p-4">
-        <div className="flex items-center justify-between gap-2">
-          <Link
-            to="/settings"
-            className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-sidebar-foreground hover:bg-sidebar-accent transition-colors"
-          >
-            <Settings className="h-4 w-4" />
-            <span>Settings</span>
-          </Link>
-          <UserMenu />
-        </div>
-      </SidebarFooter>
-    </Sidebar>
+      </Link>
+      <UserMenu />
+    </div>
+      </SidebarFooter >
+    </Sidebar >
   );
 }

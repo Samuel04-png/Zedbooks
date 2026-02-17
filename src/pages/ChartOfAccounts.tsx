@@ -57,6 +57,25 @@ const ACCOUNT_TYPES = [
   { value: "expense", label: "Expense", normalBalance: "Debit" },
 ] as const;
 
+const ACCOUNT_TYPE_RANGES: Record<string, [number, number]> = {
+  asset: [1000, 19999],
+  liability: [2000, 29999],
+  equity: [3000, 39999],
+  income: [4000, 49999],
+  expense: [5000, 99999],
+};
+
+const validateAccountCode = (type: string, code: string): string | null => {
+  const num = Number(code);
+  if (!Number.isFinite(num)) return "Code must be a number";
+  const range = ACCOUNT_TYPE_RANGES[type.toLowerCase()];
+  if (!range) return null; // Unknown type
+  if (num < range[0] || num > range[1]) {
+    return `Code must be between ${range[0]} and ${range[1]} for ${type}`;
+  }
+  return null;
+};
+
 const DEFAULT_ACCOUNTS = [
   { code: 1000, name: "Cash", type: "asset", description: "Money available in bank or cash" },
   { code: 1010, name: "Petty Cash", type: "asset", description: "Small cash for daily needs" },
@@ -169,6 +188,10 @@ export default function ChartOfAccounts() {
         throw new Error("Account number must be numeric");
       }
 
+      const paramType = toDbType(data.account_type);
+      const error = validateAccountCode(paramType, data.account_code);
+      if (error) throw new Error(error);
+
       await addDoc(collection(firestore, COLLECTIONS.CHART_OF_ACCOUNTS), {
         companyId: membership.companyId,
         accountCode,
@@ -199,6 +222,10 @@ export default function ChartOfAccounts() {
       if (!Number.isFinite(accountCode)) {
         throw new Error("Account number must be numeric");
       }
+
+      const paramType = toDbType(data.account_type);
+      const error = validateAccountCode(paramType, data.account_code);
+      if (error) throw new Error(error);
 
       await setDoc(
         doc(firestore, COLLECTIONS.CHART_OF_ACCOUNTS, data.id),
