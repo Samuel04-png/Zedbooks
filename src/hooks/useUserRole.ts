@@ -134,7 +134,7 @@ export const rolePermissions: Record<AppRole, string[]> = {
     "vendors", "bills", "purchase-orders", "expenses", "bank-accounts",
     "reconciliation", "reports", "settings", "chart-of-accounts", "journal-entries",
     "accounts-payable", "accounts-receivable",
-    "payroll", "payroll-reports", "employees", "fixed-assets", "asset-depreciation",
+    "payroll", "payroll-reports", "employees", "fixed-assets", "asset-depreciation", "opening-balances",
     "financial-periods", "zra-compliance", "tax-calculator"
   ],
   accountant: [
@@ -142,12 +142,12 @@ export const rolePermissions: Record<AppRole, string[]> = {
     "vendors", "bills", "purchase-orders", "expenses", "bank-accounts",
     "reconciliation", "reports", "settings", "chart-of-accounts", "journal-entries",
     "accounts-payable", "accounts-receivable",
-    "fixed-assets", "asset-depreciation", "financial-periods", "tax-calculator"
+    "fixed-assets", "asset-depreciation", "opening-balances", "financial-periods", "tax-calculator"
   ],
   assistant_accountant: [
     "dashboard", "invoices", "customers", "estimates", "sales-orders",
     "vendors", "bills", "purchase-orders", "expenses", "chart-of-accounts",
-    "accounts-payable", "accounts-receivable"
+    "journal-entries", "accounts-payable", "accounts-receivable"
   ],
   finance_officer: [
     "dashboard", "invoices", "expenses", "bills", "bank-accounts",
@@ -157,7 +157,7 @@ export const rolePermissions: Record<AppRole, string[]> = {
   bookkeeper: [
     "dashboard", "invoices", "customers", "estimates", "sales-orders",
     "vendors", "bills", "purchase-orders", "expenses", "chart-of-accounts",
-    "reconciliation", "accounts-payable", "accounts-receivable"
+    "journal-entries", "fixed-assets", "reconciliation", "accounts-payable", "accounts-receivable"
   ],
   cashier: [
     "dashboard", "bank-accounts", "expenses", "reconciliation"

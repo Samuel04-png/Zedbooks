@@ -70,12 +70,15 @@ export interface JournalLineInput {
 }
 
 export interface JournalEntryInput {
-  companyId: string;
+  companyId?: string;
   entryDate: string;
   referenceNumber?: string;
   description?: string;
+  referenceType?: "Expense" | "Bill" | "BillPayment" | "Invoice" | "InvoicePayment" | "Payroll" | "PayrollPayment" | "ManualEntry" | "OpeningBalance";
+  referenceId?: string;
   sourceType?: string;
   sourceId?: string;
+  metadata?: Record<string, unknown> | null;
   lines: JournalLineInput[];
 }
 

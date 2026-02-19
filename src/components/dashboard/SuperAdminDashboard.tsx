@@ -41,7 +41,7 @@ import {
 import { useNavigate } from "react-router-dom";
 import { DashboardSkeleton } from "./DashboardSkeleton";
 import { useAuth } from "@/contexts/AuthContext";
-import { dashboardService } from "@/services/firebase";
+import { accountingService, dashboardService } from "@/services/firebase";
 import { COLLECTIONS } from "@/services/firebase/collectionNames";
 import { readNumber, readString } from "@/components/dashboard/dashboardDataUtils";
 
@@ -72,14 +72,17 @@ export function SuperAdminDashboard() {
         };
       }
 
-      const { invoices, employees, payrollRuns, expenses, projects, customers } = await dashboardService.runQueries(user.id, {
+      const companyId = await dashboardService.getCompanyIdForUser(user.id);
+      const [liveMetrics, { invoices, employees, payrollRuns, projects, customers }] = await Promise.all([
+        accountingService.getDashboardLiveMetrics({ companyId }),
+        dashboardService.runQueries(user.id, {
         invoices: { collectionName: COLLECTIONS.INVOICES },
         employees: { collectionName: COLLECTIONS.EMPLOYEES },
         payrollRuns: { collectionName: COLLECTIONS.PAYROLL_RUNS },
-        expenses: { collectionName: COLLECTIONS.EXPENSES },
         projects: { collectionName: COLLECTIONS.PROJECTS },
         customers: { collectionName: COLLECTIONS.CUSTOMERS },
-      });
+      }),
+      ]);
 
       // Group by department for donut chart
       const departmentData = employees.reduce((acc, employee) => {
@@ -89,33 +92,49 @@ export function SuperAdminDashboard() {
         return acc;
       }, {} as Record<string, number>);
 
-      // Monthly data for charts
-      const monthlyRevenue = [
-        { name: "Jan", revenue: 12000, expenses: 8000 },
-        { name: "Feb", revenue: 15000, expenses: 9500 },
-        { name: "Mar", revenue: 18000, expenses: 11000 },
-        { name: "Apr", revenue: 22000, expenses: 13000 },
-        { name: "May", revenue: 25000, expenses: 14500 },
-        { name: "Jun", revenue: 28000, expenses: 16000 },
-        { name: "Jul", revenue: 32000, expenses: 18000 },
-        { name: "Aug", revenue: 35000, expenses: 19500 },
-        { name: "Sep", revenue: 38000, expenses: 21000 },
-        { name: "Oct", revenue: 42000, expenses: 23000 },
-        { name: "Nov", revenue: 45000, expenses: 25000 },
-        { name: "Dec", revenue: 48000, expenses: 27000 },
-      ];
+      const monthRanges = Array.from({ length: 6 }).map((_, index) => {
+        const current = new Date();
+        current.setDate(1);
+        current.setMonth(current.getMonth() - (5 - index));
+        const startDate = new Date(current.getFullYear(), current.getMonth(), 1);
+        const endDate = new Date(current.getFullYear(), current.getMonth() + 1, 0);
+        return {
+          label: startDate.toLocaleString("en-US", { month: "short" }),
+          startDate: startDate.toISOString().slice(0, 10),
+          endDate: endDate.toISOString().slice(0, 10),
+        };
+      });
+
+      const monthlyReports = await Promise.all(
+        monthRanges.map((month) =>
+          accountingService.getProfitLossReport({
+            companyId,
+            startDate: month.startDate,
+            endDate: month.endDate,
+          })),
+      );
+
+      const monthlyRevenue = monthRanges.map((month, index) => ({
+        name: month.label,
+        revenue: monthlyReports[index]?.totalIncome || 0,
+        expenses: monthlyReports[index]?.totalExpenses || 0,
+      }));
 
       return {
-        totalRevenue: invoices
-          .filter((invoice) => readString(invoice, ["status"]) === "paid")
-          .reduce((sum, invoice) => sum + readNumber(invoice, ["total", "amount"]), 0),
-        pendingInvoices: invoices.filter((invoice) => readString(invoice, ["status"]) === "pending").length,
+        totalRevenue: liveMetrics.monthlyIncome,
+        pendingInvoices: invoices.filter((invoice) => {
+          const status = readString(invoice, ["status"]).toLowerCase();
+          return !["paid", "cancelled", "rejected"].includes(status);
+        }).length,
         activeEmployees: employees.filter((employee) => readString(employee, ["employmentStatus", "employment_status"]) === "active").length,
         totalEmployees: employees.length,
         totalPayroll: payrollRuns
-          .filter((run) => readString(run, ["status", "payrollStatus", "payroll_status"]) === "approved")
+          .filter((run) => {
+            const status = readString(run, ["status", "payrollStatus", "payroll_status"]).toLowerCase();
+            return ["processed", "paid", "approved", "final"].includes(status);
+          })
           .reduce((sum, run) => sum + readNumber(run, ["totalNet", "total_net"]), 0),
-        totalExpenses: expenses.reduce((sum, expense) => sum + readNumber(expense, ["amount", "total"]), 0),
+        totalExpenses: liveMetrics.monthlyExpenses,
         activeProjects: projects.filter((project) => readString(project, ["status"]) === "active").length,
         totalCustomers: customers.length,
         departmentData: Object.entries(departmentData).map(([name, value]) => ({ name, value })),
@@ -154,7 +173,7 @@ export function SuperAdminDashboard() {
       title: "Total Revenue",
       value: `ZMW ${safeStats.totalRevenue.toLocaleString()}`,
       icon: DollarSign,
-      trend: "+12.5% from last month",
+      trend: "Current month (GL)",
       color: "text-green-600",
       bgColor: "bg-green-100",
       iconColor: "text-green-600",

@@ -1,10 +1,10 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
-import { companyService } from "@/services/firebase";
+import { accountingService, companyService } from "@/services/firebase";
 import { firestore } from "@/integrations/firebase/client";
 import { COLLECTIONS } from "@/services/firebase/collectionNames";
-import { collection, addDoc, getDocs, query, where, serverTimestamp, setDoc, deleteDoc, doc } from "firebase/firestore";
+import { collection, getDocs, query, where, setDoc, doc, serverTimestamp } from "firebase/firestore";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -33,12 +33,13 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Search, Pencil, Trash2, Upload, Download } from "lucide-react";
+import { Plus, Search, Pencil, Trash2, Upload, Download, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { ImportDialog } from "@/components/shared/ImportDialog";
 import { ImportColumn, transformers } from "@/utils/importFromExcel";
 import { exportToCSV, ExportColumn, formatCurrencyForExport, formatDateForExport } from "@/utils/exportToExcel";
+import { useUserRole } from "@/hooks/useUserRole";
 
 interface Expense {
   id: string;
@@ -50,6 +51,7 @@ interface Expense {
   payment_method: string | null;
   reference_number: string | null;
   notes: string | null;
+  journal_entry_id: string | null;
 }
 
 interface ExpenseFormData {
@@ -63,21 +65,15 @@ interface ExpenseFormData {
   notes: string;
 }
 
-const expenseCategories = [
-  "Office Supplies",
-  "Travel",
-  "Meals & Entertainment",
-  "Utilities",
-  "Rent",
-  "Professional Services",
-  "Marketing",
-  "Equipment",
-  "Software & Subscriptions",
-  "Training",
-  "Insurance",
-  "Maintenance",
-  "Other",
-];
+interface ExpenseCategoryOption {
+  id: string;
+  categoryName: string;
+}
+
+interface PaymentAccountOption {
+  id: string;
+  accountName: string;
+}
 
 const expenseImportColumns: ImportColumn[] = [
   { header: "Description", key: "description", required: true, transform: transformers.trim },
@@ -103,11 +99,19 @@ const expenseExportColumns: ExportColumn[] = [
 
 export default function Expenses() {
   const { user } = useAuth();
+  const { data: userRole } = useUserRole();
   const queryClient = useQueryClient();
   const [searchQuery, setSearchQuery] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isImportOpen, setIsImportOpen] = useState(false);
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
+  const canReversePostedEntries = [
+    "super_admin",
+    "admin",
+    "financial_manager",
+    "accountant",
+    "assistant_accountant",
+  ].includes(userRole || "");
 
   const [formData, setFormData] = useState<ExpenseFormData>({
     description: "",
@@ -148,6 +152,7 @@ export default function Expenses() {
             payment_method: (row.paymentMethod ?? row.payment_method ?? null) as string | null,
             reference_number: (row.referenceNumber ?? row.reference_number ?? null) as string | null,
             notes: (row.notes ?? null) as string | null,
+            journal_entry_id: (row.journalEntryId ?? row.journal_entry_id ?? null) as string | null,
           } satisfies Expense;
         })
         .sort((a, b) => b.expense_date.localeCompare(a.expense_date));
@@ -155,31 +160,104 @@ export default function Expenses() {
     enabled: Boolean(companyId),
   });
 
+  const { data: expenseCategories = [] } = useQuery({
+    queryKey: ["expense-category-mappings", companyId],
+    queryFn: async () => {
+      if (!companyId) return [] as ExpenseCategoryOption[];
+      const snapshot = await getDocs(
+        query(collection(firestore, COLLECTIONS.EXPENSE_CATEGORY_MAPPINGS), where("companyId", "==", companyId)),
+      );
+      return snapshot.docs
+        .map((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          return {
+            id: docSnap.id,
+            categoryName: String(row.categoryName ?? row.category_name ?? ""),
+          } satisfies ExpenseCategoryOption;
+        })
+        .filter((row) => row.categoryName)
+        .sort((a, b) => a.categoryName.localeCompare(b.categoryName));
+    },
+    enabled: Boolean(companyId),
+  });
+
+  const { data: paymentAccounts = [] } = useQuery({
+    queryKey: ["expense-payment-accounts", companyId],
+    queryFn: async () => {
+      if (!companyId) return [] as PaymentAccountOption[];
+      const snapshot = await getDocs(
+        query(
+          collection(firestore, COLLECTIONS.CHART_OF_ACCOUNTS),
+          where("companyId", "==", companyId),
+          where("accountType", "==", "Asset"),
+          where("status", "==", "active"),
+        ),
+      );
+      return snapshot.docs
+        .map((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          return {
+            id: docSnap.id,
+            accountName: String(row.accountName ?? ""),
+          } satisfies PaymentAccountOption;
+        })
+        .filter((row) => row.accountName)
+        .sort((a, b) => a.accountName.localeCompare(b.accountName));
+    },
+    enabled: Boolean(companyId),
+  });
+
+  const normalizePaymentMethod = (value: string) => {
+    const method = value.toLowerCase();
+    if (method === "mobile_money") return "Mobile Money";
+    if (method === "cash") return "Cash";
+    if (method === "credit") return "Credit";
+    return "Bank";
+  };
+
+  const resolvePaymentAccountId = (value: string) => {
+    if (!paymentAccounts.length) return "";
+    const method = value.toLowerCase();
+
+    const matchByNames = (candidates: string[]) =>
+      paymentAccounts.find((account) =>
+        candidates.some((candidate) => account.accountName.toLowerCase().includes(candidate)),
+      )?.id || "";
+
+    if (method === "cash") {
+      return matchByNames(["cash"]) || paymentAccounts[0].id;
+    }
+    if (method === "mobile_money") {
+      return matchByNames(["mobile", "airtel", "mtn"]) || paymentAccounts[0].id;
+    }
+    return matchByNames(["bank"]) || paymentAccounts[0].id;
+  };
+
   const createMutation = useMutation({
     mutationFn: async (data: ExpenseFormData) => {
       if (!companyId || !user) throw new Error("Not authenticated");
+      const paymentAccountId = resolvePaymentAccountId(data.payment_method);
+      if (!paymentAccountId) {
+        throw new Error("No active Asset payment account found in Chart of Accounts.");
+      }
+      if (!data.category) {
+        throw new Error("Expense category is required.");
+      }
 
-      await addDoc(collection(firestore, COLLECTIONS.EXPENSES), {
+      await accountingService.recordExpense({
         companyId,
-        description: data.description,
-        category: data.category || null,
         amount: Number(data.amount),
+        categoryName: data.category,
+        paymentMethod: normalizePaymentMethod(data.payment_method),
+        paymentAccountId,
         expenseDate: data.expense_date,
-        vendorName: data.vendor_name || null,
-        paymentMethod: data.payment_method || null,
-        referenceNumber: data.reference_number || null,
-        notes: data.notes || null,
-        createdBy: user.id,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
+        description: data.description,
       });
-      return docRef.id;
     },
-    onSuccess: async (result) => {
-      // The addDoc returns a DocumentReference, so we have the ID to post to GL
-      // However, addDoc result is not currently captured in the mutationFn return
-      // We need to adjust mutationFn to return the ID.
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["expenses", companyId] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      queryClient.invalidateQueries({ queryKey: ["bank-accounts"] });
       toast.success("Expense recorded successfully");
       resetForm();
     },
@@ -203,18 +281,9 @@ export default function Expenses() {
       }, { merge: true });
       return id;
     },
-    onSuccess: async (expenseId) => {
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["expenses", companyId] });
       toast.success("Expense updated successfully");
-
-      // Auto-post to GL
-      try {
-        await accountingService.postExpenseToGL(expenseId);
-        toast.success("Posted to General Ledger");
-      } catch (error) {
-        console.error("GL Posting failed:", error);
-        toast.warning("Expense updated, but failed to post to Ledger. Please retry from list.");
-      }
 
       resetForm();
     },
@@ -223,16 +292,29 @@ export default function Expenses() {
     },
   });
 
-  const deleteMutation = useMutation({
-    mutationFn: async (id: string) => {
-      await deleteDoc(doc(firestore, COLLECTIONS.EXPENSES, id));
+  const reverseExpenseMutation = useMutation({
+    mutationFn: async (expense: Expense) => {
+      if (!companyId) throw new Error("Company not found");
+      if (!expense.journal_entry_id) {
+        throw new Error("Expense has no posted journal entry to reverse.");
+      }
+      const reason = prompt(`Reason for reversing expense "${expense.description}" (optional):`) || undefined;
+      return accountingService.reverseJournalEntry({
+        companyId,
+        journalEntryId: expense.journal_entry_id,
+        reason,
+      });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["expenses", companyId] });
-      toast.success("Expense deleted successfully");
+      queryClient.invalidateQueries({ queryKey: ["bank-accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["journal-entries"] });
+      queryClient.invalidateQueries({ queryKey: ["financial-reports"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      toast.success("Expense journal entry reversed");
     },
     onError: (error) => {
-      toast.error("Failed to delete expense: " + error.message);
+      toast.error("Failed to reverse expense: " + error.message);
     },
   });
 
@@ -252,6 +334,10 @@ export default function Expenses() {
   };
 
   const handleEdit = (expense: Expense) => {
+    if (expense.journal_entry_id) {
+      toast.error("Posted expenses cannot be edited directly.");
+      return;
+    }
     setEditingExpense(expense);
     setFormData({
       description: expense.description || "",
@@ -269,6 +355,10 @@ export default function Expenses() {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (editingExpense) {
+      if (editingExpense.journal_entry_id) {
+        toast.error("Posted expenses cannot be edited directly.");
+        return;
+      }
       updateMutation.mutate({ id: editingExpense.id, data: formData });
     } else {
       createMutation.mutate(formData);
@@ -311,22 +401,24 @@ export default function Expenses() {
 
     for (const rawItem of data) {
       const item = rawItem as Record<string, unknown>;
-      await addDoc(collection(firestore, COLLECTIONS.EXPENSES), {
+      const paymentMethodRaw = String(item.payment_method ?? "cash");
+      const paymentAccountId = resolvePaymentAccountId(paymentMethodRaw);
+      if (!paymentAccountId) {
+        throw new Error("No active Asset payment account found in Chart of Accounts.");
+      }
+      await accountingService.recordExpense({
         companyId,
         description: String(item.description ?? "").trim(),
-        category: item.category ? String(item.category).trim() : null,
+        categoryName: item.category ? String(item.category).trim() : "Miscellaneous",
         amount: Number(item.amount ?? 0),
         expenseDate: String(item.expense_date ?? new Date().toISOString().split("T")[0]),
-        vendorName: item.vendor_name ? String(item.vendor_name) : null,
-        paymentMethod: item.payment_method ? String(item.payment_method) : null,
-        referenceNumber: item.reference_number ? String(item.reference_number) : null,
-        notes: item.notes ? String(item.notes) : null,
-        createdBy: user.id,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
+        paymentMethod: normalizePaymentMethod(paymentMethodRaw),
+        paymentAccountId,
       });
     }
     queryClient.invalidateQueries({ queryKey: ["expenses", companyId] });
+    queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    queryClient.invalidateQueries({ queryKey: ["bank-accounts"] });
     toast.success(`Imported ${data.length} expenses`);
   };
 
@@ -404,8 +496,8 @@ export default function Expenses() {
                       </SelectTrigger>
                       <SelectContent>
                         {expenseCategories.map((category) => (
-                          <SelectItem key={category} value={category}>
-                            {category}
+                          <SelectItem key={category.id} value={category.categoryName}>
+                            {category.categoryName}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -604,17 +696,39 @@ export default function Expenses() {
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-2">
+                      {expense.journal_entry_id && canReversePostedEntries && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          disabled={reverseExpenseMutation.isPending}
+                          onClick={() => {
+                            if (!confirm("Reverse this expense posting? This creates an opposite journal entry.")) {
+                              return;
+                            }
+                            reverseExpenseMutation.mutate(expense);
+                          }}
+                          title="Reverse expense posting"
+                        >
+                          <RotateCcw className="h-4 w-4" />
+                        </Button>
+                      )}
                       <Button
                         variant="ghost"
                         size="icon"
                         onClick={() => handleEdit(expense)}
+                        disabled={Boolean(expense.journal_entry_id)}
+                        title={expense.journal_entry_id ? "Posted expenses cannot be edited" : "Edit"}
                       >
                         <Pencil className="h-4 w-4" />
                       </Button>
                       <Button
                         variant="ghost"
                         size="icon"
-                        onClick={() => deleteMutation.mutate(expense.id)}
+                        onClick={() => {
+                          toast.error("Expense deletion is blocked. Use a reversal journal workflow.");
+                        }}
+                        disabled
+                        title="Expense deletion is blocked"
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>

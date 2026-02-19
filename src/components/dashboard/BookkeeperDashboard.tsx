@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DollarSign, FileText, TrendingUp, TrendingDown, Receipt, CreditCard } from "lucide-react";
 import { formatZMW } from "@/utils/zambianTaxCalculations";
 import { useAuth } from "@/contexts/AuthContext";
-import { dashboardService } from "@/services/firebase";
+import { accountingService, dashboardService } from "@/services/firebase";
 import { COLLECTIONS } from "@/services/firebase/collectionNames";
 import { readNumber, readString } from "@/components/dashboard/dashboardDataUtils";
 
@@ -29,30 +29,30 @@ export function BookkeeperDashboard() {
         };
       }
 
-      const { invoices, expenses, bills, vendors, customers } = await dashboardService.runQueries(user.id, {
+      const companyId = await dashboardService.getCompanyIdForUser(user.id);
+      const [liveMetrics, { invoices, expenses, bills, vendors, customers }] = await Promise.all([
+        accountingService.getDashboardLiveMetrics({ companyId }),
+        dashboardService.runQueries(user.id, {
         invoices: { collectionName: COLLECTIONS.INVOICES },
         expenses: { collectionName: COLLECTIONS.EXPENSES },
         bills: { collectionName: COLLECTIONS.BILLS },
         vendors: { collectionName: COLLECTIONS.VENDORS },
         customers: { collectionName: COLLECTIONS.CUSTOMERS },
-      });
+      }),
+      ]);
 
       const today = new Date().toISOString().split("T")[0];
       const overdueBills = bills.filter((b) => {
         const dueDate = readString(b, ["dueDate", "due_date"]);
-        return readString(b, ["status"]) !== "paid" && Boolean(dueDate) && dueDate < today;
+        return readString(b, ["status"]).toLowerCase() !== "paid" && Boolean(dueDate) && dueDate < today;
       });
 
       return {
         totalInvoices: invoices.length,
-        paidInvoices: invoices.filter((i) => readString(i, ["status"]) === "paid").length,
-        unpaidInvoicesAmount: invoices
-          .filter((i) => readString(i, ["status"]) !== "paid")
-          .reduce((sum, i) => sum + readNumber(i, ["total", "amount"]), 0),
-        totalExpenses: expenses.reduce((sum, e) => sum + readNumber(e, ["amount", "total"]), 0),
-        unpaidBillsAmount: bills
-          .filter((b) => readString(b, ["status"]) !== "paid")
-          .reduce((sum, b) => sum + readNumber(b, ["total", "amount"]), 0),
+        paidInvoices: invoices.filter((i) => readString(i, ["status"]).toLowerCase() === "paid").length,
+        unpaidInvoicesAmount: liveMetrics.outstandingAccountsReceivable,
+        totalExpenses: liveMetrics.monthlyExpenses,
+        unpaidBillsAmount: liveMetrics.outstandingAccountsPayable,
         overdueBillsCount: overdueBills.length,
         overdueBillsAmount: overdueBills.reduce((sum, b) => sum + readNumber(b, ["total", "amount"]), 0),
         vendorCount: vendors.length,

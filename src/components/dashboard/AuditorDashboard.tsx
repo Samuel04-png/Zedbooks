@@ -22,7 +22,7 @@ import {
 } from "lucide-react";
 import { format } from "date-fns";
 import { useAuth } from "@/contexts/AuthContext";
-import { dashboardService } from "@/services/firebase";
+import { accountingService, dashboardService } from "@/services/firebase";
 import { COLLECTIONS } from "@/services/firebase/collectionNames";
 import { readNumber, readString } from "@/components/dashboard/dashboardDataUtils";
 
@@ -45,42 +45,59 @@ export function AuditorDashboard() {
         return {
           auditLogs: [] as DashboardRow[],
           payrollRuns: [] as DashboardRow[],
-          expenses: [] as DashboardRow[],
+          expenseRows: [] as Array<{
+            expenseAccount: string;
+            entryDate: string;
+            description: string | null;
+            referenceType: string | null;
+            amount: number;
+          }>,
           projects: [] as DashboardRow[],
         };
       }
 
-      return dashboardService.runQueries(user.id, {
-        auditLogs: {
-          collectionName: COLLECTIONS.AUDIT_LOGS,
-          orderByField: "createdAt",
-          orderDirection: "desc",
-          limitCount: 20,
-        },
-        payrollRuns: {
-          collectionName: COLLECTIONS.PAYROLL_RUNS,
-          orderByField: "createdAt",
-          orderDirection: "desc",
-          limitCount: 10,
-        },
-        expenses: {
-          collectionName: COLLECTIONS.EXPENSES,
-          orderByField: "createdAt",
-          orderDirection: "desc",
-          limitCount: 50,
-        },
-        projects: {
-          collectionName: COLLECTIONS.PROJECTS,
-          orderByField: "createdAt",
-          orderDirection: "desc",
-        },
-      });
+      const companyId = await dashboardService.getCompanyIdForUser(user.id);
+      const today = new Date();
+      const monthStart = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().slice(0, 10);
+      const monthEnd = today.toISOString().slice(0, 10);
+
+      const [expenseReport, queryData] = await Promise.all([
+        accountingService.getExpenseReport({
+          companyId,
+          startDate: monthStart,
+          endDate: monthEnd,
+        }),
+        dashboardService.runQueries(user.id, {
+          auditLogs: {
+            collectionName: COLLECTIONS.AUDIT_LOGS,
+            orderByField: "createdAt",
+            orderDirection: "desc",
+            limitCount: 20,
+          },
+          payrollRuns: {
+            collectionName: COLLECTIONS.PAYROLL_RUNS,
+            orderByField: "createdAt",
+            orderDirection: "desc",
+            limitCount: 10,
+          },
+          projects: {
+            collectionName: COLLECTIONS.PROJECTS,
+            orderByField: "createdAt",
+            orderDirection: "desc",
+          },
+        }),
+      ]);
+
+      return {
+        ...queryData,
+        expenseRows: expenseReport.rows,
+      };
     },
   });
 
   const auditLogs = data?.auditLogs ?? [];
   const payrollRuns = data?.payrollRuns ?? [];
-  const expenses = data?.expenses ?? [];
+  const expenseRows = data?.expenseRows ?? [];
   const projects = data?.projects ?? [];
 
   const formatCurrency = (amount: number) => {
@@ -97,14 +114,14 @@ export function AuditorDashboard() {
 
   const approvedPayrolls = payrollRuns.filter((run) => {
     const status = readString(run, ["status", "payrollStatus", "payroll_status"]).toLowerCase();
-    return status === "approved" || status === "final";
+    return ["approved", "final", "processed", "paid"].includes(status);
   }).length;
 
-  const totalExpenseAmount = expenses.reduce((sum, expense) => sum + readNumber(expense, ["amount", "total"]), 0);
+  const totalExpenseAmount = expenseRows.reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
   const projectsOverBudget = projects.filter((project) => readNumber(project, ["spent"]) > readNumber(project, ["budget"])).length;
   const recentChangesCount = auditLogs.length;
 
-  const highValueExpenses = expenses.filter((expense) => readNumber(expense, ["amount", "total"]) > 5000).slice(0, 5);
+  const highValueExpenses = expenseRows.filter((expense) => Number(expense.amount || 0) > 5000).slice(0, 5);
 
   const actionCounts = auditLogs.reduce((acc, log) => {
     const action = readString(log, ["action"]).toUpperCase() || "UNKNOWN";
@@ -238,7 +255,7 @@ export function AuditorDashboard() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <DollarSign className="h-5 w-5" />
-              High-Value Expenses (&gt; ZMW 5,000)
+              High-Value Expense Postings (&gt; ZMW 5,000)
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -247,7 +264,7 @@ export function AuditorDashboard() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Description</TableHead>
-                    <TableHead>Category</TableHead>
+                    <TableHead>Expense Account</TableHead>
                     <TableHead className="text-right">Amount</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -259,16 +276,16 @@ export function AuditorDashboard() {
                       </TableCell>
                     </TableRow>
                   ) : (
-                    highValueExpenses.map((expense) => (
-                      <TableRow key={readString(expense, ["id"], "expense")}>
+                    highValueExpenses.map((expense, index) => (
+                      <TableRow key={`${expense.expenseAccount}-${expense.entryDate}-${index}`}>
                         <TableCell className="font-medium max-w-[150px] truncate">
-                          {readString(expense, ["description"], "Expense")}
+                          {expense.description || "Expense"}
                         </TableCell>
                         <TableCell>
-                          <Badge variant="outline">{readString(expense, ["category"], "General")}</Badge>
+                          <Badge variant="outline">{expense.expenseAccount || "Expense"}</Badge>
                         </TableCell>
                         <TableCell className="text-right font-mono">
-                          {formatCurrency(readNumber(expense, ["amount", "total"]))}
+                          {formatCurrency(Number(expense.amount || 0))}
                         </TableCell>
                       </TableRow>
                     ))

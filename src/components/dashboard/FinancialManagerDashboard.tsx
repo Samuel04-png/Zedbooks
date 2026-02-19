@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { DollarSign, FileText, TrendingUp, TrendingDown, ShieldCheck, CreditCard, AlertTriangle, CheckCircle } from "lucide-react";
 import { formatZMW } from "@/utils/zambianTaxCalculations";
 import { useAuth } from "@/contexts/AuthContext";
-import { dashboardService } from "@/services/firebase";
+import { accountingService, dashboardService } from "@/services/firebase";
 import { COLLECTIONS } from "@/services/firebase/collectionNames";
 import { readNumber, readString } from "@/components/dashboard/dashboardDataUtils";
 
@@ -26,40 +26,37 @@ export function FinancialManagerDashboard() {
           expensesPendingApproval: 0,
           lastPayrollGross: 0,
           lastPayrollNet: 0,
+          monthlyProfit: 0,
           bankAccounts: [] as Array<Record<string, unknown>>,
-          vatCollected: 0,
         };
       }
 
-      const { invoices, expenses, bills, bankAccounts, payrollRuns, approvalRequests } = await dashboardService.runQueries(user.id, {
+      const companyId = await dashboardService.getCompanyIdForUser(user.id);
+      const [liveMetrics, { expenses, bankAccounts, payrollRuns, approvalRequests }] = await Promise.all([
+        accountingService.getDashboardLiveMetrics({ companyId }),
+        dashboardService.runQueries(user.id, {
         invoices: { collectionName: COLLECTIONS.INVOICES },
         expenses: { collectionName: COLLECTIONS.EXPENSES },
-        bills: { collectionName: COLLECTIONS.BILLS },
         bankAccounts: { collectionName: COLLECTIONS.BANK_ACCOUNTS },
         payrollRuns: { collectionName: COLLECTIONS.PAYROLL_RUNS, orderByField: "createdAt", orderDirection: "desc" },
         approvalRequests: { collectionName: COLLECTIONS.APPROVAL_REQUESTS },
-      });
+      }),
+      ]);
 
       const pendingApprovals = approvalRequests.filter((a) => readString(a, ["status"]) === "pending");
 
       return {
-        totalRevenue: invoices
-          .filter((i) => readString(i, ["status"]) === "paid")
-          .reduce((sum, i) => sum + readNumber(i, ["total", "amount"]), 0),
-        totalExpenses: expenses.reduce((sum, e) => sum + readNumber(e, ["amount", "total"]), 0),
-        cashBalance: bankAccounts.reduce((sum, a) => sum + readNumber(a, ["currentBalance", "current_balance"]), 0),
-        unpaidBills: bills
-          .filter((b) => readString(b, ["status"]) !== "paid")
-          .reduce((sum, b) => sum + readNumber(b, ["total", "amount"]), 0),
+        totalRevenue: liveMetrics.monthlyIncome,
+        totalExpenses: liveMetrics.monthlyExpenses,
+        cashBalance: liveMetrics.bankDefaultBalance,
+        unpaidBills: liveMetrics.outstandingAccountsPayable,
         pendingApprovals: pendingApprovals.length,
         pendingApprovalsAmount: pendingApprovals.reduce((sum, a) => sum + readNumber(a, ["amount"]), 0),
         expensesPendingApproval: expenses.filter((e) => readString(e, ["approvalStatus", "approval_status"]) === "pending").length,
         lastPayrollGross: payrollRuns[0] ? readNumber(payrollRuns[0], ["totalGross", "total_gross"]) : 0,
         lastPayrollNet: payrollRuns[0] ? readNumber(payrollRuns[0], ["totalNet", "total_net"]) : 0,
+        monthlyProfit: liveMetrics.monthlyProfit,
         bankAccounts,
-        vatCollected: invoices
-          .filter((i) => readString(i, ["status"]) === "paid")
-          .reduce((sum, i) => sum + readNumber(i, ["vatAmount", "vat_amount"]), 0),
       };
     },
   });
@@ -118,8 +115,8 @@ export function FinancialManagerDashboard() {
               </span>
             </div>
             <div className="flex justify-between">
-              <span className="text-muted-foreground">VAT Collected</span>
-              <span className="font-medium">{formatZMW(stats?.vatCollected || 0)}</span>
+              <span className="text-muted-foreground">Monthly Profit (GL)</span>
+              <span className="font-medium">{formatZMW(stats?.monthlyProfit || 0)}</span>
             </div>
           </CardContent>
         </Card>

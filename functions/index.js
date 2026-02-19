@@ -6,6 +6,9 @@ const { onDocumentCreated } = require("firebase-functions/v2/firestore");
 const { FieldValue } = require("firebase-admin/firestore");
 const ai = require("./ai");
 const notifications = require("./notifications");
+const accounting = require("./accounting");
+const payroll = require("./payroll");
+const accountingEngine = require("./accountingEngine");
 
 if (!admin.apps.length) {
   admin.initializeApp();
@@ -43,6 +46,17 @@ const JOURNAL_POSTING_ROLES = [
   "assistant_accountant",
 ];
 
+const COMMERCIAL_ROLES = [
+  "super_admin",
+  "admin",
+  "financial_manager",
+  "accountant",
+  "assistant_accountant",
+  "finance_officer",
+  "bookkeeper",
+  "cashier",
+];
+
 const PAYROLL_ROLES = ["super_admin", "admin", "hr_manager", "financial_manager", "accountant"];
 
 const ACCOUNT_TYPE_RANGES = {
@@ -55,20 +69,77 @@ const ACCOUNT_TYPE_RANGES = {
 
 const COA_TEMPLATES = {
   small_business: [
-    { code: 1001, name: "Cash on Hand", type: "Asset", description: "Cash held in register or petty cash" },
-    { code: 1002, name: "Bank Account", type: "Asset", description: "Primary business bank account" },
-    { code: 1101, name: "Accounts Receivable", type: "Asset", description: "Money owed by customers" },
-    { code: 1201, name: "Inventory", type: "Asset", description: "Value of goods held for sale" },
-    { code: 2001, name: "Accounts Payable", type: "Liability", description: "Outstanding bills to vendors" },
-    { code: 2101, name: "VAT Payable", type: "Liability", description: "Value Added Tax collected and due" },
-    { code: 3001, name: "Owner Capital", type: "Equity", description: "Capital invested by the owner" },
-    { code: 3101, name: "Retained Earnings", type: "Equity", description: "Profits reinvested in the business" },
-    { code: 4001, name: "Sales Revenue", type: "Income", description: "Income from product sales" },
-    { code: 4010, name: "Service Revenue", type: "Income", description: "Income from services rendered" },
-    { code: 5001, name: "Salaries Expense", type: "Expense", description: "Employee wages and salaries" },
-    { code: 5010, name: "Rent Expense", type: "Expense", description: "Office or building rent" },
-    { code: 5020, name: "Utilities Expense", type: "Expense", description: "Electricity, water, and heating" },
-    { code: 5030, name: "Transport Expense", type: "Expense", description: "Travel and vehicle expenses" },
+    // ASSETS (1000-1999)
+    { code: 1000, name: "Cash", type: "Asset", description: "Cash on hand - primary" },
+    { code: 1010, name: "Petty Cash", type: "Asset", description: "Small cash float for minor expenses" },
+    { code: 1020, name: "Bank Account - Operating", type: "Asset", description: "Main business checking account" },
+    { code: 1025, name: "Bank Account - Savings", type: "Asset", description: "Business savings account" },
+    { code: 1100, name: "Accounts Receivable", type: "Asset", description: "Money owed by customers" },
+    { code: 1200, name: "Inventory", type: "Asset", description: "Value of goods held for sale" },
+    { code: 1300, name: "Prepaid Expenses", type: "Asset", description: "Expenses paid in advance" },
+    { code: 1310, name: "Prepaid Rent", type: "Asset", description: "Rent paid in advance" },
+    { code: 1320, name: "Prepaid Insurance", type: "Asset", description: "Insurance premiums paid in advance" },
+    { code: 1400, name: "Fixed Assets - Equipment", type: "Asset", description: "Office and business equipment" },
+    { code: 1410, name: "Fixed Assets - Vehicles", type: "Asset", description: "Company vehicles" },
+    { code: 1420, name: "Fixed Assets - Furniture", type: "Asset", description: "Office furniture and fixtures" },
+    { code: 1450, name: "Accumulated Depreciation - Equipment", type: "Asset", description: "Accumulated depreciation on equipment" },
+    { code: 1460, name: "Accumulated Depreciation - Vehicles", type: "Asset", description: "Accumulated depreciation on vehicles" },
+
+    // LIABILITIES (2000-2999)
+    { code: 2000, name: "Accounts Payable", type: "Liability", description: "Outstanding bills to vendors" },
+    { code: 2100, name: "Salaries Payable", type: "Liability", description: "Unpaid employee salaries" },
+    { code: 2200, name: "Tax Payable - VAT", type: "Liability", description: "Value Added Tax collected and due" },
+    { code: 2210, name: "Tax Payable - PAYE", type: "Liability", description: "Pay As You Earn tax withholding" },
+    { code: 2220, name: "Tax Payable - NAPSA", type: "Liability", description: "National Pension Scheme contributions" },
+    { code: 2230, name: "Tax Payable - NHIMA", type: "Liability", description: "Health insurance contributions" },
+    { code: 2300, name: "Loans Payable - Short Term", type: "Liability", description: "Short-term loans and credit" },
+    { code: 2310, name: "Loans Payable - Long Term", type: "Liability", description: "Long-term business loans" },
+    { code: 2400, name: "Customer Deposits", type: "Liability", description: "Advance payments from customers" },
+    { code: 2500, name: "Accrued Expenses", type: "Liability", description: "Expenses incurred but not yet paid" },
+
+    // EQUITY (3000-3999)
+    { code: 3000, name: "Owner's Capital", type: "Equity", description: "Capital invested by the owner" },
+    { code: 3100, name: "Retained Earnings", type: "Equity", description: "Accumulated profits" },
+    { code: 3200, name: "Drawings", type: "Equity", description: "Owner withdrawals from business" },
+    { code: 3900, name: "Current Year Earnings", type: "Equity", description: "Profits for the current year" },
+
+    // INCOME (4000-4999)
+    { code: 4000, name: "Sales Revenue", type: "Income", description: "Income from product sales" },
+    { code: 4100, name: "Service Revenue", type: "Income", description: "Income from services rendered" },
+    { code: 4200, name: "Interest Income", type: "Income", description: "Interest earned on savings/investments" },
+    { code: 4300, name: "Other Income", type: "Income", description: "Miscellaneous income" },
+    { code: 4400, name: "Rental Income", type: "Income", description: "Income from property rentals" },
+
+    // EXPENSES (5000-5999)
+    { code: 5000, name: "Salaries Expense", type: "Expense", description: "Employee wages and salaries" },
+    { code: 5010, name: "PAYE Expense", type: "Expense", description: "Employer PAYE contributions" },
+    { code: 5020, name: "NAPSA Expense", type: "Expense", description: "Employer pension contributions" },
+    { code: 5030, name: "NHIMA Expense", type: "Expense", description: "Employer health insurance contributions" },
+    { code: 5100, name: "Rent Expense", type: "Expense", description: "Office or building rent" },
+    { code: 5110, name: "Utilities - Electricity", type: "Expense", description: "Electricity bills" },
+    { code: 5120, name: "Utilities - Water", type: "Expense", description: "Water bills" },
+    { code: 5130, name: "Utilities - Internet", type: "Expense", description: "Internet and telecommunications" },
+    { code: 5200, name: "Fuel Expense", type: "Expense", description: "Vehicle fuel costs" },
+    { code: 5210, name: "Vehicle Maintenance", type: "Expense", description: "Vehicle repairs and servicing" },
+    { code: 5300, name: "Office Supplies", type: "Expense", description: "General office supplies" },
+    { code: 5310, name: "Stationery", type: "Expense", description: "Paper, pens, and stationery" },
+    { code: 5400, name: "Professional Services", type: "Expense", description: "Consultants and professional fees" },
+    { code: 5410, name: "Legal Fees", type: "Expense", description: "Attorney and legal costs" },
+    { code: 5420, name: "Accounting Fees", type: "Expense", description: "Accountant and audit fees" },
+    { code: 5500, name: "Marketing & Advertising", type: "Expense", description: "Promotional and advertising costs" },
+    { code: 5600, name: "Travel Expense", type: "Expense", description: "Business travel costs" },
+    { code: 5610, name: "Meals & Entertainment", type: "Expense", description: "Client meals and entertainment" },
+    { code: 5700, name: "Insurance Expense", type: "Expense", description: "Business insurance premiums" },
+    { code: 5800, name: "Bank Charges", type: "Expense", description: "Bank fees and charges" },
+    { code: 5810, name: "Interest Expense", type: "Expense", description: "Interest on loans and credit" },
+    { code: 5900, name: "Depreciation Expense", type: "Expense", description: "Depreciation of fixed assets" },
+    { code: 5910, name: "Bad Debt Expense", type: "Expense", description: "Uncollectible customer accounts" },
+    { code: 5920, name: "Repairs & Maintenance", type: "Expense", description: "General repairs and upkeep" },
+    { code: 5930, name: "Training & Development", type: "Expense", description: "Employee training costs" },
+    { code: 5940, name: "Licenses & Permits", type: "Expense", description: "Business licenses and permits" },
+    { code: 5950, name: "Security Services", type: "Expense", description: "Security guard and alarm costs" },
+    { code: 5960, name: "Cleaning Services", type: "Expense", description: "Janitorial and cleaning expenses" },
+    { code: 5999, name: "Miscellaneous Expense", type: "Expense", description: "Other uncategorized expenses" },
   ],
   ngo: [
     { code: 1001, name: "Cash on Hand", type: "Asset", description: "Petty cash for daily operations" },
@@ -454,37 +525,61 @@ exports.createInvitation = onCall(async (request) => {
   const role = payload.role;
   const inviteeName = (payload.inviteeName || "").trim() || null;
   const loginUrl = (payload.loginUrl || "").trim();
-  const expiryHours = Number(payload.expiryHours || 72);
 
   if (!inviteeEmail) {
     throw new HttpsError("invalid-argument", "Invitee email is required.");
   }
   assertValidRole(role);
-  if (!loginUrl) {
-    throw new HttpsError("invalid-argument", "loginUrl is required.");
-  }
 
   const companyId = payload.companyId || (await pickPrimaryMembership(uid)).companyId;
   await assertCompanyRole(uid, companyId, ["super_admin", "admin"]);
 
+  let appBaseUrl = String(process.env.APP_URL || "").trim();
+  if (loginUrl) {
+    try {
+      const parsed = new URL(loginUrl);
+      appBaseUrl = `${parsed.protocol}//${parsed.host}`;
+    } catch {
+      throw new HttpsError("invalid-argument", "loginUrl must be a valid URL.");
+    }
+  }
+
+  if (!appBaseUrl) {
+    throw new HttpsError("failed-precondition", "APP_URL is not configured and loginUrl was not provided.");
+  }
+
   const token = crypto.randomBytes(32).toString("hex");
   const tokenHash = hashToken(token);
-  const expiresAtDate = new Date(Date.now() + Math.max(expiryHours, 1) * 60 * 60 * 1000);
+  const expiresAtDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+  const inviteLink = `${appBaseUrl}/accept-invitation?token=${token}`;
 
-  const invitationRef = db.collection("invitations").doc();
+  const existingInvitationSnap = await db
+    .collection("invitations")
+    .where("companyId", "==", companyId)
+    .where("emailLower", "==", inviteeEmail)
+    .where("status", "==", "pending")
+    .limit(1)
+    .get();
+
+  const invitationRef = existingInvitationSnap.empty
+    ? db.collection("invitations").doc()
+    : existingInvitationSnap.docs[0].ref;
+
   await invitationRef.set({
     companyId,
     emailLower: inviteeEmail,
     role,
     inviteeName,
-    loginUrl,
+    inviteLink,
     tokenHash,
     status: "pending",
     invitedByUid: uid,
-    createdAt: FieldValue.serverTimestamp(),
+    createdAt: existingInvitationSnap.empty
+      ? FieldValue.serverTimestamp()
+      : existingInvitationSnap.docs[0].data().createdAt || FieldValue.serverTimestamp(),
     updatedAt: FieldValue.serverTimestamp(),
     expiresAt: admin.firestore.Timestamp.fromDate(expiresAtDate),
-  });
+  }, { merge: true });
 
   await createAuditLog(companyId, uid, "invitation_created", {
     invitationId: invitationRef.id,
@@ -492,7 +587,83 @@ exports.createInvitation = onCall(async (request) => {
     role,
   });
 
+  const companySnap = await db.collection("companies").doc(companyId).get();
+  const companyName = companySnap.exists ? companySnap.data().name || "your organization" : "your organization";
+  let emailResult = { success: false };
+  try {
+    emailResult = await notifications.sendEmailInternal({
+      to: inviteeEmail,
+      subject: `You've been invited to join ${companyName}`,
+      html: `
+        <p>You have been invited to join <strong>${companyName}</strong>.</p>
+        <p>Click the link below to accept your invitation:</p>
+        <p><a href="${inviteLink}">${inviteLink}</a></p>
+        <p>This invitation expires in 7 days.</p>
+      `,
+    });
+  } catch (error) {
+    console.error("Failed to send invitation email:", error);
+  }
 
+  return {
+    success: true,
+    invitationId: invitationRef.id,
+    token,
+    inviteLink,
+    emailSent: Boolean(emailResult && emailResult.success),
+  };
+});
+
+exports.getInvitationByToken = onCall(async (request) => {
+  const payload = request.data || {};
+  const token = String(payload.token || "").trim();
+  if (!token) {
+    throw new HttpsError("invalid-argument", "Invitation token is required.");
+  }
+
+  const tokenHash = hashToken(token);
+  const invitationSnap = await db
+    .collection("invitations")
+    .where("tokenHash", "==", tokenHash)
+    .where("status", "==", "pending")
+    .limit(1)
+    .get();
+
+  if (invitationSnap.empty) {
+    throw new HttpsError("not-found", "Invitation is invalid or already used.");
+  }
+
+  const invitationDoc = invitationSnap.docs[0];
+  const invitation = invitationDoc.data();
+  if (invitation.expiresAt && invitation.expiresAt.toDate() < new Date()) {
+    throw new HttpsError("deadline-exceeded", "Invitation has expired.");
+  }
+
+  const companySnap = await db.collection("companies").doc(invitation.companyId).get();
+  const companyName = companySnap.exists ? companySnap.data().name || null : null;
+
+  let userExists = false;
+  if (invitation.emailLower) {
+    try {
+      await admin.auth().getUserByEmail(invitation.emailLower);
+      userExists = true;
+    } catch (error) {
+      if (error.code !== "auth/user-not-found") {
+        console.warn("Unable to check invite user existence:", error.message || error);
+      }
+    }
+  }
+
+  return {
+    invitationId: invitationDoc.id,
+    companyId: invitation.companyId,
+    companyName,
+    email: invitation.emailLower || null,
+    role: invitation.role || "member",
+    expiresAt: invitation.expiresAt ? invitation.expiresAt.toDate().toISOString() : null,
+    userExists,
+    status: invitation.status || "pending",
+  };
 });
 
 exports.acceptInvitation = onCall(async (request) => {
@@ -773,12 +944,22 @@ exports.createPayrollDraft = onCall(async (request) => {
 
   await assertCompanyRole(uid, companyId, PAYROLL_ROLES);
 
+  // Validate dates - provide defaults if missing or invalid
+  const periodStart = payload.periodStart ? formatDateOnly(payload.periodStart) : formatDateOnly(new Date());
+  const periodEnd = payload.periodEnd ? formatDateOnly(payload.periodEnd) : formatDateOnly(new Date());
+  const runDate = payload.runDate ? formatDateOnly(payload.runDate) : formatDateOnly(new Date());
+
+  // Validate date logic
+  if (periodStart > periodEnd) {
+    throw new HttpsError("invalid-argument", "Period start date must be before or equal to period end date.");
+  }
+
   const payrollRef = db.collection("payrollRuns").doc();
   await payrollRef.set({
     companyId,
-    periodStart: formatDateOnly(payload.periodStart),
-    periodEnd: formatDateOnly(payload.periodEnd),
-    runDate: formatDateOnly(payload.runDate),
+    periodStart,
+    periodEnd,
+    runDate,
     notes: payload.notes || null,
     payrollStatus: "draft",
     totalGross: normalizeMoney(payload.totalGross || 0),
@@ -791,6 +972,74 @@ exports.createPayrollDraft = onCall(async (request) => {
 
   await createAuditLog(companyId, uid, "payroll_draft_created", { payrollRunId: payrollRef.id });
   return { payrollRunId: payrollRef.id };
+});
+
+// Seed Expense Categories - Map categories to GL accounts
+exports.seedExpenseCategories = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = payload.companyId;
+
+  if (!companyId || typeof companyId !== "string") {
+    throw new HttpsError("invalid-argument", "companyId is required.");
+  }
+
+  await assertCompanyRole(uid, companyId, ["super_admin", "admin"]);
+
+  // Default expense categories matching those in frontend
+  const defaultCategories = [
+    "Office Supplies",
+    "Travel",
+    "Meals & Entertainment",
+    "Utilities",
+    "Rent",
+    "Professional Services",
+    "Marketing",
+    "Equipment",
+    "Software & Subscriptions",
+    "Training",
+    "Insurance",
+    "Maintenance",
+    "Other",
+  ];
+
+  const batch = db.batch();
+
+  for (const categoryName of defaultCategories) {
+    // Find or use default expense account
+    // For simplicity, we'll use a generic Expense account
+    // In production, you'd want specific accounts for each category
+    const accountsSnap = await db.collection("chartOfAccounts")
+      .where("companyId", "==", companyId)
+      .where("accountType", "==", "Expense")
+      .where("status", "==", "active")
+      .limit(1)
+      .get();
+
+    if (accountsSnap.empty) {
+      throw new HttpsError("failed-precondition", "No active Expense accounts found. Please create Chart of Accounts first.");
+    }
+
+    const accountId = accountsSnap.docs[0].id;
+
+    const mappingRef = db.collection("expenseCategoryMappings").doc();
+    batch.set(mappingRef, {
+      companyId,
+      categoryName,
+      accountId,
+      createdBy: uid,
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+  }
+
+  await batch.commit();
+
+  await createAuditLog(companyId, uid, "expense_categories_seeded", {
+    categoriesCount: defaultCategories.length,
+  });
+
+  return { success: true, categoriesSeeded: defaultCategories.length };
 });
 
 exports.runPayrollTrial = onCall(async (request) => {
@@ -1270,47 +1519,17 @@ exports.updateUserRole = onCall(async (request) => {
   return { success: true };
 });
 
-exports.removeCompanyUser = onCall(async (request) => {
+// Payroll Processing Cloud Functions
+exports.processPayroll = onCall(async (request) => {
   const uid = assertAuthenticated(request);
-  const payload = request.data || {};
-  const targetUserId = payload.userId;
-  const companyId = payload.companyId;
+  const { payrollRunId } = request.data || {};
+  return payroll.processPayroll(db, uid, payrollRunId, assertCompanyRole, createAuditLog);
+});
 
-  if (!targetUserId || !companyId) {
-    throw new HttpsError("invalid-argument", "userId and companyId are required.");
-  }
-
-  // requester must be admin or super_admin
-  await assertCompanyRole(uid, companyId, ["super_admin", "admin"]);
-
-  if (uid === targetUserId) {
-    throw new HttpsError("failed-precondition", "Cannot remove yourself from the company.");
-  }
-
-  const membershipRef = db.collection("companyUsers").doc(membershipDocId(companyId, targetUserId));
-  const membershipSnap = await membershipRef.get();
-
-  if (!membershipSnap.exists) {
-    throw new HttpsError("not-found", "User is not a member of this company.");
-  }
-
-  // Soft delete by setting status to 'removed' or 'suspended'
-  // checking types.ts, status can be "active" | "invited" | "suspended"
-  // Let's use "suspended" for now as 'removed' isn't in the type definition yet, 
-  // or we can just delete the doc. Blueprint says "membership, role, status". 
-  // Let's delete the doc to actually remove them, or set to suspended.
-  // Given "removeUserFromCompany" implies removal, let's delete the membership doc 
-  // BUT we typically want to keep history. Let's set status to 'suspended' for now 
-  // as it is a valid status in our types. Or wait, let's essentially 'delete' access.
-  // If we delete the doc, they lose access.
-
-  await membershipRef.delete();
-
-  await createAuditLog(companyId, uid, "user_removed_from_company", {
-    targetUserId,
-  });
-
-  return { success: true };
+exports.payPayroll = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const { payrollRunId, bankAccountId, paymentDate } = request.data || {};
+  return payroll.payPayroll(db, uid, payrollRunId, bankAccountId, paymentDate, assertCompanyRole, createAuditLog);
 });
 // Export AI Functions
 exports.askDeepSeek = ai.askDeepSeek;
@@ -1322,33 +1541,323 @@ exports.sendEmail = notifications.sendEmail;
 // Export ZRA Functions
 exports.signInvoice = require("./zra").signInvoice;
 
+// Export Accounting Functions
+exports.postBillPaymentToGL = onCall(accounting.postBillPaymentToGL);
+exports.postInvoicePaymentToGL = onCall(accounting.postInvoicePaymentToGL);
+
+// Export Reporting Functions
+exports.getExpenseReport = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const { companyId, startDate, endDate } = request.data || {};
+  if (!companyId) throw new HttpsError("invalid-argument", "companyId is required");
+  return accounting.getExpenseReport(companyId, uid, startDate, endDate, assertCompanyRole);
+});
+
+exports.getGeneralLedger = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const { companyId, accountId, startDate, endDate } = request.data || {};
+  if (!companyId) throw new HttpsError("invalid-argument", "companyId is required");
+  return accounting.getGeneralLedger(companyId, uid, accountId, startDate, endDate, assertCompanyRole);
+});
+
+exports.getCashFlowData = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const { companyId, startDate, endDate } = request.data || {};
+  if (!companyId) throw new HttpsError("invalid-argument", "companyId is required");
+  return accounting.getCashFlowData(companyId, uid, startDate, endDate, assertCompanyRole);
+});
+
 // Export AI Functions
 exports.askDeepSeek = ai.askDeepSeek;
 exports.analyzeTransactionAnomaly = ai.analyzeTransactionAnomaly;
 
 // Firestore Triggers
-/**
- * When an invitation is created, send the email automatically.
- */
-exports.onInvitationCreated = onDocumentCreated("invitations/{invitationId}", async (event) => {
-  const snapshot = event.data;
-  if (!snapshot) return;
+// Note: onInvitationCreated function removed due to Firebase deployment constraint.
+// Firebase does not allow changing a function from HTTPS callable to Firestore trigger.
+// Email notifications for new invitations should be handled client-side or via sendEmail callable.
 
-  const invitation = snapshot.data();
-  const invitationId = event.params.invitationId;
-  const loginUrl = invitation.loginUrl;
-  const token = invitation.token || ""; // Note: In createInvitation we only store tokenHash, we need to pass the raw token differently or email immediately upon creation.
+const resolveCompanyIdFromPayload = async (uid, payload = {}) => {
+  if (payload.companyId && typeof payload.companyId === "string") {
+    return payload.companyId;
+  }
+  if (payload.organizationId && typeof payload.organizationId === "string") {
+    return payload.organizationId;
+  }
+  const membership = await pickPrimaryMembership(uid);
+  return membership.companyId;
+};
 
-  // Wait! In 'createInvitation', we only stored tokenHash for security. 
-  // The raw token is returned to the client. The client should probably call 'sendEmail' 
-  // OR we should change createInvitation to send the email directly before hashing?
-  // Use the callable 'sendEmail' approach from the client for now to ensure the raw token is available.
+const assertCompanyMembership = async (uid, companyId) => {
+  await getMembership(uid, companyId);
+  return companyId;
+};
 
-  // Actually, let's keep it simple: The `createInvitation` callable returns the link.
-  // The Frontend displays it or offers to "Send Email". 
-  // But to be "Advanced", let's allow the backend to send it if provided.
-  // We'll update createInvitation to take an "sendEmail: true" flag.
+// Canonical accounting engine callables (override legacy handlers)
+exports.seedDefaultChartOfAccounts = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = await resolveCompanyIdFromPayload(uid, payload);
+  await assertCompanyRole(uid, companyId, ["super_admin", "admin"]);
+  return accountingEngine.seedDefaultChartOfAccounts({ companyId, userId: uid, db });
 });
 
-// Re-export createInvitation to handle email sending if requested?
-// For now, let's just export the basic callables.
+exports.seedDefaultExpenseCategories = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = await resolveCompanyIdFromPayload(uid, payload);
+  await assertCompanyRole(uid, companyId, ["super_admin", "admin"]);
+  return accountingEngine.seedDefaultExpenseCategories({ companyId, userId: uid, db });
+});
+
+// Backward-compatible alias
+exports.seedExpenseCategories = exports.seedDefaultExpenseCategories;
+
+exports.recordExpense = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = await resolveCompanyIdFromPayload(uid, payload);
+  await assertCompanyRole(uid, companyId, COMMERCIAL_ROLES);
+  return accountingEngine.recordExpense({
+    data: payload,
+    userId: uid,
+    companyId,
+    db,
+  });
+});
+
+exports.createBill = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = await resolveCompanyIdFromPayload(uid, payload);
+  await assertCompanyRole(uid, companyId, COMMERCIAL_ROLES);
+  return accountingEngine.createBill({
+    data: payload,
+    userId: uid,
+    companyId,
+    db,
+  });
+});
+
+exports.payBill = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = await resolveCompanyIdFromPayload(uid, payload);
+  await assertCompanyRole(uid, companyId, COMMERCIAL_ROLES);
+  return accountingEngine.payBill({
+    data: payload,
+    userId: uid,
+    companyId,
+    db,
+  });
+});
+
+exports.updateOverdueBills = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = await resolveCompanyIdFromPayload(uid, payload);
+  await assertCompanyRole(uid, companyId, COMMERCIAL_ROLES);
+  return accountingEngine.updateOverdueBills({ companyId, db });
+});
+
+exports.createInvoice = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = await resolveCompanyIdFromPayload(uid, payload);
+  await assertCompanyRole(uid, companyId, COMMERCIAL_ROLES);
+  return accountingEngine.createInvoice({
+    data: payload,
+    userId: uid,
+    companyId,
+    db,
+  });
+});
+
+exports.recordInvoicePayment = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = await resolveCompanyIdFromPayload(uid, payload);
+  await assertCompanyRole(uid, companyId, COMMERCIAL_ROLES);
+  return accountingEngine.recordInvoicePayment({
+    data: payload,
+    userId: uid,
+    companyId,
+    db,
+  });
+});
+
+exports.createQuotation = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = await resolveCompanyIdFromPayload(uid, payload);
+  await assertCompanyRole(uid, companyId, COMMERCIAL_ROLES);
+  return accountingEngine.createQuotation({
+    data: payload,
+    userId: uid,
+    companyId,
+    db,
+  });
+});
+
+exports.reverseJournalEntry = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = await resolveCompanyIdFromPayload(uid, payload);
+  await assertCompanyRole(uid, companyId, JOURNAL_POSTING_ROLES);
+  const result = await accountingEngine.reverseJournalEntry({
+    data: payload,
+    userId: uid,
+    companyId,
+    db,
+  });
+  await createAuditLog(companyId, uid, "journal_entry_reversed", result);
+  return result;
+});
+
+exports.deleteChartOfAccount = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = await resolveCompanyIdFromPayload(uid, payload);
+  await assertCompanyRole(uid, companyId, ["super_admin", "admin"]);
+  const result = await accountingEngine.deleteChartOfAccount({
+    data: payload,
+    companyId,
+    db,
+  });
+  await createAuditLog(companyId, uid, "chart_of_account_deleted", {
+    accountId: payload.accountId,
+  });
+  return result;
+});
+
+// Canonical payroll handlers (draft does not post GL; process does)
+exports.createPayrollDraft = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = await resolveCompanyIdFromPayload(uid, payload);
+  await assertCompanyRole(uid, companyId, PAYROLL_ROLES);
+  return payroll.savePayrollDraft(
+    db,
+    uid,
+    { ...payload, companyId },
+    assertCompanyRole,
+    createAuditLog,
+  );
+});
+
+exports.processPayroll = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const payrollRunId = String(payload.payrollRunId || payload.payroll_run_id || "");
+  return payroll.processPayroll(db, uid, payrollRunId, assertCompanyRole, createAuditLog);
+});
+
+exports.payPayroll = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const payrollRunId = String(payload.payrollRunId || payload.payroll_run_id || "");
+  const paymentAccountId = String(payload.paymentAccountId || payload.bankAccountId || "");
+  const paymentDate = payload.paymentDate || payload.payment_date || null;
+  return payroll.paySalaries(
+    db,
+    uid,
+    payrollRunId,
+    paymentAccountId,
+    paymentDate,
+    assertCompanyRole,
+    createAuditLog,
+  );
+});
+
+// Backward-compatible alias for existing UI action naming.
+exports.finalizePayroll = exports.processPayroll;
+
+// Journal-only reporting and dashboard metrics
+exports.getProfitLossReport = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = await resolveCompanyIdFromPayload(uid, payload);
+  await assertCompanyMembership(uid, companyId);
+  return accountingEngine.getProfitLossReport({
+    companyId,
+    startDate: payload.startDate,
+    endDate: payload.endDate,
+    db,
+  });
+});
+
+exports.getBalanceSheetReport = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = await resolveCompanyIdFromPayload(uid, payload);
+  await assertCompanyMembership(uid, companyId);
+  return accountingEngine.getBalanceSheetReport({
+    companyId,
+    asOfDate: payload.asOfDate,
+    db,
+  });
+});
+
+exports.getTrialBalanceReport = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = await resolveCompanyIdFromPayload(uid, payload);
+  await assertCompanyMembership(uid, companyId);
+  return accountingEngine.getTrialBalanceReport({
+    companyId,
+    startDate: payload.startDate || null,
+    endDate: payload.endDate || null,
+    db,
+  });
+});
+
+exports.getGeneralLedgerReport = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = await resolveCompanyIdFromPayload(uid, payload);
+  await assertCompanyMembership(uid, companyId);
+  return accountingEngine.getGeneralLedgerReport({
+    companyId,
+    accountId: payload.accountId,
+    startDate: payload.startDate,
+    endDate: payload.endDate,
+    db,
+  });
+});
+
+exports.getCashFlowReport = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = await resolveCompanyIdFromPayload(uid, payload);
+  await assertCompanyMembership(uid, companyId);
+  return accountingEngine.getCashFlowReport({
+    companyId,
+    startDate: payload.startDate,
+    endDate: payload.endDate,
+    db,
+  });
+});
+
+exports.getExpenseReport = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = await resolveCompanyIdFromPayload(uid, payload);
+  await assertCompanyMembership(uid, companyId);
+  return accountingEngine.getExpenseReport({
+    companyId,
+    startDate: payload.startDate,
+    endDate: payload.endDate,
+    db,
+  });
+});
+
+// Backward-compatible aliases
+exports.getGeneralLedger = exports.getGeneralLedgerReport;
+exports.getCashFlowData = exports.getCashFlowReport;
+
+exports.getDashboardLiveMetrics = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = await resolveCompanyIdFromPayload(uid, payload);
+  await assertCompanyMembership(uid, companyId);
+  return accountingEngine.getDashboardLiveMetrics({ companyId, db });
+});

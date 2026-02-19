@@ -28,7 +28,15 @@ service cloud.firestore {
     function canManageAccounting(companyId) {
       return hasRole(
         companyId,
-        ["super_admin", "admin", "financial_manager", "accountant", "assistant_accountant"],
+        [
+          "super_admin",
+          "admin",
+          "financial_manager",
+          "accountant",
+          "assistant_accountant",
+          "finance_officer",
+          "bookkeeper",
+        ],
       );
     }
 
@@ -73,6 +81,7 @@ service cloud.firestore {
           "assistant_accountant",
           "inventory_manager",
           "bookkeeper",
+          "cashier",
         ],
       );
     }
@@ -141,8 +150,16 @@ service cloud.firestore {
       allow update: if canManageAccounting(resource.data.companyId)
         && request.resource.data.companyId == resource.data.companyId
         && request.resource.data.accountCode is int
-        && validAccountRange(request.resource.data.accountType, request.resource.data.accountCode);
-      allow delete: if canManageCompany(resource.data.companyId);
+        && validAccountRange(request.resource.data.accountType, request.resource.data.accountCode)
+        && (
+          resource.data.isSystemAccount != true
+          || (
+            request.resource.data.accountCode == resource.data.accountCode
+            && request.resource.data.accountName == resource.data.accountName
+            && request.resource.data.accountType == resource.data.accountType
+          )
+        );
+      allow delete: if false;
     }
 
     match /journalEntries/{entryId} {
@@ -187,7 +204,7 @@ service cloud.firestore {
       allow create: if canManageCommercial(request.resource.data.companyId);
       allow update: if canManageCommercial(resource.data.companyId)
         && request.resource.data.companyId == resource.data.companyId;
-      allow delete: if canManageCompany(resource.data.companyId);
+      allow delete: if false;
     }
 
     match /bills/{docId} {
@@ -195,7 +212,7 @@ service cloud.firestore {
       allow create: if canManageCommercial(request.resource.data.companyId);
       allow update: if canManageCommercial(resource.data.companyId)
         && request.resource.data.companyId == resource.data.companyId;
-      allow delete: if canManageCompany(resource.data.companyId);
+      allow delete: if false;
     }
 
     match /expenses/{docId} {
@@ -203,7 +220,7 @@ service cloud.firestore {
       allow create: if canManageCommercial(request.resource.data.companyId);
       allow update: if canManageCommercial(resource.data.companyId)
         && request.resource.data.companyId == resource.data.companyId;
-      allow delete: if canManageCompany(resource.data.companyId);
+      allow delete: if false;
     }
 
     match /customers/{docId} {
@@ -243,7 +260,7 @@ service cloud.firestore {
       allow create: if canManagePayroll(request.resource.data.companyId);
       allow update: if canManagePayroll(resource.data.companyId)
         && request.resource.data.companyId == resource.data.companyId;
-      allow delete: if canManageCompany(resource.data.companyId);
+      allow delete: if false;
     }
 
     match /payrollItems/{docId} {
@@ -427,6 +444,44 @@ service cloud.firestore {
     match /notifications/{docId} {
       allow read: if isCompanyMember(resource.data.companyId);
       allow create, update, delete: if false;
+    }
+
+    match /invoiceItems/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create: if canManageCommercial(request.resource.data.companyId);
+      allow update: if canManageCommercial(resource.data.companyId)
+        && request.resource.data.companyId == resource.data.companyId;
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /billItems/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create: if canManageCommercial(request.resource.data.companyId);
+      allow update: if canManageCommercial(resource.data.companyId)
+        && request.resource.data.companyId == resource.data.companyId;
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /expenseCategoryMappings/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create, update: if canManageAccounting(request.resource.data.companyId);
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /billPayments/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create: if canManageCommercial(request.resource.data.companyId);
+      allow update: if canManageCommercial(resource.data.companyId)
+        && request.resource.data.companyId == resource.data.companyId;
+      allow delete: if canManageCompany(resource.data.companyId);
+    }
+
+    match /invoicePayments/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create: if canManageCommercial(request.resource.data.companyId);
+      allow update: if canManageCommercial(resource.data.companyId)
+        && request.resource.data.companyId == resource.data.companyId;
+      allow delete: if canManageCompany(resource.data.companyId);
     }
 
     match /{document=**} {

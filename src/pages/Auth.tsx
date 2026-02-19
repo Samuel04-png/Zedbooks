@@ -69,6 +69,7 @@ export default function Auth() {
 
     // Clean up URL
     const url = new URL(window.location.href);
+    url.searchParams.delete("token");
     url.searchParams.delete("invite");
     window.history.replaceState({}, "", url.toString());
     setInviteToken(null);
@@ -78,7 +79,8 @@ export default function Auth() {
     const searchParams = new URLSearchParams(window.location.search);
     const mode = searchParams.get("mode");
     const oobCode = searchParams.get("oobCode");
-    const tokenFromUrl = searchParams.get("invite");
+    const tokenFromUrl = searchParams.get("token") || searchParams.get("invite");
+    const requestedView = searchParams.get("view");
 
     // Persist token if found in URL
     if (tokenFromUrl) {
@@ -148,6 +150,11 @@ export default function Auth() {
         }
         await checkCompanySetupAndRedirect(currentUser.uid);
       } else if (mounted) {
+        if (requestedView === "signup") {
+          setAuthView("signup");
+        } else if (requestedView === "login") {
+          setAuthView("login");
+        }
         setIsCheckingAuth(false);
       }
     };

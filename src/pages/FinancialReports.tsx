@@ -91,7 +91,7 @@ const formatCurrency = (amount: number) => {
 
 const toCSVValue = (value: string | number | boolean | null | undefined) => {
   if (value === null || value === undefined) return "";
-  return String(value).replaceAll('"', '""');
+  return String(value).replace(/"/g, '""');
 };
 
 const downloadCSV = (
@@ -517,6 +517,33 @@ const FinancialReports = () => {
               </Button>
             </CardHeader>
             <CardContent>
+              {/* Validation Badge */}
+              <div className="mb-4 flex items-center justify-between rounded-lg border p-3">
+                <div className="flex items-center gap-2">
+                  <span className="font-medium">Trial Balance Status:</span>
+                  {Math.abs(trialDebitTotal - trialCreditTotal) < 0.01 ? (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-3 py-1 text-sm font-semibold text-green-800">
+                      <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                      </svg>
+                      Balanced
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-3 py-1 text-sm font-semibold text-red-800">
+                      <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                      </svg>
+                      Out of Balance
+                    </span>
+                  )}
+                </div>
+                {Math.abs(trialDebitTotal - trialCreditTotal) >= 0.01 && (
+                  <div className="text-sm text-red-600 font-medium">
+                    Difference: {formatCurrency(Math.abs(trialDebitTotal - trialCreditTotal))}
+                  </div>
+                )}
+              </div>
+
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -600,7 +627,7 @@ const FinancialReports = () => {
           </Card>
         </TabsContent>
       </Tabs>
-    </div>
+    </div >
   );
 };
 

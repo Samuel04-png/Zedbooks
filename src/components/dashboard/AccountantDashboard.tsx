@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DollarSign, FileText, TrendingUp, TrendingDown, CreditCard, Building } from "lucide-react";
 import { formatZMW } from "@/utils/zambianTaxCalculations";
 import { useAuth } from "@/contexts/AuthContext";
-import { dashboardService } from "@/services/firebase";
+import { accountingService, dashboardService } from "@/services/firebase";
 import { COLLECTIONS } from "@/services/firebase/collectionNames";
 import { readNumber, readString } from "@/components/dashboard/dashboardDataUtils";
 
@@ -18,38 +18,33 @@ export function AccountantDashboard() {
         return {
           totalRevenue: 0,
           outstandingReceivables: 0,
-          vatCollected: 0,
           totalExpenses: 0,
-          unpaidBills: 0,
+          outstandingPayables: 0,
           cashBalance: 0,
           pendingInvoices: 0,
           bankAccounts: [] as Array<Record<string, unknown>>,
         };
       }
 
-      const { invoices, expenses, bills, bankAccounts } = await dashboardService.runQueries(user.id, {
+      const companyId = await dashboardService.getCompanyIdForUser(user.id);
+      const [liveMetrics, { invoices, bankAccounts }] = await Promise.all([
+        accountingService.getDashboardLiveMetrics({ companyId }),
+        dashboardService.runQueries(user.id, {
         invoices: { collectionName: COLLECTIONS.INVOICES },
-        expenses: { collectionName: COLLECTIONS.EXPENSES },
-        bills: { collectionName: COLLECTIONS.BILLS },
         bankAccounts: { collectionName: COLLECTIONS.BANK_ACCOUNTS },
-      });
+      }),
+      ]);
 
       return {
-        totalRevenue: invoices
-          .filter((i) => readString(i, ["status"]) === "paid")
-          .reduce((sum, i) => sum + readNumber(i, ["total", "grandTotal", "amount"]), 0),
-        outstandingReceivables: invoices
-          .filter((i) => readString(i, ["status"]) !== "paid")
-          .reduce((sum, i) => sum + readNumber(i, ["total", "grandTotal", "amount"]), 0),
-        vatCollected: invoices
-          .filter((i) => readString(i, ["status"]) === "paid")
-          .reduce((sum, i) => sum + readNumber(i, ["vatAmount", "vat_amount"]), 0),
-        totalExpenses: expenses.reduce((sum, e) => sum + readNumber(e, ["amount", "total"]), 0),
-        unpaidBills: bills
-          .filter((b) => readString(b, ["status"]) !== "paid")
-          .reduce((sum, b) => sum + readNumber(b, ["total", "amount"]), 0),
-        cashBalance: bankAccounts.reduce((sum, a) => sum + readNumber(a, ["currentBalance", "current_balance"]), 0),
-        pendingInvoices: invoices.filter((i) => readString(i, ["status"]) === "pending").length,
+        totalRevenue: liveMetrics.monthlyIncome,
+        outstandingReceivables: liveMetrics.outstandingAccountsReceivable,
+        totalExpenses: liveMetrics.monthlyExpenses,
+        outstandingPayables: liveMetrics.outstandingAccountsPayable,
+        cashBalance: liveMetrics.bankDefaultBalance,
+        pendingInvoices: invoices.filter((i) => {
+          const status = readString(i, ["status"]).toLowerCase();
+          return !["paid", "cancelled", "rejected"].includes(status);
+        }).length,
         bankAccounts,
       };
     },
@@ -108,8 +103,8 @@ export function AccountantDashboard() {
               </span>
             </div>
             <div className="flex justify-between">
-              <span className="text-muted-foreground">VAT Collected</span>
-              <span className="font-medium">{formatZMW(stats?.vatCollected || 0)}</span>
+              <span className="text-muted-foreground">Outstanding Payables</span>
+              <span className="font-medium">{formatZMW(stats?.outstandingPayables || 0)}</span>
             </div>
           </CardContent>
         </Card>

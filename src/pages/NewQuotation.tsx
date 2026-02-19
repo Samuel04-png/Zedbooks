@@ -17,9 +17,9 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { useCompanySettings } from "@/hooks/useCompanySettings";
 import { useAuth } from "@/contexts/AuthContext";
-import { companyService } from "@/services/firebase";
+import { accountingService, companyService } from "@/services/firebase";
 import { COLLECTIONS } from "@/services/firebase/collectionNames";
-import { addDoc, collection, getDocs, query, serverTimestamp, where } from "firebase/firestore";
+import { collection, getDocs, query, where } from "firebase/firestore";
 import { firestore } from "@/integrations/firebase/client";
 
 interface QuoteLine {
@@ -129,23 +129,29 @@ export default function NewQuotation() {
         throw new Error("No company profile found for your account");
       }
 
-      await addDoc(collection(firestore, COLLECTIONS.SALES_ORDERS), {
+      const lineItems = lines
+        .filter((line) => line.description.trim().length > 0)
+        .map((line) => ({
+          description: line.description.trim(),
+          quantity: line.quantity,
+          unitPrice: line.rate,
+        }));
+
+      if (lineItems.length === 0) {
+        throw new Error("At least one quotation line item is required.");
+      }
+
+      await accountingService.createQuotation({
         companyId: membership.companyId,
-        userId: user.id,
-        customerId: selectedCustomer || null,
-        orderNumber: quoteNumber,
-        orderDate: quoteDate,
-        orderType: "quote",
-        subtotal,
-        vatAmount,
-        total,
-        status,
-        notes,
-        terms,
-        validUntil: validUntil || null,
-        lineItems: lines,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
+        customerId: selectedCustomer || undefined,
+        quotationNumber: quoteNumber,
+        quotationDate: quoteDate,
+        validUntil: validUntil || quoteDate,
+        status: status === "sent" ? "Sent" : "Draft",
+        notes: [notes, terms].filter(Boolean).join("\n\n") || undefined,
+        taxAmount: vatAmount,
+        totalAmount: total,
+        lineItems,
       });
     },
     onSuccess: (_, status) => {

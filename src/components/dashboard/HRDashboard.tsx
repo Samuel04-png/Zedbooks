@@ -68,9 +68,15 @@ export function HRDashboard() {
         contractEmployees: employees.filter((e) => readString(e, ["contractType", "contract_type"]) === "contract").length,
         departments: departments.size,
         monthlyPayroll: payrollRuns
-          .filter((p) => readString(p, ["status", "payrollStatus", "payroll_status"]) === "approved")
+          .filter((p) => {
+            const status = readString(p, ["status", "payrollStatus", "payroll_status"]).toLowerCase();
+            return ["processed", "paid", "approved", "final"].includes(status);
+          })
           .reduce((sum, p) => sum + readNumber(p, ["totalNet", "total_net"]), 0),
-        pendingPayroll: payrollRuns.filter((p) => readString(p, ["status", "payrollStatus", "payroll_status"]) === "pending").length,
+        pendingPayroll: payrollRuns.filter((p) => {
+          const status = readString(p, ["status", "payrollStatus", "payroll_status"]).toLowerCase();
+          return ["draft", "pending"].includes(status);
+        }).length,
         activeAdvances: advances.filter((a) => readString(a, ["status"]) === "active").length,
         totalAdvanceBalance: advances
           .filter((a) => readString(a, ["status"]) === "active")

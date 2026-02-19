@@ -9,6 +9,7 @@ import {
   type WhereFilterOp,
 } from "firebase/firestore";
 import { assertFirebaseConfigured, firestore } from "@/integrations/firebase/client";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
 import { companyService } from "@/services/firebase/companyService";
 
 export interface DashboardFilter {
@@ -28,6 +29,14 @@ export interface DashboardQueryRequest {
 type DashboardQueryMap = Record<string, DashboardQueryRequest>;
 type DashboardResultMap<T extends DashboardQueryMap> = {
   [K in keyof T]: Array<Record<string, unknown> & { id: string }>;
+};
+
+const ALLOWED_COLLECTIONS = new Set<string>(Object.values(COLLECTIONS));
+
+const assertAllowedCollectionName = (collectionName: string) => {
+  if (!ALLOWED_COLLECTIONS.has(collectionName)) {
+    throw new Error(`Dashboard query rejected for unknown collection: ${collectionName}`);
+  }
 };
 
 const buildQueryConstraints = (companyId: string, request: DashboardQueryRequest): QueryConstraint[] => {
@@ -52,6 +61,7 @@ const runDashboardQuery = async (
   companyId: string,
   request: DashboardQueryRequest,
 ): Promise<Array<Record<string, unknown> & { id: string }>> => {
+  assertAllowedCollectionName(request.collectionName);
   const constraints = buildQueryConstraints(companyId, request);
   const snapshot = await getDocs(query(collection(firestore, request.collectionName), ...constraints));
 

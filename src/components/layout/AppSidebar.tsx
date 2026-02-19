@@ -117,6 +117,7 @@ const navigation: NavSection[] = [
     items: [
       { title: "Chart of Accounts", icon: BookOpen, href: "/chart-of-accounts" },
       { title: "Journal Entries", icon: FileText, href: "/journal-entries" },
+      { title: "Opening Balances", icon: BookOpen, href: "/opening-balances" },
       { title: "Financial Periods", icon: Clock, href: "/financial-periods" },
     ],
   },
@@ -164,8 +165,6 @@ function filterNavigationByRole(navSections: NavSection[], role: AppRole | null)
     .filter((section) => section.items.length > 0);
 }
 
-import { useSidebar } from "@/components/ui/sidebar";
-import { useIsMobile } from "@/hooks/use-mobile";
 
 export function AppSidebar() {
   const location = useLocation();
@@ -245,9 +244,7 @@ export function AppSidebar() {
       </SidebarContent>
 
       <SidebarFooter className="border-t border-sidebar-border p-4">
-      </Link>
-      <UserMenu />
-    </div>
+        <UserMenu />
       </SidebarFooter >
     </Sidebar >
   );

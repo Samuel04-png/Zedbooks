@@ -3,9 +3,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { FileText, Receipt, TrendingDown, ClipboardList, BookOpen, CreditCard } from "lucide-react";
 import { formatZMW } from "@/utils/zambianTaxCalculations";
 import { useAuth } from "@/contexts/AuthContext";
-import { dashboardService } from "@/services/firebase";
+import { accountingService, dashboardService } from "@/services/firebase";
 import { COLLECTIONS } from "@/services/firebase/collectionNames";
-import { readBoolean, readNumber, readString } from "@/components/dashboard/dashboardDataUtils";
+import { readBoolean, readString } from "@/components/dashboard/dashboardDataUtils";
 
 export function AssistantAccountantDashboard() {
   const { user } = useAuth();
@@ -28,24 +28,39 @@ export function AssistantAccountantDashboard() {
         };
       }
 
-      const { invoices, expenses, bills, journalEntries, customers, vendors } = await dashboardService.runQueries(user.id, {
-        invoices: { collectionName: COLLECTIONS.INVOICES },
-        expenses: { collectionName: COLLECTIONS.EXPENSES },
-        bills: { collectionName: COLLECTIONS.BILLS },
-        journalEntries: { collectionName: COLLECTIONS.JOURNAL_ENTRIES },
-        customers: { collectionName: COLLECTIONS.CUSTOMERS },
-        vendors: { collectionName: COLLECTIONS.VENDORS },
-      });
+      const companyId = await dashboardService.getCompanyIdForUser(user.id);
+      const today = new Date();
+      const monthStart = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().slice(0, 10);
+      const monthEnd = today.toISOString().slice(0, 10);
+
+      const [liveMetrics, expenseReport, { invoices, bills, journalEntries, customers, vendors }] = await Promise.all([
+        accountingService.getDashboardLiveMetrics({ companyId }),
+        accountingService.getExpenseReport({
+          companyId,
+          startDate: monthStart,
+          endDate: monthEnd,
+        }),
+        dashboardService.runQueries(user.id, {
+          invoices: { collectionName: COLLECTIONS.INVOICES },
+          bills: { collectionName: COLLECTIONS.BILLS },
+          journalEntries: { collectionName: COLLECTIONS.JOURNAL_ENTRIES },
+          customers: { collectionName: COLLECTIONS.CUSTOMERS },
+          vendors: { collectionName: COLLECTIONS.VENDORS },
+        }),
+      ]);
+
+      const isInvoicePending = (status: string) => {
+        const normalized = status.toLowerCase();
+        return ["sent", "unpaid", "partially paid", "overdue", "pending"].includes(normalized);
+      };
 
       return {
-        draftInvoices: invoices.filter((i) => readString(i, ["status"]) === "draft").length,
-        pendingInvoices: invoices.filter((i) => readString(i, ["status"]) === "pending").length,
-        recentExpenses: expenses.length,
-        totalExpenses: expenses.reduce((sum, e) => sum + readNumber(e, ["amount", "total"]), 0),
-        unpaidBills: bills.filter((b) => readString(b, ["status"]) !== "paid").length,
-        unpaidBillsAmount: bills
-          .filter((b) => readString(b, ["status"]) !== "paid")
-          .reduce((sum, b) => sum + readNumber(b, ["total", "amount"]), 0),
+        draftInvoices: invoices.filter((i) => readString(i, ["status"]).toLowerCase() === "draft").length,
+        pendingInvoices: invoices.filter((i) => isInvoicePending(readString(i, ["status"]))).length,
+        recentExpenses: expenseReport.rows.length,
+        totalExpenses: liveMetrics.monthlyExpenses,
+        unpaidBills: bills.filter((b) => readString(b, ["status"]).toLowerCase() !== "paid").length,
+        unpaidBillsAmount: liveMetrics.outstandingAccountsPayable,
         unpostedJournals: journalEntries.filter((j) => !readBoolean(j, ["isPosted", "is_posted"])).length,
         totalCustomers: customers.length,
         totalVendors: vendors.length,

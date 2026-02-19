@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -13,16 +13,17 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Download, Upload, FileText, AlertCircle, CheckCircle, TrendingUp } from "lucide-react";
+import { Download, Upload, FileText, AlertCircle, CheckCircle, TrendingUp, RotateCcw } from "lucide-react";
 import { format, differenceInDays, isPast } from "date-fns";
 import { exportToCSV } from "@/utils/exportToExcel";
 import { ImportDialog } from "@/components/shared/ImportDialog";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
-import { companyService } from "@/services/firebase";
+import { accountingService, companyService } from "@/services/firebase";
 import { COLLECTIONS } from "@/services/firebase/collectionNames";
-import { addDoc, collection, documentId, getDocs, query, serverTimestamp, where } from "firebase/firestore";
+import { collection, documentId, getDocs, query, where } from "firebase/firestore";
 import { firestore } from "@/integrations/firebase/client";
+import { useUserRole } from "@/hooks/useUserRole";
 
 interface InvoiceRecord {
   id: string;
@@ -33,6 +34,18 @@ interface InvoiceRecord {
   status: string;
   customer_id: string | null;
   customers: { name: string } | null;
+}
+
+interface InvoicePaymentRecord {
+  id: string;
+  invoice_id: string | null;
+  invoice_number: string;
+  customer_name: string;
+  amount: number;
+  payment_date: string;
+  notes: string | null;
+  journal_entry_id: string | null;
+  is_reversed: boolean;
 }
 
 const chunk = <T,>(items: T[], size: number): T[][] => {
@@ -58,6 +71,8 @@ const toDateString = (value: unknown): string => {
 
 export default function AccountsReceivable() {
   const { user } = useAuth();
+  const { data: userRole } = useUserRole();
+  const queryClient = useQueryClient();
   const [startDate, setStartDate] = useState(() => {
     const date = new Date();
     date.setMonth(date.getMonth() - 3);
@@ -65,6 +80,13 @@ export default function AccountsReceivable() {
   });
   const [endDate, setEndDate] = useState(new Date().toISOString().split("T")[0]);
   const [showImportDialog, setShowImportDialog] = useState(false);
+  const canReversePostedEntries = [
+    "super_admin",
+    "admin",
+    "financial_manager",
+    "accountant",
+    "assistant_accountant",
+  ].includes(userRole || "");
 
   const { data: invoices = [], isLoading, refetch } = useQuery({
     queryKey: ["accounts-receivable", startDate, endDate, user?.id],
@@ -84,7 +106,7 @@ export default function AccountsReceivable() {
           const row = docSnap.data() as Record<string, unknown>;
           return {
             id: docSnap.id,
-            invoice_number: String(row.invoiceNumber ?? row.invoice_number ?? ""),
+            invoice_number: String(row.invoiceNumber ?? row.invoice_number ?? `INV-${docSnap.id.slice(0, 8).toUpperCase()}`),
             invoice_date: toDateString(row.invoiceDate ?? row.invoice_date),
             due_date: toDateString(row.dueDate ?? row.due_date) || null,
             total: Number(row.total ?? 0),
@@ -130,6 +152,136 @@ export default function AccountsReceivable() {
     enabled: Boolean(user),
   });
 
+  const { data: invoicePayments = [] } = useQuery({
+    queryKey: ["accounts-receivable-payments", startDate, endDate, user?.id],
+    queryFn: async () => {
+      if (!user) return [] as InvoicePaymentRecord[];
+
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      if (!membership?.companyId) return [] as InvoicePaymentRecord[];
+
+      const paymentsRef = collection(firestore, COLLECTIONS.INVOICE_PAYMENTS);
+      const paymentSnapshot = await getDocs(
+        query(paymentsRef, where("companyId", "==", membership.companyId)),
+      );
+
+      const payments = paymentSnapshot.docs
+        .map((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          return {
+            id: docSnap.id,
+            invoice_id: (row.invoiceId ?? row.invoice_id ?? null) as string | null,
+            amount: Number(row.amount ?? 0),
+            payment_date: toDateString(row.paymentDate ?? row.payment_date),
+            notes: (row.notes ?? null) as string | null,
+            journal_entry_id: (row.journalEntryId ?? row.journal_entry_id ?? null) as string | null,
+            is_reversed: Boolean(row.isReversed ?? row.is_reversed ?? false),
+          };
+        })
+        .filter((payment) => payment.payment_date >= startDate && payment.payment_date <= endDate);
+
+      const invoiceIds = Array.from(
+        new Set(payments.map((payment) => payment.invoice_id).filter(Boolean)),
+      ) as string[];
+
+      const invoiceById = new Map<string, { invoiceNumber: string; customerId: string | null }>();
+      if (invoiceIds.length > 0) {
+        const invoiceChunks = chunk(invoiceIds, 30);
+        const snapshots = await Promise.all(
+          invoiceChunks.map((ids) =>
+            getDocs(query(collection(firestore, COLLECTIONS.INVOICES), where(documentId(), "in", ids))),
+          ),
+        );
+
+        snapshots.forEach((snapshot) => {
+          snapshot.docs.forEach((docSnap) => {
+            const row = docSnap.data() as Record<string, unknown>;
+            invoiceById.set(docSnap.id, {
+              invoiceNumber: String(row.invoiceNumber ?? row.invoice_number ?? `INV-${docSnap.id.slice(0, 8).toUpperCase()}`),
+              customerId: (row.customerId ?? row.customer_id ?? null) as string | null,
+            });
+          });
+        });
+      }
+
+      const customerIds = Array.from(
+        new Set(
+          Array.from(invoiceById.values())
+            .map((invoice) => invoice.customerId)
+            .filter(Boolean),
+        ),
+      ) as string[];
+
+      const customerNameById = new Map<string, string>();
+      if (customerIds.length > 0) {
+        const customerChunks = chunk(customerIds, 30);
+        const snapshots = await Promise.all(
+          customerChunks.map((ids) =>
+            getDocs(query(collection(firestore, COLLECTIONS.CUSTOMERS), where(documentId(), "in", ids))),
+          ),
+        );
+
+        snapshots.forEach((snapshot) => {
+          snapshot.docs.forEach((docSnap) => {
+            const row = docSnap.data() as Record<string, unknown>;
+            customerNameById.set(docSnap.id, String(row.name ?? "-"));
+          });
+        });
+      }
+
+      return payments
+        .map((payment) => {
+          const invoice = payment.invoice_id ? invoiceById.get(payment.invoice_id) : null;
+          const customerName =
+            (invoice?.customerId && customerNameById.get(invoice.customerId)) || "-";
+          return {
+            id: payment.id,
+            invoice_id: payment.invoice_id,
+            invoice_number: invoice?.invoiceNumber || "-",
+            customer_name: customerName,
+            amount: payment.amount,
+            payment_date: payment.payment_date,
+            notes: payment.notes,
+            journal_entry_id: payment.journal_entry_id,
+            is_reversed: payment.is_reversed,
+          } satisfies InvoicePaymentRecord;
+        })
+        .sort((a, b) => b.payment_date.localeCompare(a.payment_date));
+    },
+    enabled: Boolean(user),
+  });
+
+  const reverseInvoicePaymentMutation = useMutation({
+    mutationFn: async (payment: InvoicePaymentRecord) => {
+      if (!user) throw new Error("Not authenticated");
+      if (!payment.journal_entry_id) {
+        throw new Error("Payment has no posted journal entry to reverse.");
+      }
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      if (!membership?.companyId) throw new Error("No company profile found for your account");
+      const reason = prompt(`Reason for reversing payment for ${payment.invoice_number} (optional):`) || undefined;
+      return accountingService.reverseJournalEntry({
+        companyId: membership.companyId,
+        journalEntryId: payment.journal_entry_id,
+        reason,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["accounts-receivable"] });
+      queryClient.invalidateQueries({ queryKey: ["accounts-receivable-payments"] });
+      queryClient.invalidateQueries({ queryKey: ["invoices"] });
+      queryClient.invalidateQueries({ queryKey: ["customers"] });
+      queryClient.invalidateQueries({ queryKey: ["bank-accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["journal-entries"] });
+      queryClient.invalidateQueries({ queryKey: ["financial-reports"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      toast.success("Invoice payment journal entry reversed");
+    },
+    onError: (error) => {
+      toast.error(`Failed to reverse payment: ${error.message}`);
+    },
+  });
+
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat("en-ZM", {
       style: "currency",
@@ -137,14 +289,14 @@ export default function AccountsReceivable() {
     }).format(amount);
   };
 
-  const unpaidInvoices = invoices.filter((i) => i.status !== "paid");
+  const unpaidInvoices = invoices.filter((i) => i.status.toLowerCase() !== "paid");
   const overdueInvoices = unpaidInvoices.filter((i) => i.due_date && isPast(new Date(i.due_date)));
   const dueSoon = unpaidInvoices.filter((i) => {
     if (!i.due_date) return false;
     const days = differenceInDays(new Date(i.due_date), new Date());
     return days >= 0 && days <= 7;
   });
-  const paidInvoices = invoices.filter((i) => i.status === "paid");
+  const paidInvoices = invoices.filter((i) => i.status.toLowerCase() === "paid");
 
   const totalReceivable = unpaidInvoices.reduce((sum, i) => sum + (i.total || 0), 0);
   const totalOverdue = overdueInvoices.reduce((sum, i) => sum + (i.total || 0), 0);
@@ -177,18 +329,25 @@ export default function AccountsReceivable() {
     if (!membership?.companyId) throw new Error("No company profile found for your account");
 
     for (const row of data) {
-      await addDoc(collection(firestore, COLLECTIONS.INVOICES), {
+      const invoiceDate = String(row.invoice_date || new Date().toISOString().slice(0, 10));
+      const dueDate = (row.due_date as string) || invoiceDate;
+      const amount = Number(row.amount) || 0;
+
+      await accountingService.createInvoice({
         companyId: membership.companyId,
-        userId: user.id,
-        invoiceNumber: String(row.invoice_number || ""),
-        invoiceDate: String(row.invoice_date || ""),
-        dueDate: (row.due_date as string) || null,
-        subtotal: Number(row.amount) || 0,
-        total: Number(row.amount) || 0,
-        notes: (row.notes as string) || null,
-        status: "sent",
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
+        invoiceNumber: String(row.invoice_number || "").trim() || undefined,
+        invoiceDate,
+        dueDate,
+        status: "Unpaid",
+        notes: (row.notes as string) || undefined,
+        totalAmount: amount,
+        lineItems: [
+          {
+            description: (row.notes as string) || "Imported invoice",
+            quantity: 1,
+            unitPrice: amount,
+          },
+        ],
       });
     }
 
@@ -372,7 +531,7 @@ export default function AccountsReceivable() {
             <TableBody>
               {invoices.map((invoice) => {
                 const daysOverdue =
-                  invoice.due_date && invoice.status !== "paid"
+                  invoice.due_date && invoice.status.toLowerCase() !== "paid"
                     ? Math.max(0, differenceInDays(new Date(), new Date(invoice.due_date)))
                     : 0;
 
@@ -388,7 +547,7 @@ export default function AccountsReceivable() {
                     <TableCell>
                       <Badge
                         variant={
-                          invoice.status === "paid"
+                          invoice.status.toLowerCase() === "paid"
                             ? "default"
                             : daysOverdue > 0
                               ? "destructive"
@@ -399,11 +558,75 @@ export default function AccountsReceivable() {
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      {invoice.status === "paid" ? "-" : daysOverdue > 0 ? `${daysOverdue} days` : "Current"}
+                      {invoice.status.toLowerCase() === "paid" ? "-" : daysOverdue > 0 ? `${daysOverdue} days` : "Current"}
                     </TableCell>
                   </TableRow>
                 );
               })}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Invoice Payments</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Date</TableHead>
+                <TableHead>Invoice #</TableHead>
+                <TableHead>Customer</TableHead>
+                <TableHead className="text-right">Amount</TableHead>
+                <TableHead>Notes</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {invoicePayments.map((payment) => (
+                <TableRow key={payment.id}>
+                  <TableCell>{payment.payment_date ? format(new Date(payment.payment_date), "dd MMM yyyy") : "-"}</TableCell>
+                  <TableCell className="font-medium">{payment.invoice_number}</TableCell>
+                  <TableCell>{payment.customer_name}</TableCell>
+                  <TableCell className="text-right">{formatCurrency(payment.amount)}</TableCell>
+                  <TableCell>{payment.notes || "-"}</TableCell>
+                  <TableCell>
+                    {payment.is_reversed ? (
+                      <Badge variant="outline" className="text-orange-600 border-orange-600">Reversed</Badge>
+                    ) : (
+                      <Badge variant="secondary">Posted</Badge>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    {payment.journal_entry_id && canReversePostedEntries && !payment.is_reversed && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        disabled={reverseInvoicePaymentMutation.isPending}
+                        onClick={() => {
+                          if (!confirm("Reverse this invoice payment entry?")) {
+                            return;
+                          }
+                          reverseInvoicePaymentMutation.mutate(payment);
+                        }}
+                        title="Reverse payment entry"
+                      >
+                        <RotateCcw className="h-4 w-4" />
+                      </Button>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+              {invoicePayments.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={7} className="text-center text-muted-foreground">
+                    No payments in selected period
+                  </TableCell>
+                </TableRow>
+              )}
             </TableBody>
           </Table>
         </CardContent>

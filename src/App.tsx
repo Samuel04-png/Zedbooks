@@ -11,6 +11,7 @@ import { AppLayout } from "./components/layout/AppLayout";
 import { ProtectedRoute } from "./components/layout/ProtectedRoute";
 import { RoleProtectedRoute } from "./components/layout/RoleProtectedRoute";
 import Auth from "./pages/Auth";
+import AcceptInvitation from "./pages/AcceptInvitation";
 import Dashboard from "./pages/Dashboard";
 import Invoices from "./pages/Invoices";
 import NewInvoice from "./pages/NewInvoice";
@@ -56,6 +57,7 @@ import FinancialPeriods from "./pages/FinancialPeriods";
 import EmployeePayrollSetupPage from "./pages/EmployeePayrollSetupPage";
 import PayrollSettings from "./pages/PayrollSettings";
 import Products from "./pages/Products";
+import OpeningBalances from "./pages/OpeningBalances";
 
 const FinancialReports = lazy(() => import("./pages/FinancialReports"));
 const PayrollReports = lazy(() => import("./pages/PayrollReports"));
@@ -93,6 +95,7 @@ const App = () => (
             <Routes>
               <Route path="/" element={<Landing />} />
               <Route path="/auth" element={<Auth />} />
+              <Route path="/accept-invitation" element={<AcceptInvitation />} />
               <Route path="/setup" element={<ProtectedRoute><CompanySetup /></ProtectedRoute>} />
 
               <Route path="/dashboard" element={<ProtectedRoute><AppLayout><Dashboard /></AppLayout></ProtectedRoute>} />
@@ -143,6 +146,7 @@ const App = () => (
               <Route path="/financial-periods" element={<ProtectedRoute><AppLayout><RoleProtectedRoute allowedRoles={["super_admin", "admin", "accountant"]}><FinancialPeriods /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/journal-entries" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><Suspense fallback={lazyPageFallback}><JournalEntries /></Suspense></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/chart-of-accounts" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><Suspense fallback={lazyPageFallback}><ChartOfAccounts /></Suspense></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+              <Route path="/opening-balances" element={<ProtectedRoute><AppLayout><RoleProtectedRoute allowedRoles={["super_admin", "admin", "financial_manager", "accountant"]}><OpeningBalances /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
 
               {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
               <Route path="*" element={<NotFound />} />

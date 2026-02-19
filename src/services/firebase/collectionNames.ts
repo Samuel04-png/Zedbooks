@@ -12,7 +12,9 @@ export const COLLECTIONS = {
 
   INVOICES: "invoices",
   INVOICE_ITEMS: "invoiceItems",
+  INVOICE_PAYMENTS: "invoicePayments",
   BILLS: "bills",
+  BILL_PAYMENTS: "billPayments",
   EXPENSES: "expenses",
   SALES_ORDERS: "salesOrders",
   PURCHASE_ORDERS: "purchaseOrders",

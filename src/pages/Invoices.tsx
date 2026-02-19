@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -12,15 +12,17 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Plus, Search } from "lucide-react";
+import { Plus, Search, RotateCcw } from "lucide-react";
 import { Link } from "react-router-dom";
 import { format } from "date-fns";
 import { useAuth } from "@/contexts/AuthContext";
-import { companyService } from "@/services/firebase";
+import { accountingService, companyService } from "@/services/firebase";
 import { COLLECTIONS } from "@/services/firebase/collectionNames";
 import { collection, documentId, getDocs, query, where } from "firebase/firestore";
 import { firestore } from "@/integrations/firebase/client";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { useUserRole } from "@/hooks/useUserRole";
+import { toast } from "sonner";
 
 interface InvoiceRecord {
   id: string;
@@ -30,7 +32,9 @@ interface InvoiceRecord {
   customerId: string | null;
   customerName: string;
   total: number;
+  amountPaid: number;
   status: string;
+  journal_entry_id: string | null;
 }
 
 const chunk = <T,>(items: T[], size: number): T[][] => {
@@ -57,7 +61,16 @@ const toDateString = (value: unknown): string => {
 export default function Invoices() {
   const [searchQuery, setSearchQuery] = useState("");
   const { user } = useAuth();
+  const { data: userRole } = useUserRole();
+  const queryClient = useQueryClient();
   const isMobile = useIsMobile();
+  const canReversePostedEntries = [
+    "super_admin",
+    "admin",
+    "financial_manager",
+    "accountant",
+    "assistant_accountant",
+  ].includes(userRole || "");
 
   const { data: invoices, isLoading } = useQuery({
     queryKey: ["invoices", user?.id],
@@ -82,8 +95,10 @@ export default function Invoices() {
           dueDate: toDateString(row.dueDate ?? row.due_date) || null,
           customerId: (row.customerId ?? row.customer_id ?? null) as string | null,
           customerName: "-",
-          total: Number(row.total ?? 0),
+          total: Number(row.totalAmount ?? row.total_amount ?? row.total ?? 0),
+          amountPaid: Number(row.amountPaid ?? row.amount_paid ?? 0),
           status: String(row.status ?? "draft"),
+          journal_entry_id: (row.journalEntryId ?? row.journal_entry_id ?? null) as string | null,
         } satisfies InvoiceRecord;
       });
 
@@ -116,6 +131,40 @@ export default function Invoices() {
         .sort((a, b) => String(b.invoiceDate).localeCompare(String(a.invoiceDate)));
     },
     enabled: Boolean(user),
+  });
+
+  const reverseInvoiceMutation = useMutation({
+    mutationFn: async (invoice: InvoiceRecord) => {
+      if (!user) throw new Error("Not authenticated");
+      if (!invoice.journal_entry_id) {
+        throw new Error("Invoice has no posted journal entry to reverse.");
+      }
+      if (Number(invoice.amountPaid || 0) > 0.001) {
+        throw new Error("Reverse invoice payment entries first before reversing this invoice.");
+      }
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      if (!membership?.companyId) throw new Error("Company context not found");
+
+      const reason = prompt(`Reason for reversing invoice ${invoice.invoiceNumber} (optional):`) || undefined;
+      return accountingService.reverseJournalEntry({
+        companyId: membership.companyId,
+        journalEntryId: invoice.journal_entry_id,
+        reason,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["invoices", user?.id] });
+      queryClient.invalidateQueries({ queryKey: ["accounts-receivable"] });
+      queryClient.invalidateQueries({ queryKey: ["customers"] });
+      queryClient.invalidateQueries({ queryKey: ["bank-accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["journal-entries"] });
+      queryClient.invalidateQueries({ queryKey: ["financial-reports"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      toast.success("Invoice journal entry reversed");
+    },
+    onError: (error) => {
+      toast.error(`Failed to reverse invoice: ${error.message}`);
+    },
   });
 
   const getStatusVariant = (status: string) => {
@@ -213,6 +262,29 @@ export default function Invoices() {
                     <span className="text-sm font-medium text-muted-foreground">Total Amount</span>
                     <span className="text-lg font-bold text-primary">ZMW {invoice.total.toFixed(2)}</span>
                   </div>
+                  {invoice.journal_entry_id && canReversePostedEntries && (
+                    <div className="pt-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="w-full"
+                        disabled={reverseInvoiceMutation.isPending || Number(invoice.amountPaid || 0) > 0.001}
+                        onClick={() => {
+                          if (Number(invoice.amountPaid || 0) > 0.001) {
+                            toast.error("Reverse invoice payments first before reversing this invoice.");
+                            return;
+                          }
+                          if (!confirm("Reverse this invoice posting? This creates an opposite journal entry.")) {
+                            return;
+                          }
+                          reverseInvoiceMutation.mutate(invoice);
+                        }}
+                      >
+                        <RotateCcw className="h-4 w-4 mr-2" />
+                        Reverse Posting
+                      </Button>
+                    </div>
+                  )}
                 </div>
               ))}
               {filteredInvoices?.length === 0 && (
@@ -232,6 +304,7 @@ export default function Invoices() {
                   <TableHead>Due Date</TableHead>
                   <TableHead className="text-right">Amount</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -249,11 +322,37 @@ export default function Invoices() {
                     <TableCell>
                       <Badge variant={getStatusVariant(invoice.status || "draft")}>{invoice.status}</Badge>
                     </TableCell>
+                    <TableCell className="text-right">
+                      {invoice.journal_entry_id && canReversePostedEntries && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          disabled={reverseInvoiceMutation.isPending || Number(invoice.amountPaid || 0) > 0.001}
+                          onClick={() => {
+                            if (Number(invoice.amountPaid || 0) > 0.001) {
+                              toast.error("Reverse invoice payments first before reversing this invoice.");
+                              return;
+                            }
+                            if (!confirm("Reverse this invoice posting? This creates an opposite journal entry.")) {
+                              return;
+                            }
+                            reverseInvoiceMutation.mutate(invoice);
+                          }}
+                          title={
+                            Number(invoice.amountPaid || 0) > 0.001
+                              ? "Reverse payments first"
+                              : "Reverse invoice posting"
+                          }
+                        >
+                          <RotateCcw className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </TableCell>
                   </TableRow>
                 ))}
                 {filteredInvoices?.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center text-muted-foreground">
+                    <TableCell colSpan={7} className="text-center text-muted-foreground">
                       No invoices found
                     </TableCell>
                   </TableRow>

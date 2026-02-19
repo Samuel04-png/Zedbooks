@@ -1,10 +1,10 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
-import { companyService } from "@/services/firebase";
+import { accountingService, companyService } from "@/services/firebase";
 import { firestore } from "@/integrations/firebase/client";
 import { COLLECTIONS } from "@/services/firebase/collectionNames";
-import { addDoc, collection, deleteDoc, doc, getDocs, query, serverTimestamp, setDoc, where } from "firebase/firestore";
+import { collection, getDocs, query, where } from "firebase/firestore";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -33,10 +33,11 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Search, Check, Trash2 } from "lucide-react";
+import { Plus, Search, Check, Trash2, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { useCompanySettings } from "@/hooks/useCompanySettings";
+import { useUserRole } from "@/hooks/useUserRole";
 
 interface Bill {
   id: string;
@@ -49,6 +50,8 @@ interface Bill {
   status: string | null;
   description: string | null;
   vendor_id: string | null;
+  amount_paid: number;
+  journal_entry_id: string | null;
   vendors: { name: string } | null;
 }
 
@@ -57,18 +60,37 @@ interface Vendor {
   name: string;
 }
 
+interface ExpenseCategoryOption {
+  id: string;
+  categoryName: string;
+}
+
+interface PaymentAccountOption {
+  id: string;
+  accountName: string;
+}
+
 export default function Bills() {
   const { user } = useAuth();
+  const { data: userRole } = useUserRole();
   const queryClient = useQueryClient();
   const [searchQuery, setSearchQuery] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const { data: settings } = useCompanySettings();
+  const canReversePostedEntries = [
+    "super_admin",
+    "admin",
+    "financial_manager",
+    "accountant",
+    "assistant_accountant",
+  ].includes(userRole || "");
 
   const [formData, setFormData] = useState({
     vendor_id: "",
     bill_number: `BILL-${Date.now()}`,
     bill_date: new Date().toISOString().split("T")[0],
     due_date: "",
+    category: "",
     amount: "",
     description: "",
   });
@@ -104,7 +126,7 @@ export default function Bills() {
           const vendorId = (row.vendorId ?? row.vendor_id ?? null) as string | null;
           return {
             id: docSnap.id,
-            bill_number: String(row.billNumber ?? row.bill_number ?? ""),
+            bill_number: String(row.billNumber ?? row.bill_number ?? `BILL-${docSnap.id.slice(0, 8).toUpperCase()}`),
             bill_date: String(row.billDate ?? row.bill_date ?? ""),
             due_date: (row.dueDate ?? row.due_date ?? null) as string | null,
             subtotal: Number(row.subtotal ?? 0),
@@ -113,6 +135,8 @@ export default function Bills() {
             status: (row.status ?? "pending") as string | null,
             description: (row.description ?? null) as string | null,
             vendor_id: vendorId,
+            amount_paid: Number(row.amountPaid ?? row.amount_paid ?? 0),
+            journal_entry_id: (row.journalEntryId ?? row.journal_entry_id ?? null) as string | null,
             vendors: vendorId ? { name: vendorMap.get(vendorId) || "Unknown Vendor" } : null,
           } satisfies Bill;
         })
@@ -120,6 +144,61 @@ export default function Bills() {
     },
     enabled: Boolean(companyId),
   });
+
+  const { data: expenseCategories = [] } = useQuery({
+    queryKey: ["bill-expense-category-mappings", companyId],
+    queryFn: async () => {
+      if (!companyId) return [] as ExpenseCategoryOption[];
+      const snapshot = await getDocs(
+        query(collection(firestore, COLLECTIONS.EXPENSE_CATEGORY_MAPPINGS), where("companyId", "==", companyId)),
+      );
+      return snapshot.docs
+        .map((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          return {
+            id: docSnap.id,
+            categoryName: String(row.categoryName ?? row.category_name ?? ""),
+          } satisfies ExpenseCategoryOption;
+        })
+        .filter((row) => row.categoryName)
+        .sort((a, b) => a.categoryName.localeCompare(b.categoryName));
+    },
+    enabled: Boolean(companyId),
+  });
+
+  const { data: paymentAccounts = [] } = useQuery({
+    queryKey: ["bill-payment-accounts", companyId],
+    queryFn: async () => {
+      if (!companyId) return [] as PaymentAccountOption[];
+      const snapshot = await getDocs(
+        query(
+          collection(firestore, COLLECTIONS.CHART_OF_ACCOUNTS),
+          where("companyId", "==", companyId),
+          where("accountType", "==", "Asset"),
+          where("status", "==", "active"),
+        ),
+      );
+      return snapshot.docs
+        .map((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          return {
+            id: docSnap.id,
+            accountName: String(row.accountName ?? ""),
+          } satisfies PaymentAccountOption;
+        })
+        .filter((row) => row.accountName)
+        .sort((a, b) => a.accountName.localeCompare(b.accountName));
+    },
+    enabled: Boolean(companyId),
+  });
+
+  const resolvePaymentAccountId = () => {
+    if (!paymentAccounts.length) return "";
+    const bankAccount =
+      paymentAccounts.find((account) => account.accountName.toLowerCase().includes("bank")) ||
+      paymentAccounts.find((account) => account.accountName.toLowerCase().includes("cash"));
+    return bankAccount?.id || paymentAccounts[0].id;
+  };
 
   const { data: vendors } = useQuery({
     queryKey: ["vendors", companyId],
@@ -146,25 +225,21 @@ export default function Bills() {
   const createMutation = useMutation({
     mutationFn: async (data: typeof formData) => {
       if (!companyId || !user) throw new Error("Not authenticated");
-
-      await addDoc(collection(firestore, COLLECTIONS.BILLS), {
+      await accountingService.createBill({
         companyId,
-        vendorId: data.vendor_id || null,
-        billNumber: data.bill_number,
+        vendorId: data.vendor_id || undefined,
+        amount: total,
+        categoryName: data.category || "Miscellaneous",
         billDate: data.bill_date,
-        dueDate: data.due_date || null,
-        description: data.description || null,
-        subtotal,
-        vatAmount,
-        total,
-        status: "pending",
-        createdBy: user.id,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
+        dueDate: data.due_date || data.bill_date,
+        description: data.description || undefined,
       });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["bills", companyId] });
+      queryClient.invalidateQueries({ queryKey: ["accounts-payable"] });
+      queryClient.invalidateQueries({ queryKey: ["vendors"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       toast.success("Bill created successfully");
       setIsDialogOpen(false);
       setFormData({
@@ -172,6 +247,7 @@ export default function Bills() {
         bill_number: `BILL-${Date.now()}`,
         bill_date: new Date().toISOString().split("T")[0],
         due_date: "",
+        category: "",
         amount: "",
         description: "",
       });
@@ -183,38 +259,82 @@ export default function Bills() {
 
   const markPaidMutation = useMutation({
     mutationFn: async (id: string) => {
-      await setDoc(doc(firestore, COLLECTIONS.BILLS, id), {
-        status: "paid",
-        paidDate: new Date().toISOString(),
-        updatedAt: serverTimestamp(),
-      }, { merge: true });
+      if (!companyId) throw new Error("Company not found");
+      const bill = bills?.find((row) => row.id === id);
+      if (!bill) throw new Error("Bill not found");
+
+      const remaining = Math.max(Number(bill.total) - Number(bill.amount_paid || 0), 0);
+      if (remaining <= 0) {
+        throw new Error("Bill is already fully paid");
+      }
+
+      const paymentAccountId = resolvePaymentAccountId();
+      if (!paymentAccountId) {
+        throw new Error("No active Asset payment account found.");
+      }
+
+      await accountingService.payBill({
+        companyId,
+        billId: id,
+        amount: remaining,
+        paymentDate: new Date().toISOString().split("T")[0],
+        paymentAccountId,
+        notes: "Bill payment recorded from Bills page",
+      });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["bills", companyId] });
-      toast.success("Bill marked as paid");
+      queryClient.invalidateQueries({ queryKey: ["accounts-payable"] });
+      queryClient.invalidateQueries({ queryKey: ["vendors"] });
+      queryClient.invalidateQueries({ queryKey: ["bank-accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      toast.success("Bill payment recorded");
     },
     onError: (error) => {
       toast.error("Failed to update bill: " + error.message);
     },
   });
 
-  const deleteMutation = useMutation({
-    mutationFn: async (id: string) => {
-      await deleteDoc(doc(firestore, COLLECTIONS.BILLS, id));
+  const reverseBillMutation = useMutation({
+    mutationFn: async (bill: Bill) => {
+      if (!companyId) throw new Error("Company not found");
+      if (!bill.journal_entry_id) {
+        throw new Error("Bill has no posted journal entry to reverse.");
+      }
+      if (Number(bill.amount_paid || 0) > 0.001) {
+        throw new Error("Reverse bill payment entries first before reversing this bill.");
+      }
+
+      const reason = prompt(`Reason for reversing bill ${bill.bill_number} (optional):`) || undefined;
+      return accountingService.reverseJournalEntry({
+        companyId,
+        journalEntryId: bill.journal_entry_id,
+        reason,
+      });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["bills", companyId] });
-      toast.success("Bill deleted successfully");
+      queryClient.invalidateQueries({ queryKey: ["accounts-payable"] });
+      queryClient.invalidateQueries({ queryKey: ["vendors"] });
+      queryClient.invalidateQueries({ queryKey: ["bank-accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["journal-entries"] });
+      queryClient.invalidateQueries({ queryKey: ["financial-reports"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      toast.success("Bill journal entry reversed");
     },
     onError: (error) => {
-      toast.error("Failed to delete bill: " + error.message);
+      toast.error("Failed to reverse bill: " + error.message);
     },
   });
 
   const getStatusVariant = (status: string) => {
-    switch (status) {
+    switch (String(status || "").toLowerCase()) {
       case "paid":
         return "default";
+      case "unpaid":
+        return "secondary";
+      case "partially paid":
+        return "secondary";
       case "pending":
         return "secondary";
       case "overdue":
@@ -321,6 +441,24 @@ export default function Bills() {
                       setFormData({ ...formData, due_date: e.target.value })
                     }
                   />
+                </div>
+                <div className="space-y-2 md:col-span-2">
+                  <Label htmlFor="category">Category *</Label>
+                  <Select
+                    value={formData.category}
+                    onValueChange={(value) => setFormData({ ...formData, category: value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select category" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {expenseCategories.map((category) => (
+                        <SelectItem key={category.id} value={category.categoryName}>
+                          {category.categoryName}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
               <div className="space-y-2">
@@ -430,7 +568,31 @@ export default function Bills() {
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-2">
-                      {bill.status !== "paid" && (
+                      {bill.journal_entry_id && canReversePostedEntries && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          disabled={reverseBillMutation.isPending || Number(bill.amount_paid || 0) > 0.001}
+                          onClick={() => {
+                            if (Number(bill.amount_paid || 0) > 0.001) {
+                              toast.error("Reverse bill payments first before reversing this bill.");
+                              return;
+                            }
+                            if (!confirm("Reverse this bill posting? This creates an opposite journal entry.")) {
+                              return;
+                            }
+                            reverseBillMutation.mutate(bill);
+                          }}
+                          title={
+                            Number(bill.amount_paid || 0) > 0.001
+                              ? "Reverse payments first"
+                              : "Reverse bill posting"
+                          }
+                        >
+                          <RotateCcw className="h-4 w-4" />
+                        </Button>
+                      )}
+                      {String(bill.status || "").toLowerCase() !== "paid" && (
                         <Button
                           variant="ghost"
                           size="icon"
@@ -443,8 +605,11 @@ export default function Bills() {
                       <Button
                         variant="ghost"
                         size="icon"
-                        onClick={() => deleteMutation.mutate(bill.id)}
-                        title="Delete"
+                        onClick={() => {
+                          toast.error("Bill deletion is blocked. Use a reversal/credit-note workflow.");
+                        }}
+                        disabled
+                        title="Bill deletion is blocked"
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>

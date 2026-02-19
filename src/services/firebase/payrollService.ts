@@ -11,12 +11,28 @@ export interface PayrollRunRecord {
   periodStart: string;
   periodEnd: string;
   runDate: string;
-  payrollStatus: "draft" | "trial" | "final" | "reversed";
+  payrollStatus: "draft" | "processed" | "paid" | "trial" | "final" | "reversed";
   totalGross: number;
   totalDeductions: number;
   totalNet: number;
   glPosted?: boolean;
   glJournalId?: string | null;
+}
+
+export interface PayrollDraftEmployeeInput {
+  employeeId?: string;
+  employeeName: string;
+  grossSalary: number;
+  payeDeduction?: number;
+  napsaDeduction?: number;
+  nhimaDeduction?: number;
+  otherDeductions?: number;
+  netSalary?: number;
+  basicSalary?: number;
+  housingAllowance?: number;
+  transportAllowance?: number;
+  otherAllowances?: number;
+  advancesDeducted?: number;
 }
 
 export const payrollService = {
@@ -34,20 +50,64 @@ export const payrollService = {
 
   async createPayrollDraft(input: {
     companyId: string;
-    periodStart: string;
-    periodEnd: string;
-    runDate: string;
+    periodStart?: string;
+    periodEnd?: string;
+    runDate?: string;
+    periodLabel?: string;
     notes?: string;
-  }): Promise<{ payrollRunId: string }> {
-    return callFunction<typeof input, { payrollRunId: string }>("createPayrollDraft", input);
+    employees: PayrollDraftEmployeeInput[];
+    additions?: Array<{
+      employeeId?: string;
+      type?: string;
+      name?: string;
+      amount?: number;
+      totalAmount?: number;
+      monthsToPay?: number;
+      monthlyDeduction?: number;
+    }>;
+  }): Promise<{ payrollRunId: string; status: "Draft" }> {
+    return callFunction<typeof input, { payrollRunId: string; status: "Draft" }>("createPayrollDraft", input);
   },
 
   async runPayrollTrial(input: { payrollRunId: string }): Promise<{ success: boolean }> {
     return callFunction<typeof input, { success: boolean }>("runPayrollTrial", input);
   },
 
-  async finalizePayroll(input: { payrollRunId: string }): Promise<{ journalEntryId?: string }> {
-    return callFunction<typeof input, { journalEntryId?: string }>("finalizePayroll", input);
+  async processPayroll(input: { payrollRunId: string }): Promise<{
+    payrollRunId: string;
+    journalEntryId: string;
+    status: "Processed";
+  }> {
+    return callFunction<typeof input, {
+      payrollRunId: string;
+      journalEntryId: string;
+      status: "Processed";
+    }>("processPayroll", input);
+  },
+
+  async payPayroll(input: { payrollRunId: string; paymentAccountId: string; paymentDate?: string }): Promise<{
+    payrollRunId: string;
+    journalEntryId: string;
+    status: "Paid";
+  }> {
+    return callFunction<typeof input, {
+      payrollRunId: string;
+      journalEntryId: string;
+      status: "Paid";
+    }>("payPayroll", input);
+  },
+
+  async finalizePayroll(input: { payrollRunId: string }): Promise<{
+    payrollRunId: string;
+    journalEntryId: string;
+    status: "Processed";
+  }> {
+    // Backward-compatible alias to process payroll.
+    return callFunction<typeof input, {
+      payrollRunId: string;
+      journalEntryId: string;
+      status: "Processed";
+    }>("finalizePayroll", input);
   },
 
   async sendPayslipEmail(input: {
@@ -69,4 +129,3 @@ export const payrollService = {
     }>("runDepreciation", input);
   },
 };
-

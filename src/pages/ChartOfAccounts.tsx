@@ -34,18 +34,17 @@ import { Plus, Search, Edit2, Trash2, ChevronRight, FileText, Filter } from "luc
 import { LoadingState } from "@/components/ui/LoadingState";
 import { useAuth } from "@/contexts/AuthContext";
 import { companyService } from "@/services/firebase";
+import { accountingService } from "@/services/firebase/accountingService";
 import { COLLECTIONS } from "@/services/firebase/collectionNames";
 import {
   addDoc,
   collection,
-  deleteDoc,
   doc,
   getDocs,
   query,
   serverTimestamp,
   setDoc,
   where,
-  writeBatch,
 } from "firebase/firestore";
 import { firestore } from "@/integrations/firebase/client";
 
@@ -76,36 +75,6 @@ const validateAccountCode = (type: string, code: string): string | null => {
   return null;
 };
 
-const DEFAULT_ACCOUNTS = [
-  { code: 1000, name: "Cash", type: "asset", description: "Money available in bank or cash" },
-  { code: 1010, name: "Petty Cash", type: "asset", description: "Small cash for daily needs" },
-  { code: 1100, name: "Accounts Receivable", type: "asset", description: "Amount to be received from customers" },
-  { code: 1200, name: "Inventory", type: "asset", description: "Stock of goods for sale" },
-  { code: 1300, name: "Prepaid Expenses", type: "asset", description: "Advance payments for future expenses" },
-  { code: 1500, name: "Fixed Assets", type: "asset", description: "Long-term tangible assets" },
-  { code: 1510, name: "Accumulated Depreciation", type: "asset", description: "Total depreciation of fixed assets" },
-  { code: 2000, name: "Accounts Payable", type: "liability", description: "Money owed to suppliers" },
-  { code: 2100, name: "Taxes Payable", type: "liability", description: "Taxes due to government" },
-  { code: 2200, name: "Loans Payable", type: "liability", description: "Bank or other loans taken" },
-  { code: 2300, name: "NAPSA Payable", type: "liability", description: "NAPSA contributions payable" },
-  { code: 2310, name: "NHIMA Payable", type: "liability", description: "NHIMA contributions payable" },
-  { code: 2320, name: "PAYE Payable", type: "liability", description: "Pay As You Earn tax payable" },
-  { code: 3000, name: "Owner's Equity", type: "equity", description: "Owner's investment in business" },
-  { code: 3100, name: "Retained Earnings", type: "equity", description: "Accumulated profits retained" },
-  { code: 4001, name: "Sales Revenue", type: "income", description: "Income from sales" },
-  { code: 4100, name: "Service Revenue", type: "income", description: "Income from services" },
-  { code: 4200, name: "Grant Income", type: "income", description: "Income from grants and donations" },
-  { code: 5000, name: "Cost of Goods Sold", type: "expense", description: "Direct costs of goods sold" },
-  { code: 5100, name: "Rent Expense", type: "expense", description: "Monthly office rent" },
-  { code: 5200, name: "Office Supplies", type: "expense", description: "Supplies used in office" },
-  { code: 5300, name: "Salaries Expense", type: "expense", description: "Employee salaries" },
-  { code: 5400, name: "Utilities Expense", type: "expense", description: "Electricity, internet, water bills" },
-  { code: 5500, name: "Depreciation Expense", type: "expense", description: "Periodic asset depreciation" },
-  { code: 5600, name: "Bank Charges", type: "expense", description: "Bank fees and charges" },
-  { code: 5700, name: "Travel Expense", type: "expense", description: "Business travel costs" },
-  { code: 5800, name: "Marketing Expense", type: "expense", description: "Advertising and promotion" },
-] as const;
-
 interface Account {
   id: string;
   companyId: string;
@@ -115,6 +84,7 @@ interface Account {
   description: string | null;
   parentAccountId: string | null;
   status: string;
+  isSystemAccount: boolean;
 }
 
 const normalizeType = (value: string): string => {
@@ -169,6 +139,7 @@ export default function ChartOfAccounts() {
             description: (row.description as string | null) ?? null,
             parentAccountId: (row.parentAccountId ?? row.parent_account_id ?? null) as string | null,
             status: String(row.status ?? (row.isActive === false ? "inactive" : "active")),
+            isSystemAccount: Boolean(row.isSystemAccount ?? row.is_system_account ?? row.isSystem ?? false),
           } satisfies Account;
         })
         .sort((a, b) => a.accountCode - b.accountCode);
@@ -201,6 +172,7 @@ export default function ChartOfAccounts() {
         parentAccountId: data.parent_account_id || null,
         status: "active",
         isSystem: false,
+        isSystemAccount: false,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
@@ -253,8 +225,11 @@ export default function ChartOfAccounts() {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: async (id: string) => {
-      await deleteDoc(doc(firestore, COLLECTIONS.CHART_OF_ACCOUNTS, id));
+    mutationFn: async ({ id, companyId }: { id: string; companyId: string }) => {
+      await accountingService.deleteChartOfAccount({
+        companyId,
+        accountId: id,
+      });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["chart-of-accounts", user?.id] });
@@ -272,32 +247,12 @@ export default function ChartOfAccounts() {
       const membership = await companyService.getPrimaryMembershipByUser(user.id);
       if (!membership?.companyId) throw new Error("Company context not found");
 
-      const batch = writeBatch(firestore);
-      DEFAULT_ACCOUNTS.forEach((account) => {
-        const ref = doc(firestore, COLLECTIONS.CHART_OF_ACCOUNTS, `${membership.companyId}_${account.code}`);
-        batch.set(
-          ref,
-          {
-            companyId: membership.companyId,
-            accountCode: account.code,
-            accountName: account.name,
-            accountType: toDbType(account.type),
-            description: account.description,
-            parentAccountId: null,
-            status: "active",
-            isSystem: true,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          },
-          { merge: true },
-        );
-      });
-
-      await batch.commit();
+      await accountingService.seedDefaultChartOfAccounts({ companyId: membership.companyId });
+      await accountingService.seedDefaultExpenseCategories({ companyId: membership.companyId });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["chart-of-accounts", user?.id] });
-      toast.success("Default chart of accounts created successfully");
+      toast.success("Default chart of accounts and expense categories seeded successfully");
     },
     onError: (error) => {
       toast.error(`Failed to setup accounts: ${error instanceof Error ? error.message : "Unknown error"}`);
@@ -315,6 +270,10 @@ export default function ChartOfAccounts() {
   };
 
   const handleEdit = (account: Account) => {
+    if (account.isSystemAccount) {
+      toast.error("System accounts cannot be renamed or edited.");
+      return;
+    }
     setEditingAccount(account);
     setFormData({
       account_code: String(account.accountCode),
@@ -612,15 +571,27 @@ export default function ChartOfAccounts() {
                       <TableCell className="text-muted-foreground max-w-xs truncate">{account.description || "-"}</TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-2">
-                          <Button variant="ghost" size="icon" onClick={() => handleEdit(account)}>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            disabled={account.isSystemAccount}
+                            title={account.isSystemAccount ? "System accounts cannot be edited" : "Edit account"}
+                            onClick={() => handleEdit(account)}
+                          >
                             <Edit2 className="h-4 w-4" />
                           </Button>
                           <Button
                             variant="ghost"
                             size="icon"
+                            disabled={account.isSystemAccount}
+                            title={account.isSystemAccount ? "System accounts cannot be deleted" : "Delete account"}
                             onClick={() => {
-                              if (confirm("Are you sure you want to delete this account?")) {
-                                deleteMutation.mutate(account.id);
+                              if (account.isSystemAccount) {
+                                toast.error("System accounts cannot be deleted.");
+                                return;
+                              }
+                              if (confirm("Delete this account? This is blocked if it has journal history or child accounts.")) {
+                                deleteMutation.mutate({ id: account.id, companyId: account.companyId });
                               }
                             }}
                           >

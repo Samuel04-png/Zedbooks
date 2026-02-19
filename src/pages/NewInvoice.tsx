@@ -4,7 +4,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { accountingService, companyService } from "@/services/firebase";
 import { firestore } from "@/integrations/firebase/client";
 import { COLLECTIONS } from "@/services/firebase/collectionNames";
-import { addDoc, collection, getDocs, query, serverTimestamp, where } from "firebase/firestore";
+import { collection, getDocs, query, where } from "firebase/firestore";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -128,68 +128,46 @@ export default function NewInvoice() {
     mutationFn: async (status: string) => {
       if (!companyId || !user) throw new Error("No company context found");
 
-      const invoiceRef = await addDoc(collection(firestore, COLLECTIONS.INVOICES), {
-        companyId,
-        customerId: selectedCustomer || null,
-        invoiceNumber: invoiceNumber,
-        invoiceDate: invoiceDate,
-        dueDate: dueDate || null,
-        subtotal,
-        vatAmount: vatAmount,
-        total,
-        status,
-        notes,
-        terms,
-        zraStatus: isVatRegistered && submitToZRAOnSend && status === "sent" ? "pending" : null,
-        // ZRA specific fields
-        isB2B,
-        customerTPIN: isB2B ? customerTPIN : null,
-        vatType: isB2B ? vatType : "A",
-        createdBy: user.id,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-
-      const invoiceItems = lines
-        .filter((line) => line.description)
+      const lineItems = lines
+        .filter((line) => line.description.trim().length > 0)
         .map((line) => ({
-          companyId,
-          invoiceId: invoiceRef.id,
-          description: line.description,
+          description: line.description.trim(),
           quantity: line.quantity,
           unitPrice: line.rate,
-          amount: line.amount,
-          createdAt: serverTimestamp(),
         }));
 
-      if (invoiceItems.length > 0) {
-        await Promise.all(invoiceItems.map((item) => addDoc(collection(firestore, COLLECTIONS.INVOICE_ITEMS), item)));
+      if (lineItems.length === 0) {
+        throw new Error("At least one invoice line item is required.");
       }
 
-      return { id: invoiceRef.id, status };
+      return accountingService.createInvoice({
+        companyId,
+        customerId: selectedCustomer || undefined,
+        invoiceNumber,
+        invoiceDate,
+        dueDate: dueDate || invoiceDate,
+        status: status === "sent" ? "Unpaid" : "Draft",
+        notes: [notes, terms].filter(Boolean).join("\n\n") || undefined,
+        taxAmount: vatAmount,
+        totalAmount: total,
+        lineItems,
+      });
     },
     onSuccess: async (invoice, status) => {
       // If VAT registered and sending, submit to ZRA
       if (isVatRegistered && submitToZRAOnSend && status === "sent") {
         try {
-          await submitToZRA.mutateAsync(invoice.id);
+          await submitToZRA.mutateAsync(invoice.invoiceId);
         } catch (e) {
           // Invoice saved but ZRA submission queued
           console.log("ZRA submission queued for retry");
         }
       }
 
-      if (status === "sent") {
-        try {
-          await accountingService.postInvoiceToGL(invoice.id);
-          toast.success("Posted to General Ledger");
-        } catch (error) {
-          console.error("GL Posting Error:", error);
-          toast.warning("Invoice sent, but failed to post to Ledger. Please check Audit Logs.");
-        }
-      }
-
       queryClient.invalidateQueries({ queryKey: ["invoices"] });
+      queryClient.invalidateQueries({ queryKey: ["accounts-receivable"] });
+      queryClient.invalidateQueries({ queryKey: ["customers"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       toast.success(status === "sent" ? "Invoice sent successfully" : "Invoice saved as draft");
       navigate("/invoices");
     },
@@ -238,6 +216,11 @@ export default function NewInvoice() {
               <CardTitle>Invoice Details</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Due Date</label>
+                  <Input
+                    type="date"
                     value={dueDate}
                     onChange={(e) => setDueDate(e.target.value)}
                   />
@@ -346,72 +329,72 @@ export default function NewInvoice() {
           </Card>
         </div >
 
-    <div className="space-y-6">
-      <Card>
-        <CardHeader>
-          <CardTitle>Summary</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="flex justify-between text-sm">
-            <span className="text-muted-foreground">Subtotal</span>
-            <span className="font-medium">ZMW {subtotal.toFixed(2)}</span>
-          </div>
-          {isVatRegistered && (
-            <div className="flex justify-between text-sm">
-              <span className="text-muted-foreground">VAT ({vatRate}%)</span>
-              <span className="font-medium">ZMW {vatAmount.toFixed(2)}</span>
-            </div>
-          )}
-          <div className="border-t pt-3 flex justify-between">
-            <span className="font-semibold">Total</span>
-            <span className="text-xl font-bold text-primary">ZMW {total.toFixed(2)}</span>
-          </div>
-        </CardContent>
-      </Card>
-
-      {isVatRegistered && (
-        <Card className="border-primary/20 bg-primary/5">
-          <CardContent className="pt-4 space-y-3">
-            <div className="flex items-center gap-2">
-              <FileCheck className="h-4 w-4 text-primary" />
-              <span className="font-medium text-sm">ZRA Smart Invoice</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm">Submit to ZRA on send</p>
-                <p className="text-xs text-muted-foreground">
-                  Invoice will be submitted for ZRA approval
-                </p>
+        <div className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Summary</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Subtotal</span>
+                <span className="font-medium">ZMW {subtotal.toFixed(2)}</span>
               </div>
-              <Switch
-                checked={submitToZRAOnSend}
-                onCheckedChange={setSubmitToZRAOnSend}
-              />
-            </div>
-            {isSubmitting && (
-              <Badge variant="outline" className="animate-pulse">
-                <AlertCircle className="h-3 w-3 mr-1" />
-                Submitting to ZRA...
-              </Badge>
-            )}
-          </CardContent>
-        </Card>
-      )}
+              {isVatRegistered && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">VAT ({vatRate}%)</span>
+                  <span className="font-medium">ZMW {vatAmount.toFixed(2)}</span>
+                </div>
+              )}
+              <div className="border-t pt-3 flex justify-between">
+                <span className="font-semibold">Total</span>
+                <span className="text-xl font-bold text-primary">ZMW {total.toFixed(2)}</span>
+              </div>
+            </CardContent>
+          </Card>
 
-      {!isVatRegistered && (
-        <Card className="bg-muted/50">
-          <CardContent className="pt-4">
-            <p className="text-sm text-muted-foreground">
-              VAT is not applied. To enable VAT, go to{" "}
-              <Button variant="link" className="p-0 h-auto" onClick={() => navigate("/settings")}>
-                Settings
-              </Button>{" "}
-              and enable VAT registration.
-            </p>
-          </CardContent>
-        </Card>
-      )}
-    </div>
+          {isVatRegistered && (
+            <Card className="border-primary/20 bg-primary/5">
+              <CardContent className="pt-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <FileCheck className="h-4 w-4 text-primary" />
+                  <span className="font-medium text-sm">ZRA Smart Invoice</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm">Submit to ZRA on send</p>
+                    <p className="text-xs text-muted-foreground">
+                      Invoice will be submitted for ZRA approval
+                    </p>
+                  </div>
+                  <Switch
+                    checked={submitToZRAOnSend}
+                    onCheckedChange={setSubmitToZRAOnSend}
+                  />
+                </div>
+                {isSubmitting && (
+                  <Badge variant="outline" className="animate-pulse">
+                    <AlertCircle className="h-3 w-3 mr-1" />
+                    Submitting to ZRA...
+                  </Badge>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+          {!isVatRegistered && (
+            <Card className="bg-muted/50">
+              <CardContent className="pt-4">
+                <p className="text-sm text-muted-foreground">
+                  VAT is not applied. To enable VAT, go to{" "}
+                  <Button variant="link" className="p-0 h-auto" onClick={() => navigate("/settings")}>
+                    Settings
+                  </Button>{" "}
+                  and enable VAT registration.
+                </p>
+              </CardContent>
+            </Card>
+          )}
+        </div>
       </div >
     </div >
   );

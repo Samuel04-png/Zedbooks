@@ -3,9 +3,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DollarSign, TrendingUp, TrendingDown, Users, Eye } from "lucide-react";
 import { formatZMW } from "@/utils/zambianTaxCalculations";
 import { useAuth } from "@/contexts/AuthContext";
-import { dashboardService } from "@/services/firebase";
+import { accountingService, dashboardService } from "@/services/firebase";
 import { COLLECTIONS } from "@/services/firebase/collectionNames";
-import { readNumber, readString } from "@/components/dashboard/dashboardDataUtils";
 
 export function ReadOnlyDashboard() {
   const { user } = useAuth();
@@ -18,16 +17,17 @@ export function ReadOnlyDashboard() {
         return { totalRevenue: 0, totalExpenses: 0, invoiceCount: 0 };
       }
 
-      const { invoices, expenses } = await dashboardService.runQueries(user.id, {
+      const companyId = await dashboardService.getCompanyIdForUser(user.id);
+      const [liveMetrics, { invoices }] = await Promise.all([
+        accountingService.getDashboardLiveMetrics({ companyId }),
+        dashboardService.runQueries(user.id, {
         invoices: { collectionName: COLLECTIONS.INVOICES },
-        expenses: { collectionName: COLLECTIONS.EXPENSES },
-      });
+      }),
+      ]);
 
       return {
-        totalRevenue: invoices
-          .filter((i) => readString(i, ["status"]) === "paid")
-          .reduce((sum, i) => sum + readNumber(i, ["total", "grandTotal", "amount"]), 0),
-        totalExpenses: expenses.reduce((sum, e) => sum + readNumber(e, ["amount", "total"]), 0),
+        totalRevenue: liveMetrics.monthlyIncome,
+        totalExpenses: liveMetrics.monthlyExpenses,
         invoiceCount: invoices.length,
       };
     },

@@ -23,16 +23,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useAuth } from "@/contexts/AuthContext";
-import { companyService } from "@/services/firebase";
+import { companyService, payrollService } from "@/services/firebase";
 import { COLLECTIONS } from "@/services/firebase/collectionNames";
 import { firestore } from "@/integrations/firebase/client";
 import {
-  addDoc,
   collection,
   getDocs,
   query,
-  serverTimestamp,
-  updateDoc,
   where,
 } from "firebase/firestore";
 
@@ -193,34 +190,6 @@ export default function NewPayrollRun() {
       if (!user) throw new Error("Not authenticated");
       if (!companyId) throw new Error("Company not found");
 
-      const runsSnapshot = await getDocs(
-        query(collection(firestore, COLLECTIONS.PAYROLL_RUNS), where("companyId", "==", companyId)),
-      );
-
-      const year = new Date().getFullYear();
-      const payrollNumber = `PAY-${year}-${String(runsSnapshot.size + 1).padStart(4, "0")}`;
-
-      const payrollRunRef = await addDoc(collection(firestore, COLLECTIONS.PAYROLL_RUNS), {
-        companyId,
-        userId: user.id,
-        periodStart: data.period_start,
-        periodEnd: data.period_end,
-        runDate: data.run_date,
-        notes: data.notes || null,
-        status: "draft",
-        payrollStatus: "draft",
-        payrollNumber,
-        totalGross: 0,
-        totalDeductions: 0,
-        totalNet: 0,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-
-      let totalGross = 0;
-      let totalDeductions = 0;
-      let totalNet = 0;
-
       const advanceSnapshot = await getDocs(
         query(
           collection(firestore, COLLECTIONS.ADVANCES),
@@ -249,7 +218,7 @@ export default function NewPayrollRun() {
           return advance.date_to_deduct <= data.period_end;
         });
 
-      const payrollItems = employees.map((employee) => {
+      const payrollEmployees = employees.map((employee) => {
         const employeeAdvances = advances.filter((advance) => advance.employee_id === employee.id);
         let totalAdvanceDeduction = 0;
 
@@ -268,65 +237,59 @@ export default function NewPayrollRun() {
           totalAdvanceDeduction
         );
 
-        totalGross += calculation.grossSalary;
-        totalDeductions += calculation.totalDeductions;
-        totalNet += calculation.netSalary;
-
         return {
-          companyId,
-          payrollRunId: payrollRunRef.id,
           employeeId: employee.id,
+          employeeName: employee.full_name,
+          grossSalary: calculation.grossSalary,
+          payeDeduction: calculation.paye,
+          napsaDeduction: calculation.napsaEmployee,
+          nhimaDeduction: calculation.nhimaEmployee,
+          otherDeductions: totalAdvanceDeduction,
+          netSalary: calculation.netSalary,
           basicSalary: calculation.basicSalary,
           housingAllowance: calculation.housingAllowance,
           transportAllowance: calculation.transportAllowance,
           otherAllowances: calculation.otherAllowances,
-          grossSalary: calculation.grossSalary,
-          paye: calculation.paye,
-          napsaEmployee: calculation.napsaEmployee,
-          napsaEmployer: calculation.napsaEmployer,
-          nhimaEmployee: calculation.nhimaEmployee,
-          nhimaEmployer: calculation.nhimaEmployer,
           advancesDeducted: totalAdvanceDeduction,
-          totalDeductions: calculation.totalDeductions,
-          netSalary: calculation.netSalary,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
         };
       });
 
-      await Promise.all(
-        payrollItems.map((item) => addDoc(collection(firestore, COLLECTIONS.PAYROLL_ITEMS), item)),
-      );
+      const additionsPayload = additions.map((addition) => ({
+        employeeId: addition.employee_id,
+        type: addition.type,
+        name: addition.name,
+        amount: addition.amount,
+        totalAmount: addition.total_amount,
+        monthsToPay: addition.months_to_pay,
+        monthlyDeduction: addition.monthly_deduction,
+      }));
 
-      if (additions.length > 0) {
-        await Promise.all(
-          additions.map((a) =>
-            addDoc(collection(firestore, COLLECTIONS.PAYROLL_ADDITIONS), {
-              companyId,
-              payrollRunId: payrollRunRef.id,
-              employeeId: a.employee_id,
-              type: a.type,
-              name: a.name,
-              amount: a.amount,
-              totalAmount: a.total_amount ?? null,
-              monthsToPay: a.months_to_pay ?? null,
-              monthlyDeduction: a.monthly_deduction ?? null,
-              createdAt: serverTimestamp(),
-              updatedAt: serverTimestamp(),
-            }),
-          ),
-        );
-      }
-
-      await updateDoc(doc(firestore, COLLECTIONS.PAYROLL_RUNS, payrollRunRef.id), {
-        totalGross,
-        totalDeductions,
-        totalNet,
-        updatedAt: serverTimestamp(),
+      const result = await payrollService.createPayrollDraft({
+        companyId,
+        periodStart: data.period_start,
+        periodEnd: data.period_end,
+        runDate: data.run_date,
+        notes: data.notes || undefined,
+        employees: payrollEmployees.map((employee) => ({
+          employeeId: employee.employeeId,
+          employeeName: employee.employeeName,
+          grossSalary: employee.grossSalary,
+          payeDeduction: employee.payeDeduction,
+          napsaDeduction: employee.napsaDeduction,
+          nhimaDeduction: employee.nhimaDeduction,
+          otherDeductions: employee.otherDeductions,
+          netSalary: employee.netSalary,
+          basicSalary: employee.basicSalary,
+          housingAllowance: employee.housingAllowance,
+          transportAllowance: employee.transportAllowance,
+          otherAllowances: employee.otherAllowances,
+          advancesDeducted: employee.advancesDeducted,
+        })),
+        additions: additionsPayload,
       });
 
       toast.success("Payroll draft created successfully");
-      navigate(`/payroll/${payrollRunRef.id}`);
+      navigate(`/payroll/${result.payrollRunId}`);
     } catch {
       toast.error("Failed to create payroll run");
     } finally {
@@ -356,9 +319,9 @@ export default function NewPayrollRun() {
         <AlertCircle className="h-4 w-4" />
         <AlertTitle>Payroll Workflow</AlertTitle>
         <AlertDescription>
-          Payroll follows a strict workflow: <strong>Draft → Trial → Final</strong>. 
-          Draft payrolls can be edited. Trial payrolls generate a preview with no GL impact. 
-          Final payrolls are locked and post journals to the General Ledger.
+          Payroll follows a strict workflow: <strong>Draft -&gt; Processed -&gt; Paid</strong>.
+          Draft payrolls can be edited and saved without posting journals.
+          Processing creates the payroll journal entry, and payment creates the settlement journal.
         </AlertDescription>
       </Alert>
 

@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DollarSign, FileText, TrendingDown, Receipt, CreditCard, AlertTriangle } from "lucide-react";
 import { formatZMW } from "@/utils/zambianTaxCalculations";
 import { useAuth } from "@/contexts/AuthContext";
-import { dashboardService } from "@/services/firebase";
+import { accountingService, dashboardService } from "@/services/firebase";
 import { COLLECTIONS } from "@/services/firebase/collectionNames";
 import { readNumber, readString } from "@/components/dashboard/dashboardDataUtils";
 
@@ -27,40 +27,42 @@ export function FinanceOfficerDashboard() {
         };
       }
 
-      const { invoices, expenses, bills, bankAccounts } = await dashboardService.runQueries(user.id, {
+      const companyId = await dashboardService.getCompanyIdForUser(user.id);
+      const [liveMetrics, { invoices, expenses, bills }] = await Promise.all([
+        accountingService.getDashboardLiveMetrics({ companyId }),
+        dashboardService.runQueries(user.id, {
         invoices: { collectionName: COLLECTIONS.INVOICES },
         expenses: { collectionName: COLLECTIONS.EXPENSES },
         bills: { collectionName: COLLECTIONS.BILLS },
-        bankAccounts: { collectionName: COLLECTIONS.BANK_ACCOUNTS },
-      });
+      }),
+      ]);
 
       const today = new Date().toISOString().split("T")[0];
 
       return {
-        paidInvoices: invoices
-          .filter((i) => readString(i, ["status"]) === "paid")
-          .reduce((sum, i) => sum + readNumber(i, ["total", "amount"]), 0),
-        pendingInvoices: invoices.filter((i) => readString(i, ["status"]) === "pending").length,
+        paidInvoices: liveMetrics.monthlyIncome,
+        pendingInvoices: invoices.filter((i) => {
+          const status = readString(i, ["status"]).toLowerCase();
+          return !["paid", "cancelled", "rejected"].includes(status);
+        }).length,
         overdueInvoices: invoices.filter((i) => {
           const dueDate = readString(i, ["dueDate", "due_date"]);
-          return readString(i, ["status"]) !== "paid" && Boolean(dueDate) && dueDate < today;
+          return readString(i, ["status"]).toLowerCase() !== "paid" && Boolean(dueDate) && dueDate < today;
         }).length,
-        totalExpenses: expenses.reduce((sum, e) => sum + readNumber(e, ["amount", "total"]), 0),
+        totalExpenses: liveMetrics.monthlyExpenses,
         pendingExpenses: expenses.filter((e) => readString(e, ["approvalStatus", "approval_status"]) === "pending").length,
-        unpaidBills: bills
-          .filter((b) => readString(b, ["status"]) !== "paid")
-          .reduce((sum, b) => sum + readNumber(b, ["total", "amount"]), 0),
+        unpaidBills: liveMetrics.outstandingAccountsPayable,
         overdueBills: bills.filter((b) => {
           const dueDate = readString(b, ["dueDate", "due_date"]);
-          return readString(b, ["status"]) !== "paid" && Boolean(dueDate) && dueDate < today;
+          return readString(b, ["status"]).toLowerCase() !== "paid" && Boolean(dueDate) && dueDate < today;
         }).length,
-        cashBalance: bankAccounts.reduce((sum, a) => sum + readNumber(a, ["currentBalance", "current_balance"]), 0),
+        cashBalance: liveMetrics.bankDefaultBalance,
       };
     },
   });
 
   const metrics = [
-    { title: "Revenue Collected", value: formatZMW(stats?.paidInvoices || 0), icon: DollarSign },
+    { title: "Monthly Revenue", value: formatZMW(stats?.paidInvoices || 0), icon: DollarSign },
     { title: "Total Expenses", value: formatZMW(stats?.totalExpenses || 0), icon: TrendingDown },
     { title: "Unpaid Bills", value: formatZMW(stats?.unpaidBills || 0), icon: Receipt },
     { title: "Cash Balance", value: formatZMW(stats?.cashBalance || 0), icon: CreditCard },

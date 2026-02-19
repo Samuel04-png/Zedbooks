@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Banknote, ArrowDownCircle, ArrowUpCircle, Wallet, ClipboardCheck } from "lucide-react";
 import { formatZMW } from "@/utils/zambianTaxCalculations";
 import { useAuth } from "@/contexts/AuthContext";
-import { dashboardService } from "@/services/firebase";
+import { accountingService, dashboardService } from "@/services/firebase";
 import { COLLECTIONS } from "@/services/firebase/collectionNames";
 import { readNumber, readString } from "@/components/dashboard/dashboardDataUtils";
 
@@ -27,39 +27,60 @@ export function CashierDashboard() {
         };
       }
 
-      const { bankAccounts, cashReconciliations, bankTransactions } = await dashboardService.runQueries(user.id, {
-        bankAccounts: { collectionName: COLLECTIONS.BANK_ACCOUNTS },
-        cashReconciliations: {
-          collectionName: COLLECTIONS.CASH_RECONCILIATIONS,
-          orderByField: "reconciliationDate",
-          orderDirection: "desc",
-          limitCount: 5,
-        },
-        bankTransactions: {
-          collectionName: COLLECTIONS.BANK_TRANSACTIONS,
-          orderByField: "createdAt",
-          orderDirection: "desc",
-          limitCount: 10,
-        },
+      const companyId = await dashboardService.getCompanyIdForUser(user.id);
+      const today = new Date();
+      const endDate = today.toISOString().slice(0, 10);
+      const startDate = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().slice(0, 10);
+
+      const [liveMetrics, balanceSheet, cashFlow, { cashReconciliations }] = await Promise.all([
+        accountingService.getDashboardLiveMetrics({ companyId }),
+        accountingService.getBalanceSheetReport({ companyId, asOfDate: endDate }),
+        accountingService.getCashFlowReport({ companyId, startDate, endDate }),
+        dashboardService.runQueries(user.id, {
+          cashReconciliations: {
+            collectionName: COLLECTIONS.CASH_RECONCILIATIONS,
+            orderByField: "reconciliationDate",
+            orderDirection: "desc",
+            limitCount: 5,
+          },
+        }),
+      ]);
+
+      const cashAssetRows = balanceSheet.assets.filter((row) => {
+        const name = row.accountName.toLowerCase();
+        return name.includes("cash") || name.includes("bank") || name.includes("money");
       });
 
-      const cashAccounts = bankAccounts.filter((a) => {
-        const type = readString(a, ["accountType", "account_type"]);
-        return type === "cash" || type === "petty_cash";
-      });
+      const cashAccounts = cashAssetRows.map((row) => ({
+        accountName: row.accountName,
+        currentBalance: row.balance,
+      }));
 
-      const recentReceipts = bankTransactions.filter((t) => readString(t, ["transactionType", "transaction_type"]) === "deposit");
-      const recentPayments = bankTransactions.filter((t) => readString(t, ["transactionType", "transaction_type"]) === "withdrawal");
+      const recentReceipts = cashFlow.rows
+        .filter((row) => row.moneyIn > 0)
+        .slice(0, 5)
+        .map((row) => ({
+          description: row.description || row.referenceType || "Receipt",
+          amount: row.moneyIn,
+        }));
+
+      const recentPayments = cashFlow.rows
+        .filter((row) => row.moneyOut > 0)
+        .slice(0, 5)
+        .map((row) => ({
+          description: row.description || row.referenceType || "Payment",
+          amount: row.moneyOut,
+        }));
 
       return {
-        cashBalance: cashAccounts.reduce((sum, a) => sum + readNumber(a, ["currentBalance", "current_balance"]), 0),
-        totalBalance: bankAccounts.reduce((sum, a) => sum + readNumber(a, ["currentBalance", "current_balance"]), 0),
+        cashBalance: liveMetrics.bankDefaultBalance,
+        totalBalance: cashAssetRows.reduce((sum, row) => sum + Number(row.balance || 0), 0),
         cashAccounts,
         recentReconciliations: cashReconciliations,
         recentReceipts,
         recentPayments,
-        todayReceipts: recentReceipts.reduce((sum, t) => sum + readNumber(t, ["amount"]), 0),
-        todayPayments: recentPayments.reduce((sum, t) => sum + readNumber(t, ["amount"]), 0),
+        todayReceipts: cashFlow.rows.reduce((sum, row) => sum + Number(row.moneyIn || 0), 0),
+        todayPayments: cashFlow.rows.reduce((sum, row) => sum + Number(row.moneyOut || 0), 0),
       };
     },
   });
