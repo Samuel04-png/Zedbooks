@@ -18,7 +18,8 @@ const db = admin.firestore();
 
 setGlobalOptions({
   region: process.env.FUNCTIONS_REGION || "us-central1",
-  maxInstances: 10,
+  cpu: "gcf_gen1",
+  maxInstances: 2,
 });
 
 const VALID_ROLES = new Set([
