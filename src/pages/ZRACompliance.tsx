@@ -83,7 +83,7 @@ const toNumber = (value: unknown): number => {
 
 const toCSVValue = (value: string | number | null | undefined) => {
   if (value === null || value === undefined) return "";
-  return String(value).replaceAll('"', '""');
+  return String(value).replace(/"/g, '""');
 };
 
 const downloadCSV = (headers: string[], rows: Array<Array<string | number | null | undefined>>, filename: string) => {

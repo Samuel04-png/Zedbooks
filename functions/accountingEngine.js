@@ -169,6 +169,7 @@ const DEFAULT_EXPENSE_CATEGORY_MAPPINGS = [
   ["Miscellaneous", 5110],
 ];
 
+
 const CASH_AND_BANK_ACCOUNT_NAMES = [
   "Cash",
   "Bank - Default",
@@ -183,6 +184,10 @@ const slugify = (value) => String(value || "")
   .trim()
   .replace(/[^a-z0-9]+/g, "-")
   .replace(/^-+|-+$/g, "");
+
+const DEFAULT_EXPENSE_CATEGORY_LOOKUP = new Map(
+  DEFAULT_EXPENSE_CATEGORY_MAPPINGS.map(([name, code]) => [slugify(name), { name, code }]),
+);
 
 const getDb = (db) => db || admin.firestore();
 
@@ -310,19 +315,22 @@ const getCategoryMappingByIdOrName = async (tx, db, companyId, input) => {
   if (categoryId) {
     const categoryRef = db.collection("expenseCategoryMappings").doc(categoryId);
     const categorySnap = await tx.get(categoryRef);
-    if (!categorySnap.exists) {
-      throw new HttpsError("not-found", "Expense category not found.");
-    }
-    const category = categorySnap.data();
-    const owner = category.companyId || category.organizationId;
-    if (owner !== companyId) {
-      throw new HttpsError("permission-denied", "Category does not belong to this organization.");
-    }
-    if (category.isActive === false || category.status === "inactive") {
-      throw new HttpsError("failed-precondition", "Expense category is inactive.");
+    if (categorySnap.exists) {
+      const category = categorySnap.data();
+      const owner = category.companyId || category.organizationId;
+      if (owner !== companyId) {
+        throw new HttpsError("permission-denied", "Category does not belong to this organization.");
+      }
+      if (category.isActive === false || category.status === "inactive") {
+        throw new HttpsError("failed-precondition", "Expense category is inactive.");
+      }
+
+      return { id: categorySnap.id, ...category };
     }
 
-    return { id: categorySnap.id, ...category };
+    if (!categoryName) {
+      throw new HttpsError("not-found", "Expense category not found.");
+    }
   }
 
   if (!categoryName) {
@@ -335,24 +343,155 @@ const getCategoryMappingByIdOrName = async (tx, db, companyId, input) => {
     .where("categoryName", "==", categoryName)
     .limit(1);
   const categorySnap = await tx.get(categoryQuery);
-  if (categorySnap.empty) {
-    throw new HttpsError("not-found", `Expense category '${categoryName}' not found.`);
+  if (!categorySnap.empty) {
+    const docSnap = categorySnap.docs[0];
+    const category = docSnap.data();
+    if (category.isActive === false || category.status === "inactive") {
+      throw new HttpsError("failed-precondition", "Expense category is inactive.");
+    }
+
+    return { id: docSnap.id, ...category };
   }
 
-  const docSnap = categorySnap.docs[0];
-  const category = docSnap.data();
-  if (category.isActive === false || category.status === "inactive") {
-    throw new HttpsError("failed-precondition", "Expense category is inactive.");
+  // Fallback to case-insensitive + slug lookup against existing category docs.
+  const allCategoriesSnap = await tx.get(
+    db.collection("expenseCategoryMappings")
+      .where("companyId", "==", companyId),
+  );
+  const normalizedInputName = slugify(categoryName);
+  const matchedBySlug = allCategoriesSnap.docs.find((doc) => {
+    const row = doc.data();
+    const rowName = String(row.categoryName || row.category_name || "").trim();
+    return slugify(rowName) === normalizedInputName;
+  });
+  if (matchedBySlug) {
+    const category = matchedBySlug.data();
+    if (category.isActive === false || category.status === "inactive") {
+      throw new HttpsError("failed-precondition", "Expense category is inactive.");
+    }
+    return { id: matchedBySlug.id, ...category };
   }
 
-  return { id: docSnap.id, ...category };
+  // If still missing, auto-provision only known default categories so commercial users can post expenses
+  // even when categories were not seeded yet by an admin.
+  const defaultMatch = DEFAULT_EXPENSE_CATEGORY_LOOKUP.get(normalizedInputName);
+  if (defaultMatch) {
+    const { name: resolvedCategoryName, code: accountCode } = defaultMatch;
+    const defaultAccountDocId = getAccountDocIdByCode(companyId, accountCode);
+    let linkedExpenseAccountId = null;
+
+    const defaultAccountSnap = await tx.get(
+      db.collection("chartOfAccounts").doc(defaultAccountDocId),
+    );
+
+    if (defaultAccountSnap.exists) {
+      const row = defaultAccountSnap.data();
+      const isActive = row.isActive !== false
+        && row.is_active !== false
+        && String(row.status || "").toLowerCase() !== "inactive";
+      if (isActive) {
+        linkedExpenseAccountId = defaultAccountSnap.id;
+      }
+    }
+
+    if (!linkedExpenseAccountId) {
+      const accountQuerySnap = await tx.get(
+        db.collection("chartOfAccounts")
+          .where("companyId", "==", companyId)
+          .where("accountCode", "==", accountCode)
+          .limit(1),
+      );
+      if (!accountQuerySnap.empty) {
+        const candidate = accountQuerySnap.docs[0];
+        const row = candidate.data();
+        const isActive = row.isActive !== false
+          && row.is_active !== false
+          && String(row.status || "").toLowerCase() !== "inactive";
+        if (isActive) {
+          linkedExpenseAccountId = candidate.id;
+        }
+      }
+    }
+
+    if (!linkedExpenseAccountId) {
+      const fallbackExpenseAccount = await findAnyActiveExpenseAccount(tx, db, companyId);
+      if (fallbackExpenseAccount) {
+        linkedExpenseAccountId = fallbackExpenseAccount.id;
+      }
+    }
+
+    if (!linkedExpenseAccountId) {
+      throw new HttpsError(
+        "failed-precondition",
+        "No active expense account is configured. Add at least one active Expense account in Chart of Accounts.",
+      );
+    }
+
+    const categoryDocId = `${companyId}_${slugify(resolvedCategoryName)}`;
+    const categoryRef = db.collection("expenseCategoryMappings").doc(categoryDocId);
+    tx.set(categoryRef, {
+      companyId,
+      organizationId: companyId,
+      categoryName: resolvedCategoryName,
+      linkedExpenseAccountId,
+      linked_expense_account_id: linkedExpenseAccountId,
+      accountId: linkedExpenseAccountId,
+      accountCode,
+      isActive: true,
+      status: "active",
+      createdBy: null,
+      updatedBy: null,
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    return {
+      id: categoryDocId,
+      companyId,
+      organizationId: companyId,
+      categoryName: resolvedCategoryName,
+      linkedExpenseAccountId,
+      linked_expense_account_id: linkedExpenseAccountId,
+      accountId: linkedExpenseAccountId,
+      accountCode,
+      isActive: true,
+      status: "active",
+    };
+  }
+
+  throw new HttpsError("not-found", `Expense category '${categoryName}' not found.`);
+};
+
+const findAnyActiveExpenseAccount = async (tx, db, companyId) => {
+  const accountsSnap = await tx.get(
+    db.collection("chartOfAccounts")
+      .where("companyId", "==", companyId)
+      .where("accountType", "==", "Expense")
+      .limit(100),
+  );
+
+  if (accountsSnap.empty) return null;
+
+  const activeDoc = accountsSnap.docs.find((docSnap) => {
+    const row = docSnap.data();
+    if (row.isActive === false || row.is_active === false) return false;
+    if (String(row.status || "").toLowerCase() === "inactive") return false;
+    return true;
+  });
+
+  if (!activeDoc) return null;
+  return { id: activeDoc.id, ...activeDoc.data() };
 };
 
 const resolveExpenseAccountId = async (tx, db, companyId, category) => {
   const linkedAccountId = category.linkedExpenseAccountId || category.linked_expense_account_id || category.accountId;
   if (linkedAccountId) {
-    const account = await getAccountById(companyId, String(linkedAccountId), tx, db);
-    return account.id;
+    try {
+      const account = await getAccountById(companyId, String(linkedAccountId), tx, db);
+      return account.id;
+    } catch (error) {
+      // Fall through to secondary resolution paths when mapping points to a removed/inactive account.
+    }
   }
 
   if (category.accountCode) {
@@ -360,12 +499,24 @@ const resolveExpenseAccountId = async (tx, db, companyId, category) => {
     if (codeAccount) return codeAccount.id;
   }
 
-  const fallback = await findAccountByName(companyId, ["Miscellaneous Expense"], db);
-  if (!fallback) {
-    throw new HttpsError("failed-precondition", "No linked expense account configured for category.");
+  const fallbackByName = await findAccountByName(
+    companyId,
+    ["Miscellaneous Expense", "Other Expense", "Other Expenses", "General Expense"],
+    db,
+  );
+  if (fallbackByName) {
+    return fallbackByName.id;
   }
 
-  return fallback.id;
+  const fallbackAnyExpense = await findAnyActiveExpenseAccount(tx, db, companyId);
+  if (fallbackAnyExpense) {
+    return fallbackAnyExpense.id;
+  }
+
+  throw new HttpsError(
+    "failed-precondition",
+    "No active expense account is configured. Add at least one active Expense account in Chart of Accounts.",
+  );
 };
 
 const adjustLinkedBankAccountBalance = async ({
@@ -2090,6 +2241,59 @@ const reverseJournalEntry = async ({
               direction: "outflow",
               description: `Reversal - Invoice payment ${entryReferenceId}`,
               referenceType: "InvoicePaymentReversal",
+              referenceId: entryReferenceId,
+              createdBy: userId,
+            });
+          }
+        }
+      }
+    }
+
+    if (entryReferenceType === "Expense" && entryReferenceId) {
+      const expenseRef = db.collection("expenses").doc(entryReferenceId);
+      const expenseSnap = await tx.get(expenseRef);
+      if (expenseSnap.exists) {
+        const expense = expenseSnap.data();
+        const expenseOwner = expense.companyId || expense.organizationId;
+        if (expenseOwner === companyId) {
+          const expenseAmount = normalizeMoney(expense.amount ?? 0);
+          const paymentAccountId = String(
+            expense.paymentAccountId || expense.payment_account_id || "",
+          ).trim();
+
+          tx.set(expenseRef, {
+            status: "Reversed",
+            isReversed: true,
+            is_reversed: true,
+            reversalEntryId,
+            reversal_entry_id: reversalEntryId,
+            reversedAt: FieldValue.serverTimestamp(),
+            reversed_by: userId,
+            reversedBy: userId,
+            updatedAt: FieldValue.serverTimestamp(),
+            updatedBy: userId,
+            updated_by: userId,
+          }, { merge: true });
+
+          if (paymentAccountId && expenseAmount > 0) {
+            await adjustLinkedBankAccountBalance({
+              tx,
+              db,
+              companyId,
+              paymentAccountId,
+              deltaAmount: expenseAmount,
+            });
+
+            createBankTransaction({
+              tx,
+              db,
+              companyId,
+              accountId: paymentAccountId,
+              amount: expenseAmount,
+              transactionDate: reversalDate,
+              direction: "inflow",
+              description: `Reversal - Expense ${entryReferenceId}`,
+              referenceType: "ExpenseReversal",
               referenceId: entryReferenceId,
               createdBy: userId,
             });

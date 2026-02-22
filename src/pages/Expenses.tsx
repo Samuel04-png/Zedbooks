@@ -52,6 +52,10 @@ interface Expense {
   reference_number: string | null;
   notes: string | null;
   journal_entry_id: string | null;
+  status: string | null;
+  is_reversed: boolean;
+  is_voided: boolean;
+  reversal_entry_id: string | null;
 }
 
 interface ExpenseFormData {
@@ -75,7 +79,57 @@ interface PaymentAccountOption {
   accountName: string;
 }
 
+const normalizeCategoryKey = (value: string) =>
+  String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
 const FALLBACK_EXPENSE_CATEGORY_NAMES = [
+  "Fuel",
+  "Travel",
+  "Vehicle Maintenance",
+  "Motor Vehicle Ins",
+  "Parking",
+  "Electricity",
+  "Water",
+  "Internet",
+  "Telephone",
+  "Airtime",
+  "Stationery",
+  "Printing",
+  "Office Cleaning",
+  "Office Maintenance",
+  "Building Maintenance",
+  "Security",
+  "Staff Welfare",
+  "Staff Training",
+  "Staff Transport",
+  "Staff Meals",
+  "Overtime",
+  "Advertising",
+  "Promotion",
+  "Branding & Design",
+  "Legal Fees",
+  "Accounting Fees",
+  "Consultancy",
+  "Audit Fees",
+  "Software",
+  "Website Hosting",
+  "Domain Renewal",
+  "IT Support",
+  "Bank Charges",
+  "Loan Interest",
+  "Transaction Fees",
+  "Mobile Money Charges",
+  "Inventory",
+  "Packaging",
+  "Delivery",
+  "Courier",
+  "Licenses & Permits",
+  "Regulatory Fees",
+  "Fines & Penalties",
   "Utilities",
   "Transport",
   "Office Supplies",
@@ -123,6 +177,16 @@ export default function Expenses() {
     "accountant",
     "assistant_accountant",
   ].includes(userRole || "");
+  const canManageExpenses = [
+    "super_admin",
+    "admin",
+    "financial_manager",
+    "accountant",
+    "assistant_accountant",
+    "finance_officer",
+    "bookkeeper",
+    "cashier",
+  ].includes(userRole || "");
 
   const [formData, setFormData] = useState<ExpenseFormData>({
     description: "",
@@ -164,6 +228,10 @@ export default function Expenses() {
             reference_number: (row.referenceNumber ?? row.reference_number ?? null) as string | null,
             notes: (row.notes ?? null) as string | null,
             journal_entry_id: (row.journalEntryId ?? row.journal_entry_id ?? null) as string | null,
+            status: (row.status ?? null) as string | null,
+            is_reversed: Boolean(row.isReversed ?? row.is_reversed ?? false),
+            is_voided: Boolean(row.isVoided ?? row.is_voided ?? false),
+            reversal_entry_id: (row.reversalEntryId ?? row.reversal_entry_id ?? null) as string | null,
           } satisfies Expense;
         })
         .sort((a, b) => b.expense_date.localeCompare(a.expense_date));
@@ -200,14 +268,15 @@ export default function Expenses() {
         .filter((row) => row.categoryName)
         .sort((a, b) => a.categoryName.localeCompare(b.categoryName));
 
-      if (mapped.length > 0) {
-        return mapped;
-      }
+      const mappedCategoryKeys = new Set(mapped.map((item) => normalizeCategoryKey(item.categoryName)));
+      const missingFallbacks = FALLBACK_EXPENSE_CATEGORY_NAMES
+        .filter((categoryName) => !mappedCategoryKeys.has(normalizeCategoryKey(categoryName)))
+        .map((categoryName) => ({
+          id: `fallback-${normalizeCategoryKey(categoryName)}`,
+          categoryName,
+        }));
 
-      return FALLBACK_EXPENSE_CATEGORY_NAMES.map((categoryName) => ({
-        id: `fallback-${categoryName.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
-        categoryName,
-      }));
+      return [...mapped, ...missingFallbacks].sort((a, b) => a.categoryName.localeCompare(b.categoryName));
     },
     enabled: Boolean(companyId),
   });
@@ -324,12 +393,11 @@ export default function Expenses() {
   });
 
   const reverseExpenseMutation = useMutation({
-    mutationFn: async (expense: Expense) => {
+    mutationFn: async ({ expense, reason }: { expense: Expense; reason?: string }) => {
       if (!companyId) throw new Error("Company not found");
       if (!expense.journal_entry_id) {
         throw new Error("Expense has no posted journal entry to reverse.");
       }
-      const reason = prompt(`Reason for reversing expense "${expense.description}" (optional):`) || undefined;
       return accountingService.reverseJournalEntry({
         companyId,
         journalEntryId: expense.journal_entry_id,
@@ -349,6 +417,42 @@ export default function Expenses() {
     },
   });
 
+  const voidExpenseMutation = useMutation({
+    mutationFn: async (expense: Expense) => {
+      if (!companyId || !user?.id) throw new Error("Not authenticated");
+      if (!canManageExpenses) {
+        throw new Error("You do not have permission to void expenses.");
+      }
+      if (expense.journal_entry_id && !expense.is_reversed) {
+        throw new Error("Posted expenses cannot be deleted. Reverse the posting first.");
+      }
+      await setDoc(
+        doc(firestore, COLLECTIONS.EXPENSES, expense.id),
+        {
+          status: "voided",
+          isVoided: true,
+          is_voided: true,
+          voidedAt: serverTimestamp(),
+          voided_at: serverTimestamp(),
+          voidedBy: user.id,
+          voided_by: user.id,
+          updatedAt: serverTimestamp(),
+          updatedBy: user.id,
+          updated_by: user.id,
+        },
+        { merge: true },
+      );
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["expenses", companyId] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      toast.success("Expense removed from active list");
+    },
+    onError: (error) => {
+      toast.error("Failed to remove expense: " + error.message);
+    },
+  });
+
   const resetForm = () => {
     setFormData({
       description: "",
@@ -365,6 +469,14 @@ export default function Expenses() {
   };
 
   const handleEdit = (expense: Expense) => {
+    if (expense.is_voided) {
+      toast.error("Voided expenses cannot be edited.");
+      return;
+    }
+    if (expense.is_reversed) {
+      toast.error("Reversed expenses cannot be edited.");
+      return;
+    }
     if (expense.journal_entry_id) {
       toast.error("Posted expenses cannot be edited directly.");
       return;
@@ -396,6 +508,52 @@ export default function Expenses() {
     }
   };
 
+  const getExpenseStatus = (expense: Expense): "posted" | "reversed" | "voided" | "draft" => {
+    if (expense.is_voided || String(expense.status || "").toLowerCase() === "voided") return "voided";
+    if (expense.is_reversed || String(expense.status || "").toLowerCase() === "reversed") return "reversed";
+    if (expense.journal_entry_id) return "posted";
+    return "draft";
+  };
+
+  const getExpenseStatusBadge = (expense: Expense) => {
+    const status = getExpenseStatus(expense);
+    if (status === "posted") return <Badge className="bg-blue-100 text-blue-800">Posted</Badge>;
+    if (status === "reversed") return <Badge variant="outline" className="border-orange-500 text-orange-600">Reversed</Badge>;
+    if (status === "voided") return <Badge variant="outline" className="border-slate-500 text-slate-600">Voided</Badge>;
+    return <Badge variant="secondary">Draft</Badge>;
+  };
+
+  const handleDeleteAction = (expense: Expense) => {
+    const status = getExpenseStatus(expense);
+    if (status === "voided") {
+      toast.error("Expense is already voided.");
+      return;
+    }
+
+    if (expense.journal_entry_id && status !== "reversed") {
+      if (!canReversePostedEntries) {
+        toast.error("You do not have permission to reverse posted expenses.");
+        return;
+      }
+      if (!confirm("This expense is posted. Continue to reverse it as the accounting-safe delete action?")) {
+        return;
+      }
+      const reason = prompt(`Reason for reversing expense "${expense.description}" (optional):`) || undefined;
+      reverseExpenseMutation.mutate({ expense, reason });
+      return;
+    }
+
+    if (!canManageExpenses) {
+      toast.error("You do not have permission to void expenses.");
+      return;
+    }
+
+    if (!confirm("Mark this expense as voided? This keeps an audit trail and removes it from active list.")) {
+      return;
+    }
+    voidExpenseMutation.mutate(expense);
+  };
+
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat("en-ZM", {
       style: "currency",
@@ -414,7 +572,9 @@ export default function Expenses() {
     return variants[category] || "outline";
   };
 
-  const filteredExpenses = expenses?.filter(
+  const activeExpenses = expenses?.filter((expense) => !expense.is_voided) || [];
+
+  const filteredExpenses = activeExpenses.filter(
     (expense) =>
       expense.description?.toLowerCase().includes(searchQuery.toLowerCase()) ||
       expense.category?.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -422,10 +582,10 @@ export default function Expenses() {
   );
 
   // Calculate totals
-  const totalExpenses = expenses?.reduce(
+  const totalExpenses = activeExpenses.reduce(
     (sum, exp) => sum + Number(exp.amount || 0),
     0
-  ) || 0;
+  );
 
   const handleImport = async (data: Record<string, unknown>[]) => {
     if (!user?.id || !companyId) throw new Error("Not authenticated");
@@ -454,11 +614,11 @@ export default function Expenses() {
   };
 
   const handleExport = () => {
-    if (!expenses || expenses.length === 0) {
+    if (!activeExpenses || activeExpenses.length === 0) {
       toast.error("No expenses to export");
       return;
     }
-    exportToCSV(expenses, expenseExportColumns, "expenses-export");
+    exportToCSV(activeExpenses, expenseExportColumns, "expenses-export");
     toast.success("Expenses exported");
   };
 
@@ -655,7 +815,7 @@ export default function Expenses() {
           <CardContent>
             <div className="text-2xl font-bold">
               {formatCurrency(
-                expenses
+                activeExpenses
                   ?.filter((e) => {
                     const date = new Date(e.expense_date);
                     const now = new Date();
@@ -676,7 +836,7 @@ export default function Expenses() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{expenses?.length || 0}</div>
+            <div className="text-2xl font-bold">{activeExpenses.length || 0}</div>
           </CardContent>
         </Card>
       </div>
@@ -704,6 +864,7 @@ export default function Expenses() {
                 <TableHead>Category</TableHead>
                 <TableHead>Vendor</TableHead>
                 <TableHead className="text-right">Amount</TableHead>
+                <TableHead>Status</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -725,9 +886,10 @@ export default function Expenses() {
                   <TableCell className="text-right font-medium">
                     {formatCurrency(Number(expense.amount))}
                   </TableCell>
+                  <TableCell>{getExpenseStatusBadge(expense)}</TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-2">
-                      {expense.journal_entry_id && canReversePostedEntries && (
+                      {expense.journal_entry_id && !expense.is_reversed && canReversePostedEntries && (
                         <Button
                           variant="ghost"
                           size="icon"
@@ -736,7 +898,8 @@ export default function Expenses() {
                             if (!confirm("Reverse this expense posting? This creates an opposite journal entry.")) {
                               return;
                             }
-                            reverseExpenseMutation.mutate(expense);
+                            const reason = prompt(`Reason for reversing expense "${expense.description}" (optional):`) || undefined;
+                            reverseExpenseMutation.mutate({ expense, reason });
                           }}
                           title="Reverse expense posting"
                         >
@@ -747,19 +910,17 @@ export default function Expenses() {
                         variant="ghost"
                         size="icon"
                         onClick={() => handleEdit(expense)}
-                        disabled={Boolean(expense.journal_entry_id)}
-                        title={expense.journal_entry_id ? "Posted expenses cannot be edited" : "Edit"}
+                        disabled={Boolean(expense.journal_entry_id) || expense.is_reversed || expense.is_voided}
+                        title={expense.journal_entry_id ? "Posted expenses cannot be edited" : expense.is_reversed ? "Reversed expenses cannot be edited" : expense.is_voided ? "Voided expenses cannot be edited" : "Edit"}
                       >
                         <Pencil className="h-4 w-4" />
                       </Button>
                       <Button
                         variant="ghost"
                         size="icon"
-                        onClick={() => {
-                          toast.error("Expense deletion is blocked. Use a reversal journal workflow.");
-                        }}
-                        disabled
-                        title="Expense deletion is blocked"
+                        onClick={() => handleDeleteAction(expense)}
+                        disabled={reverseExpenseMutation.isPending || voidExpenseMutation.isPending}
+                        title={expense.journal_entry_id && !expense.is_reversed ? "Delete via reversal" : "Void expense"}
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>
@@ -769,7 +930,7 @@ export default function Expenses() {
               ))}
               {filteredExpenses?.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
+                  <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
                     No expenses found. Record your first expense!
                   </TableCell>
                 </TableRow>
