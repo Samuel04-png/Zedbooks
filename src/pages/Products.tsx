@@ -44,6 +44,7 @@ import {
 import { LoadingState } from "@/components/ui/LoadingState";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { useAuth } from "@/contexts/AuthContext";
+import { useUserRole } from "@/hooks/useUserRole";
 import { companyService } from "@/services/firebase";
 import { firestore } from "@/integrations/firebase/client";
 import { COLLECTIONS } from "@/services/firebase/collectionNames";
@@ -121,6 +122,8 @@ const tsToIso = (value: unknown): string | null => {
 
 export default function Products() {
   const { user } = useAuth();
+  const { data: userRole } = useUserRole();
+  const canDeleteMasterData = userRole === "super_admin" || userRole === "admin";
   const [activeTab, setActiveTab] = useState("catalog");
   const [searchTerm, setSearchTerm] = useState("");
   const [typeFilter, setTypeFilter] = useState<string>("all");
@@ -249,6 +252,9 @@ export default function Products() {
 
   const deleteProductMutation = useMutation({
     mutationFn: async (id: string) => {
+      if (!canDeleteMasterData) {
+        throw new Error("Only Admin users can delete products.");
+      }
       await deleteDoc(doc(firestore, COLLECTIONS.PRODUCTS, id));
     },
     onSuccess: () => {
@@ -298,6 +304,9 @@ export default function Products() {
 
   const deletePriceListMutation = useMutation({
     mutationFn: async (id: string) => {
+      if (!canDeleteMasterData) {
+        throw new Error("Only Admin users can delete price lists.");
+      }
       await deleteDoc(doc(firestore, COLLECTIONS.PRICE_LISTS, id));
     },
     onSuccess: () => {
@@ -512,13 +521,15 @@ export default function Products() {
                           >
                             <Edit className="h-4 w-4" />
                           </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => deleteProductMutation.mutate(product.id)}
-                          >
-                            <Trash2 className="h-4 w-4 text-destructive" />
-                          </Button>
+                          {canDeleteMasterData && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => deleteProductMutation.mutate(product.id)}
+                            >
+                              <Trash2 className="h-4 w-4 text-destructive" />
+                            </Button>
+                          )}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -588,13 +599,15 @@ export default function Products() {
                         <Edit className="h-4 w-4 mr-2" />
                         Edit
                       </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => deletePriceListMutation.mutate(priceList.id)}
-                      >
-                        <Trash2 className="h-4 w-4 text-destructive" />
-                      </Button>
+                      {canDeleteMasterData && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => deletePriceListMutation.mutate(priceList.id)}
+                        >
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
+                      )}
                     </div>
                   </CardContent>
                 </Card>

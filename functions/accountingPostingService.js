@@ -209,7 +209,9 @@ const createJournalEntry = async ({
     entryDate: normalizedEntryDate,
     description: description || null,
     referenceType,
+    reference_type: referenceType,
     referenceId: referenceId || null,
+    reference_id: referenceId || null,
     totalAmount: totalDebits,
     debitTotal: totalDebits,
     creditTotal: totalCredits,
@@ -302,4 +304,3 @@ module.exports = {
   findAccountByName,
   findAccountByCode,
 };
-

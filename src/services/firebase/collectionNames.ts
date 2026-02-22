@@ -16,6 +16,7 @@ export const COLLECTIONS = {
   BILLS: "bills",
   BILL_PAYMENTS: "billPayments",
   EXPENSES: "expenses",
+  EXPENSE_CATEGORY_MAPPINGS: "expenseCategoryMappings",
   SALES_ORDERS: "salesOrders",
   PURCHASE_ORDERS: "purchaseOrders",
 

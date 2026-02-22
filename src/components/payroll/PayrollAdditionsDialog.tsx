@@ -130,7 +130,10 @@ export function PayrollAdditionsDialog({
         <div className="space-y-4">
           <div className="space-y-2">
             <Label>Type</Label>
-            <Select value={type} onValueChange={(v: any) => setType(v)}>
+            <Select
+              value={type}
+              onValueChange={(value) => setType(value as PayrollAddition["type"])}
+            >
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>

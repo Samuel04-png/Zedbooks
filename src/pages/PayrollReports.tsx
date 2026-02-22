@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Download, FileText } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatZMW } from "@/utils/zambianTaxCalculations";
 import { format } from "date-fns";
@@ -26,6 +26,7 @@ import { firestore } from "@/integrations/firebase/client";
 interface PayrollRun {
   id: string;
   runDate: string;
+  status: "draft" | "trial" | "processed" | "paid" | "payment_reversed" | "reversed" | "final";
 }
 
 interface EmployeeSummary {
@@ -74,10 +75,21 @@ const chunk = <T,>(arr: T[], size: number): T[][] => {
   return chunks;
 };
 
+const normalizePayrollStatus = (raw: unknown): PayrollRun["status"] => {
+  const value = String(raw || "").toLowerCase().trim();
+  if (value === "approved") return "processed";
+  if (value === "completed") return "paid";
+  if (["draft", "trial", "processed", "paid", "payment_reversed", "reversed", "final"].includes(value)) {
+    return value as PayrollRun["status"];
+  }
+  return "draft";
+};
+
 export default function PayrollReports() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const [selectedMonth, setSelectedMonth] = useState(format(new Date(), "yyyy-MM"));
+  const [includeReversed, setIncludeReversed] = useState(false);
 
   const startOfMonth = `${selectedMonth}-01`;
   const endOfMonth = new Date(
@@ -107,6 +119,7 @@ export default function PayrollReports() {
         return {
           id: docSnap.id,
           runDate: runDateRaw ? String(runDateRaw) : "",
+          status: normalizePayrollStatus(row.payrollStatus ?? row.payroll_status ?? row.status),
         } satisfies PayrollRun;
       });
 
@@ -120,15 +133,29 @@ export default function PayrollReports() {
     enabled: Boolean(user),
   });
 
+  const includedRunIds = useMemo(
+    () =>
+      new Set(
+        (payrollRuns || [])
+          .filter((run) => includeReversed || run.status !== "reversed")
+          .map((run) => run.id),
+      ),
+    [payrollRuns, includeReversed],
+  );
+
   const { data: payrollItems } = useQuery({
-    queryKey: ["payroll-items-report", selectedMonth, user?.id, (payrollRuns || []).map((run) => run.id).join("|")],
+    queryKey: [
+      "payroll-items-report",
+      selectedMonth,
+      user?.id,
+      includeReversed ? "with-reversed" : "without-reversed",
+      Array.from(includedRunIds).join("|"),
+    ],
     queryFn: async () => {
-      if (!user || !payrollRuns || payrollRuns.length === 0) return [] as PayrollItemReport[];
+      if (!user || includedRunIds.size === 0) return [] as PayrollItemReport[];
 
       const membership = await companyService.getPrimaryMembershipByUser(user.id);
       if (!membership?.companyId) return [] as PayrollItemReport[];
-
-      const runIds = new Set(payrollRuns.map((run) => run.id));
 
       const payrollItemsRef = collection(firestore, COLLECTIONS.PAYROLL_ITEMS);
       const itemSnapshot = await getDocs(
@@ -157,7 +184,7 @@ export default function PayrollReports() {
             netSalary: Number(row.netSalary ?? row.net_salary ?? 0),
           };
         })
-        .filter((row) => row.payrollRunId && runIds.has(row.payrollRunId));
+        .filter((row) => row.payrollRunId && includedRunIds.has(row.payrollRunId));
 
       const employeeIds = Array.from(new Set(mappedItems.map((item) => item.employeeId).filter(Boolean)));
       const employeeMap = new Map<string, EmployeeSummary>();
@@ -193,7 +220,7 @@ export default function PayrollReports() {
         employees: employeeMap.get(item.employeeId) ?? null,
       }));
     },
-    enabled: Boolean(user && payrollRuns && payrollRuns.length > 0),
+    enabled: Boolean(user && includedRunIds.size > 0),
   });
 
   const exportCsv = (headers: string[], rows: Array<Array<string | number>>, filename: string) => {
@@ -365,6 +392,14 @@ export default function PayrollReports() {
           <Label>Select Month</Label>
           <Input type="month" value={selectedMonth} onChange={(e) => setSelectedMonth(e.target.value)} />
         </div>
+        <label className="flex items-center gap-2 pt-6 text-sm">
+          <input
+            type="checkbox"
+            checked={includeReversed}
+            onChange={(event) => setIncludeReversed(event.target.checked)}
+          />
+          Include reversed payroll runs
+        </label>
       </div>
 
       <div className="grid gap-4 md:grid-cols-4">

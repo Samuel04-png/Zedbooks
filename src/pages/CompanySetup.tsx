@@ -255,7 +255,7 @@ export default function CompanySetup() {
                 <Label>Org Type</Label>
                 <Select
                   value={companyData.organizationType}
-                  onValueChange={(v: any) => updateField("organizationType", v)}
+                  onValueChange={(value: OrganizationType) => updateField("organizationType", value)}
                 >
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
@@ -268,7 +268,7 @@ export default function CompanySetup() {
                 <Label>Business Type</Label>
                 <Select
                   value={companyData.businessType}
-                  onValueChange={(v: any) => updateField("businessType", v)}
+                  onValueChange={(value: BusinessType) => updateField("businessType", value)}
                 >
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>

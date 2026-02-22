@@ -8,8 +8,15 @@ const {
   findAccountByCode,
   getAccountById,
 } = require("./accountingPostingService");
+const accountingEngine = require("./accountingEngine");
 
 const PAYROLL_ROLES = ["super_admin", "admin", "hr_manager", "financial_manager", "accountant"];
+const PAYROLL_REVERSAL_ROLES = ["super_admin", "admin", "hr_manager", "financial_manager", "accountant"];
+
+const normalizePayrollRunStatus = (payroll) =>
+  String(payroll.payrollStatus || payroll.payroll_status || payroll.status || "")
+    .toLowerCase()
+    .trim();
 
 const assertEmployeePayload = (employees) => {
   if (!Array.isArray(employees) || employees.length === 0) {
@@ -121,6 +128,34 @@ const assertPeriodUnlocked = async (tx, db, companyId, entryDate) => {
 
 const normalizeAdvanceStatus = (status) => String(status || "").toLowerCase();
 
+const determineAdvanceStatus = (remainingBalance, totalAmount, monthsDeducted, monthsToRepay) => {
+  if (remainingBalance <= 0.009) return "deducted";
+  if (monthsToRepay > 0 && monthsDeducted >= monthsToRepay) return "deducted";
+  if (remainingBalance >= totalAmount - 0.009 || monthsDeducted <= 0) return "pending";
+  return "partial";
+};
+
+const setPayrollItemsStatus = async ({ tx, db, payrollRunId, status, uid }) => {
+  let payrollItemsSnap = await tx.get(
+    db.collection("payrollItems").where("payrollRunId", "==", payrollRunId),
+  );
+  if (payrollItemsSnap.empty) {
+    payrollItemsSnap = await tx.get(
+      db.collection("payrollItems").where("payroll_run_id", "==", payrollRunId),
+    );
+  }
+
+  payrollItemsSnap.docs.forEach((docSnap) => {
+    tx.set(docSnap.ref, {
+      payrollStatus: status,
+      payroll_status: status,
+      updatedAt: FieldValue.serverTimestamp(),
+      updatedBy: uid,
+      updated_by: uid,
+    }, { merge: true });
+  });
+};
+
 const applyPayrollAdvanceDeductions = async ({
   tx,
   db,
@@ -213,13 +248,15 @@ const applyPayrollAdvanceDeductions = async ({
       const nextRemainingBalance = normalizeMoney(remainingBalance - deductionAmount);
       const isFullyRepaid = nextRemainingBalance <= 0.009
         || (monthsToRepay > 0 && nextMonthsDeducted >= monthsToRepay);
+      const statusBefore = normalizeAdvanceStatus(advance.status) || "pending";
+      const statusAfter = isFullyRepaid ? "deducted" : "partial";
 
       tx.set(advanceEntry.docSnap.ref, {
         remaining_balance: Math.max(0, nextRemainingBalance),
         remainingBalance: Math.max(0, nextRemainingBalance),
         months_deducted: nextMonthsDeducted,
         monthsDeducted: nextMonthsDeducted,
-        status: isFullyRepaid ? "deducted" : "partial",
+        status: statusAfter,
         last_deducted_payroll_run_id: payrollRunId,
         last_deducted_at: FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp(),
@@ -227,17 +264,165 @@ const applyPayrollAdvanceDeductions = async ({
         updated_by: uid,
       }, { merge: true });
 
+      const deductionLogRef = db.collection("payrollAdvanceDeductions").doc();
+      tx.set(deductionLogRef, {
+        companyId,
+        payrollRunId,
+        payroll_run_id: payrollRunId,
+        employeeId,
+        employee_id: employeeId,
+        advanceId: advanceEntry.docSnap.id,
+        advance_id: advanceEntry.docSnap.id,
+        deductionAmount,
+        deduction_amount: deductionAmount,
+        monthIncrement,
+        month_increment: monthIncrement,
+        previousRemainingBalance: remainingBalance,
+        previous_remaining_balance: remainingBalance,
+        newRemainingBalance: Math.max(0, nextRemainingBalance),
+        new_remaining_balance: Math.max(0, nextRemainingBalance),
+        previousMonthsDeducted,
+        previous_months_deducted: previousMonthsDeducted,
+        newMonthsDeducted: nextMonthsDeducted,
+        new_months_deducted: nextMonthsDeducted,
+        statusBefore,
+        status_before: statusBefore,
+        statusAfter,
+        status_after: statusAfter,
+        isReversed: false,
+        is_reversed: false,
+        createdBy: uid,
+        created_by: uid,
+        createdAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+
       advanceEntry.data = {
         ...advance,
         remaining_balance: Math.max(0, nextRemainingBalance),
         remainingBalance: Math.max(0, nextRemainingBalance),
         months_deducted: nextMonthsDeducted,
         monthsDeducted: nextMonthsDeducted,
-        status: isFullyRepaid ? "deducted" : "partial",
+        status: statusAfter,
       };
 
       deductionBudget = normalizeMoney(deductionBudget - deductionAmount);
     }
+  }
+};
+
+const reversePayrollAdvanceDeductions = async ({
+  tx,
+  db,
+  companyId,
+  payrollRunId,
+  uid,
+  reversalJournalEntryId = null,
+}) => {
+  let deductionsSnap = await tx.get(
+    db.collection("payrollAdvanceDeductions").where("payrollRunId", "==", payrollRunId),
+  );
+  if (deductionsSnap.empty) {
+    deductionsSnap = await tx.get(
+      db.collection("payrollAdvanceDeductions").where("payroll_run_id", "==", payrollRunId),
+    );
+  }
+  if (deductionsSnap.empty) return;
+
+  for (const deductionDoc of deductionsSnap.docs) {
+    const deduction = deductionDoc.data();
+    if (deduction.isReversed === true || deduction.is_reversed === true) {
+      continue;
+    }
+
+    const advanceId = String(deduction.advanceId || deduction.advance_id || "").trim();
+    const deductionAmount = normalizeMoney(deduction.deductionAmount ?? deduction.deduction_amount ?? 0);
+    const monthIncrement = Number(deduction.monthIncrement ?? deduction.month_increment ?? 0) || 1;
+    if (!advanceId || deductionAmount <= 0) {
+      tx.set(deductionDoc.ref, {
+        isReversed: true,
+        is_reversed: true,
+        reversedAt: FieldValue.serverTimestamp(),
+        reversedBy: uid,
+        reversed_by: uid,
+        reversalJournalEntryId: reversalJournalEntryId || null,
+        reversal_journal_entry_id: reversalJournalEntryId || null,
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+      continue;
+    }
+
+    const advanceRef = db.collection("advances").doc(advanceId);
+    const advanceSnap = await tx.get(advanceRef);
+    if (!advanceSnap.exists) {
+      tx.set(deductionDoc.ref, {
+        reversalSkipped: true,
+        reversal_skipped: true,
+        reversalSkipReason: `Advance ${advanceId} not found`,
+        reversal_skip_reason: `Advance ${advanceId} not found`,
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+      continue;
+    }
+
+    const advance = advanceSnap.data();
+    const advanceOwner = String(advance.companyId || advance.organizationId || "").trim();
+    if (advanceOwner !== companyId) {
+      tx.set(deductionDoc.ref, {
+        reversalSkipped: true,
+        reversal_skipped: true,
+        reversalSkipReason: `Advance ${advanceId} belongs to another organization`,
+        reversal_skip_reason: `Advance ${advanceId} belongs to another organization`,
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+      continue;
+    }
+
+    const currentRemainingBalance = normalizeMoney(
+      advance.remaining_balance ??
+      advance.remainingBalance ??
+      advance.amount ??
+      0,
+    );
+    const advanceAmount = normalizeMoney(advance.amount ?? advance.total_amount ?? currentRemainingBalance);
+    const currentMonthsDeducted = Number(advance.months_deducted ?? advance.monthsDeducted ?? 0);
+    const monthsToRepay = Number(advance.months_to_repay ?? advance.monthsToRepay ?? 0);
+
+    const restoredRemainingBalance = normalizeMoney(
+      Math.min(advanceAmount, currentRemainingBalance + deductionAmount),
+    );
+    const restoredMonthsDeducted = Math.max(0, currentMonthsDeducted - monthIncrement);
+    const restoredStatus = determineAdvanceStatus(
+      restoredRemainingBalance,
+      advanceAmount,
+      restoredMonthsDeducted,
+      monthsToRepay,
+    );
+
+    tx.set(advanceRef, {
+      remaining_balance: restoredRemainingBalance,
+      remainingBalance: restoredRemainingBalance,
+      months_deducted: restoredMonthsDeducted,
+      monthsDeducted: restoredMonthsDeducted,
+      status: restoredStatus,
+      last_reversed_payroll_run_id: payrollRunId,
+      last_reversal_journal_entry_id: reversalJournalEntryId || null,
+      last_reversal_at: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+      updatedBy: uid,
+      updated_by: uid,
+    }, { merge: true });
+
+    tx.set(deductionDoc.ref, {
+      isReversed: true,
+      is_reversed: true,
+      reversedAt: FieldValue.serverTimestamp(),
+      reversedBy: uid,
+      reversed_by: uid,
+      reversalJournalEntryId: reversalJournalEntryId || null,
+      reversal_journal_entry_id: reversalJournalEntryId || null,
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
   }
 };
 
@@ -324,6 +509,26 @@ const savePayrollDraft = async (
       journal_entry_id: null,
       paymentJournalEntryId: null,
       payment_journal_entry_id: null,
+      reversalJournalEntryId: null,
+      reversal_journal_entry_id: null,
+      paymentReversalJournalEntryId: null,
+      payment_reversal_journal_entry_id: null,
+      paymentReversalReason: null,
+      payment_reversal_reason: null,
+      paymentReversedBy: null,
+      payment_reversed_by: null,
+      paymentReversedAt: null,
+      payment_reversed_at: null,
+      reversalReferenceId: null,
+      reversal_reference_id: null,
+      reversalReason: null,
+      reversal_reason: null,
+      reversedBy: null,
+      reversed_by: null,
+      reversedAt: null,
+      reversed_at: null,
+      reversalDate: null,
+      reversal_date: null,
       createdBy: uid,
       created_by: uid,
       updatedBy: uid,
@@ -437,9 +642,12 @@ const processPayroll = async (
   const companyId = payroll.companyId;
   await assertCompanyRole(uid, companyId, PAYROLL_ROLES);
 
-  const status = String(payroll.payrollStatus || payroll.payroll_status || payroll.status || "").toLowerCase();
-  if (status !== "draft") {
-    throw new HttpsError("failed-precondition", "Payroll must be in Draft status before processing.");
+  const status = normalizePayrollRunStatus(payroll);
+  if (!["draft", "trial"].includes(status)) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Payroll must be in Draft or Trial status before processing.",
+    );
   }
 
   const totalGross = normalizeMoney(payroll.totalGross ?? payroll.total_gross ?? 0);
@@ -534,6 +742,14 @@ const processPayroll = async (
       db,
       companyId,
       payrollRunId,
+      uid,
+    });
+
+    await setPayrollItemsStatus({
+      tx,
+      db,
+      payrollRunId,
+      status: "processed",
       uid,
     });
 
@@ -637,6 +853,14 @@ const paySalaries = async (
       updated_by: uid,
     });
 
+    await setPayrollItemsStatus({
+      tx,
+      db,
+      payrollRunId,
+      status: "paid",
+      uid,
+    });
+
     return createdJournalEntryId;
   });
 
@@ -645,9 +869,452 @@ const paySalaries = async (
   return { payrollRunId, journalEntryId, status: "Paid" };
 };
 
+const assertJournalEntryReversible = async (db, companyId, journalEntryId) => {
+  const entryRef = db.collection("journalEntries").doc(journalEntryId);
+  const entrySnap = await entryRef.get();
+  if (!entrySnap.exists) {
+    throw new HttpsError("not-found", `Journal entry ${journalEntryId} was not found.`);
+  }
+
+  const entry = entrySnap.data();
+  const owner = entry.companyId || entry.organizationId;
+  if (owner !== companyId) {
+    throw new HttpsError("permission-denied", "Journal entry does not belong to this organization.");
+  }
+
+  if (entry.isPosted === false || entry.is_posted === false) {
+    throw new HttpsError("failed-precondition", "Only posted journal entries can be reversed.");
+  }
+
+  if (entry.isReversal === true || entry.reversalOf || entry.reversal_of) {
+    throw new HttpsError("failed-precondition", "Reversal entries cannot be reversed again.");
+  }
+
+  if (entry.isReversed === true || entry.reversalEntryId || entry.reversal_entry_id) {
+    throw new HttpsError("failed-precondition", `Journal entry ${journalEntryId} has already been reversed.`);
+  }
+};
+
+const reversePayrollPayment = async (
+  db,
+  uid,
+  payrollRunId,
+  reason,
+  reversalDate,
+  assertCompanyRole,
+  createAuditLog,
+) => {
+  if (!payrollRunId || typeof payrollRunId !== "string") {
+    throw new HttpsError("invalid-argument", "payrollRunId is required.");
+  }
+
+  const normalizedReason = String(reason || "").trim();
+  if (!normalizedReason) {
+    throw new HttpsError("invalid-argument", "reason is required for payroll payment reversal.");
+  }
+
+  const normalizedReversalDate = formatDateOnly(reversalDate || new Date().toISOString());
+  const payrollRef = db.collection("payrollRuns").doc(payrollRunId);
+  const payrollSnap = await payrollRef.get();
+  if (!payrollSnap.exists) {
+    throw new HttpsError("not-found", "Payroll run not found.");
+  }
+
+  const payroll = payrollSnap.data();
+  const companyId = payroll.companyId;
+  await assertCompanyRole(uid, companyId, PAYROLL_REVERSAL_ROLES);
+
+  const status = normalizePayrollRunStatus(payroll);
+  if (status === "reversed") {
+    throw new HttpsError("failed-precondition", "Payroll has already been fully reversed.");
+  }
+
+  if (status !== "paid") {
+    throw new HttpsError(
+      "failed-precondition",
+      "Only paid payroll runs can reverse salary payment.",
+    );
+  }
+
+  const paymentJournalEntryId = String(
+    payroll.paymentJournalEntryId ||
+    payroll.payment_journal_entry_id ||
+    "",
+  ).trim();
+  if (!paymentJournalEntryId) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Payroll is marked paid but has no payment journal entry.",
+    );
+  }
+
+  await db.runTransaction(async (tx) => {
+    await assertPeriodUnlocked(tx, db, companyId, normalizedReversalDate);
+  });
+
+  const paymentEntryRef = db.collection("journalEntries").doc(paymentJournalEntryId);
+  const paymentEntrySnap = await paymentEntryRef.get();
+  if (!paymentEntrySnap.exists) {
+    throw new HttpsError("failed-precondition", "Payroll payment journal is missing.");
+  }
+
+  const paymentEntry = paymentEntrySnap.data();
+  const paymentEntryOwner = paymentEntry.companyId || paymentEntry.organizationId;
+  if (paymentEntryOwner !== companyId) {
+    throw new HttpsError("permission-denied", "Payroll payment journal does not belong to this organization.");
+  }
+
+  if (paymentEntry.isPosted === false || paymentEntry.is_posted === false) {
+    throw new HttpsError("failed-precondition", "Only posted payroll payment journals can be reversed.");
+  }
+
+  if (paymentEntry.isReversal === true || paymentEntry.reversalOf || paymentEntry.reversal_of) {
+    throw new HttpsError("failed-precondition", "Payroll payment journal is already a reversal entry.");
+  }
+
+  let paymentReversalJournalEntryId = String(
+    paymentEntry.reversalEntryId ||
+    paymentEntry.reversal_entry_id ||
+    "",
+  ).trim() || null;
+
+  if (!paymentReversalJournalEntryId) {
+    const reversalResult = await accountingEngine.reverseJournalEntry({
+      data: {
+        journalEntryId: paymentJournalEntryId,
+        reason: normalizedReason,
+        reversalDate: normalizedReversalDate,
+        allowPayrollReversal: true,
+      },
+      userId: uid,
+      companyId,
+      db,
+    });
+    paymentReversalJournalEntryId = reversalResult.reversalEntryId;
+  }
+
+  await db.runTransaction(async (tx) => {
+    await assertPeriodUnlocked(tx, db, companyId, normalizedReversalDate);
+
+    const currentPayrollSnap = await tx.get(payrollRef);
+    if (!currentPayrollSnap.exists) {
+      throw new HttpsError("not-found", "Payroll run not found.");
+    }
+
+    const currentPayroll = currentPayrollSnap.data();
+    const currentStatus = normalizePayrollRunStatus(currentPayroll);
+    if (currentStatus === "reversed") {
+      throw new HttpsError("failed-precondition", "Payroll has already been fully reversed.");
+    }
+
+    tx.set(payrollRef, {
+      status: "Payment Reversed",
+      payrollStatus: "payment_reversed",
+      payroll_status: "payment_reversed",
+      paymentReversalJournalEntryId,
+      payment_reversal_journal_entry_id: paymentReversalJournalEntryId,
+      paymentReversalReason: normalizedReason,
+      payment_reversal_reason: normalizedReason,
+      paymentReversedBy: uid,
+      payment_reversed_by: uid,
+      paymentReversedAt: FieldValue.serverTimestamp(),
+      payment_reversed_at: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+      updatedBy: uid,
+      updated_by: uid,
+    }, { merge: true });
+
+    await setPayrollItemsStatus({
+      tx,
+      db,
+      payrollRunId,
+      status: "payment_reversed",
+      uid,
+    });
+
+    if (paymentReversalJournalEntryId) {
+      tx.set(
+        db.collection("payrollJournals").doc(`${payrollRunId}_${paymentReversalJournalEntryId}`),
+        {
+          companyId,
+          payrollRunId,
+          payroll_run_id: payrollRunId,
+          journalEntryId: paymentReversalJournalEntryId,
+          journal_entry_id: paymentReversalJournalEntryId,
+          journalType: "payroll_payment_reversal",
+          description: "Payroll payment reversal",
+          createdBy: uid,
+          created_by: uid,
+          createdAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
+    }
+  });
+
+  await createAuditLog(companyId, uid, "payroll_payment_reversed", {
+    payrollRunId,
+    paymentJournalEntryId,
+    paymentReversalJournalEntryId,
+    reversalDate: normalizedReversalDate,
+    reason: normalizedReason,
+  });
+
+  return {
+    payrollRunId,
+    paymentJournalEntryId,
+    paymentReversalJournalEntryId,
+    status: "Payment Reversed",
+  };
+};
+
+const reversePayroll = async (
+  db,
+  uid,
+  payrollRunId,
+  reason,
+  reversalDate,
+  assertCompanyRole,
+  createAuditLog,
+) => {
+  if (!payrollRunId || typeof payrollRunId !== "string") {
+    throw new HttpsError("invalid-argument", "payrollRunId is required.");
+  }
+
+  const normalizedReason = String(reason || "").trim();
+  if (!normalizedReason) {
+    throw new HttpsError("invalid-argument", "reason is required for payroll reversal.");
+  }
+
+  const normalizedReversalDate = formatDateOnly(reversalDate || new Date().toISOString());
+  const payrollRef = db.collection("payrollRuns").doc(payrollRunId);
+  const payrollSnap = await payrollRef.get();
+  if (!payrollSnap.exists) {
+    throw new HttpsError("not-found", "Payroll run not found.");
+  }
+
+  const payroll = payrollSnap.data();
+  const companyId = payroll.companyId;
+  await assertCompanyRole(uid, companyId, PAYROLL_REVERSAL_ROLES);
+
+  const status = normalizePayrollRunStatus(payroll);
+  if (status === "reversed" || payroll.reversedAt || payroll.reversed_at || payroll.reversalJournalEntryId || payroll.reversal_journal_entry_id) {
+    throw new HttpsError("failed-precondition", "Payroll has already been reversed.");
+  }
+
+  if (status === "paid") {
+    throw new HttpsError(
+      "failed-precondition",
+      "Reverse payroll payment first before reversing payroll accrual.",
+    );
+  }
+
+  if (!["processed", "final", "payment_reversed"].includes(status)) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Only processed or payment-reversed payroll runs can be reversed.",
+    );
+  }
+
+  const payrollJournalEntryId = String(
+    payroll.journalEntryId ||
+    payroll.journal_entry_id ||
+    payroll.glJournalId ||
+    payroll.gl_journal_id ||
+    "",
+  ).trim();
+
+  if (!payrollJournalEntryId) {
+    throw new HttpsError("failed-precondition", "Payroll has no posted accrual journal entry to reverse.");
+  }
+
+  const paymentJournalEntryId = String(
+    payroll.paymentJournalEntryId ||
+    payroll.payment_journal_entry_id ||
+    "",
+  ).trim() || null;
+
+  await db.runTransaction(async (tx) => {
+    await assertPeriodUnlocked(tx, db, companyId, normalizedReversalDate);
+  });
+
+  await assertJournalEntryReversible(db, companyId, payrollJournalEntryId);
+  let paymentReversalJournalEntryId = null;
+  if (paymentJournalEntryId) {
+    const paymentEntryRef = db.collection("journalEntries").doc(paymentJournalEntryId);
+    const paymentEntrySnap = await paymentEntryRef.get();
+    if (!paymentEntrySnap.exists) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Payroll payment journal is missing. Resolve this inconsistency before reversal.",
+      );
+    }
+
+    const paymentEntry = paymentEntrySnap.data();
+    const paymentEntryOwner = paymentEntry.companyId || paymentEntry.organizationId;
+    if (paymentEntryOwner !== companyId) {
+      throw new HttpsError("permission-denied", "Payroll payment journal does not belong to this organization.");
+    }
+
+    if (paymentEntry.isPosted === false || paymentEntry.is_posted === false) {
+      throw new HttpsError("failed-precondition", "Only posted payroll payment journals can be reversed.");
+    }
+
+    if (paymentEntry.isReversal === true || paymentEntry.reversalOf || paymentEntry.reversal_of) {
+      throw new HttpsError("failed-precondition", "Payroll payment journal is already a reversal entry.");
+    }
+
+    paymentReversalJournalEntryId = String(
+      paymentEntry.reversalEntryId ||
+      paymentEntry.reversal_entry_id ||
+      payroll.paymentReversalJournalEntryId ||
+      payroll.payment_reversal_journal_entry_id ||
+      "",
+    ).trim() || null;
+
+    if (!paymentReversalJournalEntryId) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Payroll payment is still active. Reverse payroll payment first.",
+      );
+    }
+  }
+
+  const accrualReversal = await accountingEngine.reverseJournalEntry({
+    data: {
+      journalEntryId: payrollJournalEntryId,
+      reason: normalizedReason,
+      reversalDate: normalizedReversalDate,
+      allowPayrollReversal: true,
+    },
+    userId: uid,
+    companyId,
+    db,
+  });
+
+  const reversalJournalEntryId = accrualReversal.reversalEntryId;
+
+  await db.runTransaction(async (tx) => {
+    await assertPeriodUnlocked(tx, db, companyId, normalizedReversalDate);
+
+    const currentPayrollSnap = await tx.get(payrollRef);
+    if (!currentPayrollSnap.exists) {
+      throw new HttpsError("not-found", "Payroll run not found.");
+    }
+
+    const currentPayroll = currentPayrollSnap.data();
+    const currentStatus = normalizePayrollRunStatus(currentPayroll);
+    if (currentStatus === "reversed") {
+      throw new HttpsError("failed-precondition", "Payroll has already been reversed.");
+    }
+
+    tx.set(payrollRef, {
+      status: "Reversed",
+      payrollStatus: "reversed",
+      payroll_status: "reversed",
+      reversalJournalEntryId,
+      reversal_journal_entry_id: reversalJournalEntryId,
+      paymentReversalJournalEntryId: paymentReversalJournalEntryId,
+      payment_reversal_journal_entry_id: paymentReversalJournalEntryId,
+      reversalReferenceId: reversalJournalEntryId,
+      reversal_reference_id: reversalJournalEntryId,
+      reversalReason: normalizedReason,
+      reversal_reason: normalizedReason,
+      reversedBy: uid,
+      reversed_by: uid,
+      reversedAt: FieldValue.serverTimestamp(),
+      reversed_at: FieldValue.serverTimestamp(),
+      reversalDate: normalizedReversalDate,
+      reversal_date: normalizedReversalDate,
+      updatedAt: FieldValue.serverTimestamp(),
+      updatedBy: uid,
+      updated_by: uid,
+    }, { merge: true });
+
+    await setPayrollItemsStatus({
+      tx,
+      db,
+      payrollRunId,
+      status: "reversed",
+      uid,
+    });
+
+    await reversePayrollAdvanceDeductions({
+      tx,
+      db,
+      companyId,
+      payrollRunId,
+      uid,
+      reversalJournalEntryId,
+    });
+
+    if (reversalJournalEntryId) {
+      tx.set(
+        db.collection("payrollJournals").doc(`${payrollRunId}_${reversalJournalEntryId}`),
+        {
+          companyId,
+          payrollRunId,
+          payroll_run_id: payrollRunId,
+          journalEntryId: reversalJournalEntryId,
+          journal_entry_id: reversalJournalEntryId,
+          journalType: "payroll_reversal",
+          description: "Payroll accrual reversal",
+          createdBy: uid,
+          created_by: uid,
+          createdAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
+    }
+
+    if (paymentReversalJournalEntryId) {
+      tx.set(
+        db.collection("payrollJournals").doc(`${payrollRunId}_${paymentReversalJournalEntryId}`),
+        {
+          companyId,
+          payrollRunId,
+          payroll_run_id: payrollRunId,
+          journalEntryId: paymentReversalJournalEntryId,
+          journal_entry_id: paymentReversalJournalEntryId,
+          journalType: "payroll_payment_reversal",
+          description: "Payroll payment reversal",
+          createdBy: uid,
+          created_by: uid,
+          createdAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
+    }
+  });
+
+  await createAuditLog(companyId, uid, "payroll_reversed", {
+    payrollRunId,
+    payrollJournalEntryId,
+    paymentJournalEntryId,
+    reversalJournalEntryId,
+    paymentReversalJournalEntryId,
+    reversalDate: normalizedReversalDate,
+    reason: normalizedReason,
+  });
+
+  return {
+    payrollRunId,
+    payrollJournalEntryId,
+    paymentJournalEntryId,
+    reversalJournalEntryId,
+    paymentReversalJournalEntryId,
+    status: "Reversed",
+  };
+};
+
 module.exports = {
   savePayrollDraft,
   processPayroll,
   paySalaries,
   payPayroll: paySalaries,
+  reversePayrollPayment,
+  reversePayroll,
 };

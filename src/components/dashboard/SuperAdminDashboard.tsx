@@ -131,7 +131,7 @@ export function SuperAdminDashboard() {
         totalPayroll: payrollRuns
           .filter((run) => {
             const status = readString(run, ["status", "payrollStatus", "payroll_status"]).toLowerCase();
-            return ["processed", "paid", "approved", "final"].includes(status);
+            return ["processed", "paid", "payment_reversed", "approved", "final"].includes(status);
           })
           .reduce((sum, run) => sum + readNumber(run, ["totalNet", "total_net"]), 0),
         totalExpenses: liveMetrics.monthlyExpenses,

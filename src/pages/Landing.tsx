@@ -19,6 +19,14 @@ import { useEffect, useState } from "react";
 import { ByteBerryWatermark } from "@/components/common/ByteBerryWatermark";
 import { Logo } from "@/components/common/Logo";
 
+interface BeforeInstallPromptEvent extends Event {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{
+    outcome: "accepted" | "dismissed";
+    platform: string;
+  }>;
+}
+
 const features = [
   {
     icon: Users,
@@ -47,19 +55,25 @@ const features = [
 ];
 
 export default function Landing() {
-  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
 
   useEffect(() => {
-    window.addEventListener("beforeinstallprompt", (e) => {
-      e.preventDefault();
-      setDeferredPrompt(e);
-    });
+    const handleBeforeInstallPrompt = (event: Event) => {
+      const promptEvent = event as BeforeInstallPromptEvent;
+      promptEvent.preventDefault();
+      setDeferredPrompt(promptEvent);
+    };
+
+    window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt as EventListener);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt as EventListener);
+    };
   }, []);
 
   const handleInstallClick = () => {
     if (deferredPrompt) {
       deferredPrompt.prompt();
-      deferredPrompt.userChoice.then((choiceResult: any) => {
+      deferredPrompt.userChoice.then((choiceResult) => {
         if (choiceResult.outcome === "accepted") {
           console.log("User accepted the install prompt");
         }

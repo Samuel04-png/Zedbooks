@@ -26,6 +26,12 @@ export interface EmailResponse {
   messageId?: string;
 }
 
+export interface AskAiOptions {
+  context?: unknown;
+  includeFinancialContext?: boolean;
+  companyId?: string;
+}
+
 /**
  * Generic helper to call a Cloud Function
  */
@@ -42,8 +48,8 @@ export const callFunction = async <RequestBody, ResponseBody>(
 /**
  * Ask DeepSeek AI a financial question
  */
-export const askAi = async (query: string, options?: { context?: any; includeFinancialContext?: boolean; companyId?: string }): Promise<string> => {
-  const result = await callFunction<{ query: string; context?: any; includeFinancialContext?: boolean; companyId?: string }, AiResponse>("askDeepSeek", {
+export const askAi = async (query: string, options?: AskAiOptions): Promise<string> => {
+  const result = await callFunction<{ query: string; context?: unknown; includeFinancialContext?: boolean; companyId?: string }, AiResponse>("askDeepSeek", {
     query,
     context: options?.context,
     includeFinancialContext: options?.includeFinancialContext,
@@ -55,8 +61,8 @@ export const askAi = async (query: string, options?: { context?: any; includeFin
 /**
  * Analyze a transaction for anomalies using DeepSeek
  */
-export const analyzeAnomaly = async (transaction: any): Promise<AnomalyAnalysis> => {
-  return await callFunction<{ transaction: any }, AnomalyAnalysis>("analyzeTransactionAnomaly", {
+export const analyzeAnomaly = async (transaction: Record<string, unknown>): Promise<AnomalyAnalysis> => {
+  return await callFunction<{ transaction: Record<string, unknown> }, AnomalyAnalysis>("analyzeTransactionAnomaly", {
     transaction,
   });
 };

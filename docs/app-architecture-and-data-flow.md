@@ -1,6 +1,6 @@
 # ZedBooks Application Architecture and Data Flow
 
-> Last audited: 2026-02-19
+> Last audited: 2026-02-22
 > Scope: current implementation in this repository (frontend, Firestore rules, and Cloud Functions)
 > Purpose: route map, data ownership, write paths, cross-module flow, and outstanding gaps
 
@@ -131,7 +131,7 @@ Pages not in sidebar (route-only):
 | `/users` | `super_admin`, `admin` |
 | `/payroll-settings` | `super_admin`, `admin` |
 | `/audit-logs` | `super_admin`, `admin`, `auditor` |
-| `/financial-periods` | `super_admin`, `admin`, `accountant` |
+| `/financial-periods` | `super_admin`, `admin`, `financial_manager`, `accountant`, `assistant_accountant`, `finance_officer`, `bookkeeper` |
 | `/opening-balances` | `super_admin`, `admin`, `financial_manager`, `accountant` |
 
 ---
@@ -193,7 +193,8 @@ Pages not in sidebar (route-only):
 | Journal Entries (`JournalEntries.tsx`) | `postJournalEntry`, `reverseJournalEntry` | Controlled posting/reversal |
 | Opening Balances (`OpeningBalances.tsx`) | `postJournalEntry` | Journal-backed opening balances |
 | Payroll (`NewPayrollRun.tsx`, `PayrollDetail.tsx`) | `createPayrollDraft`, `runPayrollTrial`, `finalizePayroll` | Draft then processing journal entry |
-| Payroll payment (`payrollService`) | `payPayroll` callable | Creates payroll payment journal entry |
+| Payroll payment (`payrollService`) | `payPayroll`, `reversePayrollPayment` callables | Creates and reverses payroll payment journal entries |
+| Payroll accrual reversal (`PayrollDetail.tsx`) | `reversePayroll` callable | Reverses payroll accrual journal after payment reversal (if paid) |
 
 ### Direct Firestore writes still used
 
@@ -265,7 +266,11 @@ Implemented:
 - Draft save does not create journal entry
 - Processing creates payroll journal entry
 - Salary payment callable exists (`payPayroll`) for payment posting
+- Paid payroll now follows a two-step reversal sequence:
+  - reverse payment (`reversePayrollPayment`) -> status `payment_reversed`
+  - reverse accrual (`reversePayroll`) -> status `reversed`
 - Advance deductions are now applied and statuses are updated (`pending/partial/deducted`)
+- Payroll reversal now restores advance deductions using deduction audit logs (`payrollAdvanceDeductions`)
 - Period locks are enforced in payroll processing/payment paths
 
 ### Projects flow
@@ -297,9 +302,8 @@ Implemented:
 
 ### Remaining permission and UX mismatches
 
-1. Rules allow `cashier` inventory writes, but UI route permissions for `cashier` do not include `/products` or `/inventory`
-2. Firestore `canManageAccounting` includes more roles than the route-level restriction on `/financial-periods` (route only allows `super_admin`, `admin`, `accountant`)
-3. Several pages expose delete actions that only admins can perform by rules, so non-admin users can still hit permission errors in UI
+1. Some master-data pages still use direct Firestore writes and should migrate to callable-backed writes for consistent transactional validation
+2. More pages still expose delete actions that should be role-gated in the UI to avoid avoidable permission errors
 
 ### Delete behavior summary
 
@@ -329,7 +333,7 @@ Key callable groups in use:
 - User management and invitations: invitation create/accept/list/update/remove/suspend/reactivate paths
 
 Note:
-- `functions/index.js` currently contains duplicate export declarations for some callables. Functionality works, but this should be cleaned up to reduce deployment and maintenance risk.
+- Duplicate callable export declarations in `functions/index.js` were cleaned up; canonical payroll and reporting exports are now single-source.
 
 ---
 
@@ -367,14 +371,14 @@ Supported roles (priority order):
 ### Critical
 
 1. Add or restore clear invoice payment capture UX in Accounts Receivable that calls `recordInvoicePayment` directly (backend is ready)
-2. Align route permissions and rule permissions for inventory (`cashier`) and financial periods (accounting roles)
-3. Hide or disable admin-only delete actions for non-admin roles to avoid avoidable permission errors
+2. Continue replacing remaining direct Firestore financial writes with callable-backed transactional flows
+3. Finish hiding/disabling admin-only delete actions across all remaining pages
 
 ### Important
 
 4. Normalize invoice line item product linkage in `NewInvoice.tsx` (pass explicit `productId`) so inventory deduction is deterministic
 5. Wire project expenses and time costs into GL posting flow if they are meant to affect financial statements
-6. Clean duplicate callable exports in `functions/index.js`
+6. Maintain single-source callable exports in `functions/index.js` as new functions are added
 
 ### Minor
 

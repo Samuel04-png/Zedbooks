@@ -1,8 +1,9 @@
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Download, FileText, Play, CheckCircle, RotateCcw, AlertTriangle, BookOpen, Loader2 } from "lucide-react";
+import { ArrowLeft, Download, FileText, Play, CheckCircle, RotateCcw, AlertTriangle, BookOpen, Loader2, Banknote } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   Table,
@@ -23,10 +24,20 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { formatZMW } from "@/utils/zambianTaxCalculations";
 import { format } from "date-fns";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
+import { useUserRole } from "@/hooks/useUserRole";
 import { payrollService } from "@/services/firebase";
 import { COLLECTIONS } from "@/services/firebase/collectionNames";
 import { firestore } from "@/integrations/firebase/client";
@@ -35,17 +46,17 @@ import {
   doc,
   getDoc,
   getDocs,
-  limit,
   query,
   serverTimestamp,
   updateDoc,
   where,
 } from "firebase/firestore";
 
-type PayrollStatus = "draft" | "trial" | "final";
+type PayrollStatus = "draft" | "trial" | "processed" | "paid" | "payment_reversed" | "reversed" | "final";
 
 interface PayrollRunDetail {
   id: string;
+  company_id: string | null;
   run_date: string;
   period_start: string;
   period_end: string;
@@ -55,8 +66,34 @@ interface PayrollRunDetail {
   total_gross: number | null;
   total_deductions: number | null;
   total_net: number | null;
+  journal_entry_id: string | null;
+  payment_journal_entry_id: string | null;
+  reversal_journal_entry_id: string | null;
+  payment_reversal_journal_entry_id: string | null;
+  payment_reversal_reason: string | null;
+  payment_reversed_by: string | null;
+  payment_reversed_at: string | null;
+  reversal_reference_id: string | null;
+  reversal_reason: string | null;
+  reversed_by: string | null;
+  reversed_at: string | null;
   gl_journal_id: string | null;
 }
+
+interface PaymentAccountOption {
+  id: string;
+  accountName: string;
+}
+
+const normalizePayrollStatus = (raw: unknown): PayrollStatus => {
+  const value = String(raw || "").toLowerCase().trim();
+  if (value === "approved") return "processed";
+  if (value === "completed") return "paid";
+  if (["draft", "trial", "processed", "paid", "payment_reversed", "reversed", "final"].includes(value)) {
+    return value as PayrollStatus;
+  }
+  return "draft";
+};
 
 interface PayrollEmployeeDetail {
   full_name: string;
@@ -104,9 +141,14 @@ interface PayrollJournalDetail {
 
 export default function PayrollDetail() {
   const { user } = useAuth();
+  const { data: userRole } = useUserRole();
   const navigate = useNavigate();
   const { id } = useParams();
   const queryClient = useQueryClient();
+  const [paymentAccountId, setPaymentAccountId] = useState("");
+  const [paymentDate, setPaymentDate] = useState(new Date().toISOString().split("T")[0]);
+  const [paymentReversalReason, setPaymentReversalReason] = useState("");
+  const [reversalReason, setReversalReason] = useState("");
 
   const { data: payrollRun, isLoading } = useQuery({
     queryKey: ["payrollRun", id],
@@ -118,15 +160,27 @@ export default function PayrollDetail() {
       const row = runSnap.data() as Record<string, unknown>;
       return {
         id: runSnap.id,
+        company_id: (row.companyId as string | null) ?? (row.organizationId as string | null) ?? null,
         run_date: String(row.runDate ?? row.run_date ?? ""),
         period_start: String(row.periodStart ?? row.period_start ?? ""),
         period_end: String(row.periodEnd ?? row.period_end ?? ""),
-        payroll_status: (row.payrollStatus ?? row.payroll_status ?? row.status ?? "draft") as PayrollStatus,
+        payroll_status: normalizePayrollStatus(row.payrollStatus ?? row.payroll_status ?? row.status ?? "draft"),
         status: (row.status as string | null) ?? null,
         payroll_number: (row.payrollNumber as string | null) ?? (row.payroll_number as string | null) ?? null,
         total_gross: Number(row.totalGross ?? row.total_gross ?? 0),
         total_deductions: Number(row.totalDeductions ?? row.total_deductions ?? 0),
         total_net: Number(row.totalNet ?? row.total_net ?? 0),
+        journal_entry_id: (row.journalEntryId as string | null) ?? (row.journal_entry_id as string | null) ?? null,
+        payment_journal_entry_id: (row.paymentJournalEntryId as string | null) ?? (row.payment_journal_entry_id as string | null) ?? null,
+        reversal_journal_entry_id: (row.reversalJournalEntryId as string | null) ?? (row.reversal_journal_entry_id as string | null) ?? null,
+        payment_reversal_journal_entry_id: (row.paymentReversalJournalEntryId as string | null) ?? (row.payment_reversal_journal_entry_id as string | null) ?? null,
+        payment_reversal_reason: (row.paymentReversalReason as string | null) ?? (row.payment_reversal_reason as string | null) ?? null,
+        payment_reversed_by: (row.paymentReversedBy as string | null) ?? (row.payment_reversed_by as string | null) ?? null,
+        payment_reversed_at: (row.paymentReversedAt as string | null) ?? (row.payment_reversed_at as string | null) ?? null,
+        reversal_reference_id: (row.reversalReferenceId as string | null) ?? (row.reversal_reference_id as string | null) ?? null,
+        reversal_reason: (row.reversalReason as string | null) ?? (row.reversal_reason as string | null) ?? null,
+        reversed_by: (row.reversedBy as string | null) ?? (row.reversed_by as string | null) ?? null,
+        reversed_at: (row.reversedAt as string | null) ?? (row.reversed_at as string | null) ?? null,
         gl_journal_id: (row.glJournalId as string | null) ?? (row.gl_journal_id as string | null) ?? null,
       } satisfies PayrollRunDetail;
     },
@@ -203,6 +257,49 @@ export default function PayrollDetail() {
     enabled: Boolean(user && id),
   });
 
+  const { data: paymentAccounts = [] } = useQuery({
+    queryKey: ["payroll-payment-accounts", payrollRun?.id],
+    queryFn: async () => {
+      if (!payrollRun?.company_id) return [] as PaymentAccountOption[];
+
+      const accountsSnap = await getDocs(
+        query(
+          collection(firestore, COLLECTIONS.CHART_OF_ACCOUNTS),
+          where("companyId", "==", payrollRun.company_id),
+          where("accountType", "==", "Asset"),
+          where("status", "==", "active"),
+        ),
+      );
+
+      return accountsSnap.docs
+        .map((docSnap) => {
+          const account = docSnap.data() as Record<string, unknown>;
+          return {
+            id: docSnap.id,
+            accountName: String(account.accountName ?? ""),
+          } satisfies PaymentAccountOption;
+        })
+        .filter((account) => account.accountName)
+        .sort((a, b) => a.accountName.localeCompare(b.accountName));
+    },
+    enabled: Boolean(payrollRun?.company_id),
+  });
+
+  const preferredPaymentAccountId = useMemo(() => {
+    if (!paymentAccounts.length) return "";
+    const bankOrCash = paymentAccounts.find((account) => {
+      const name = account.accountName.toLowerCase();
+      return name.includes("bank") || name.includes("cash");
+    });
+    return bankOrCash?.id || paymentAccounts[0].id;
+  }, [paymentAccounts]);
+
+  useEffect(() => {
+    if (!paymentAccountId && preferredPaymentAccountId) {
+      setPaymentAccountId(preferredPaymentAccountId);
+    }
+  }, [paymentAccountId, preferredPaymentAccountId]);
+
   const { data: glJournals } = useQuery({
     queryKey: ["payroll-journals", id],
     queryFn: async () => {
@@ -219,12 +316,22 @@ export default function PayrollDetail() {
         row: docSnap.data() as Record<string, unknown>,
       }));
 
-      const journalEntryIds = Array.from(
-        new Set(rows.map(({ row }) => String(row.journalEntryId ?? row.journal_entry_id ?? "")).filter(Boolean)),
+      const journalEntryIds = new Set(
+        rows.map(({ row }) => String(row.journalEntryId ?? row.journal_entry_id ?? "")).filter(Boolean),
       );
 
+      [
+        payrollRun?.journal_entry_id,
+        payrollRun?.payment_journal_entry_id,
+        payrollRun?.reversal_journal_entry_id,
+        payrollRun?.payment_reversal_journal_entry_id,
+      ]
+        .map((entryId) => String(entryId || "").trim())
+        .filter(Boolean)
+        .forEach((entryId) => journalEntryIds.add(entryId));
+
       const entryDocs = await Promise.all(
-        journalEntryIds.map(async (entryId) => {
+        Array.from(journalEntryIds).map(async (entryId) => {
           const snap = await getDoc(doc(firestore, COLLECTIONS.JOURNAL_ENTRIES, entryId));
           return { entryId, snap };
         }),
@@ -247,7 +354,7 @@ export default function PayrollDetail() {
         });
       });
 
-      return rows.map(({ id: rowId, row }) => {
+      const mappedRows = rows.map(({ id: rowId, row }) => {
         const entryId = String(row.journalEntryId ?? row.journal_entry_id ?? "");
         return {
           id: rowId,
@@ -255,9 +362,35 @@ export default function PayrollDetail() {
           journal_entries: entryMap.get(entryId) ?? null,
         } satisfies PayrollJournalDetail;
       });
+
+      const mappedEntryIds = new Set(
+        mappedRows
+          .map((journal) => journal.journal_entries?.id || null)
+          .filter(Boolean) as string[],
+      );
+
+      const fallbackRows = Array.from(journalEntryIds)
+        .filter((entryId) => !mappedEntryIds.has(entryId))
+        .map((entryId) => ({
+          id: `fallback_${entryId}`,
+          description: "Linked payroll journal",
+          journal_entries: entryMap.get(entryId) ?? null,
+        } satisfies PayrollJournalDetail));
+
+      return [...mappedRows, ...fallbackRows];
     },
-    enabled: payrollRun?.payroll_status === "final",
+    enabled: Boolean(payrollRun && ["processed", "paid", "payment_reversed", "reversed", "final"].includes(String(payrollRun.payroll_status || "").toLowerCase())),
   });
+
+  const invalidatePayrollViews = () => {
+    queryClient.invalidateQueries({ queryKey: ["payrollRun", id] });
+    queryClient.invalidateQueries({ queryKey: ["payrollRuns", user?.id] });
+    queryClient.invalidateQueries({ queryKey: ["payrollItems", id] });
+    queryClient.invalidateQueries({ queryKey: ["payroll-journals", id] });
+    queryClient.invalidateQueries({ queryKey: ["journal-entries"] });
+    queryClient.invalidateQueries({ queryKey: ["financial-reports"] });
+    queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+  };
 
   const runTrialMutation = useMutation({
     mutationFn: async () => {
@@ -265,7 +398,7 @@ export default function PayrollDetail() {
       await payrollService.runPayrollTrial({ payrollRunId: id });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["payrollRun", id] });
+      invalidatePayrollViews();
       toast.success("Trial payroll run completed. Review the calculations before finalizing.");
     },
     onError: (error: Error) => {
@@ -284,7 +417,7 @@ export default function PayrollDetail() {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["payrollRun", id] });
+      invalidatePayrollViews();
       toast.success("Payroll reverted to draft. You can make changes and re-run trial.");
     },
     onError: (error: Error) => {
@@ -298,13 +431,76 @@ export default function PayrollDetail() {
       await payrollService.finalizePayroll({ payrollRunId: id });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["payrollRun", id] });
-      queryClient.invalidateQueries({ queryKey: ["payrollItems", id] });
-      queryClient.invalidateQueries({ queryKey: ["payroll-journals", id] });
-      toast.success("Payroll finalized and posted to General Ledger!");
+      invalidatePayrollViews();
+      toast.success("Payroll posted to the General Ledger.");
     },
     onError: (error: Error) => {
       toast.error(error.message || "Failed to finalize payroll");
+    },
+  });
+
+  const payPayrollMutation = useMutation({
+    mutationFn: async () => {
+      if (!id) throw new Error("Payroll run not found");
+      if (!paymentAccountId) {
+        throw new Error("Select a payment account before paying salaries.");
+      }
+      await payrollService.payPayroll({
+        payrollRunId: id,
+        paymentAccountId,
+        paymentDate,
+      });
+    },
+    onSuccess: () => {
+      invalidatePayrollViews();
+      toast.success("Payroll payment posted successfully.");
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Failed to pay payroll");
+    },
+  });
+
+  const reversePayrollPaymentMutation = useMutation({
+    mutationFn: async () => {
+      if (!id) throw new Error("Payroll run not found");
+      const reason = paymentReversalReason.trim();
+      if (!reason) {
+        throw new Error("Payment reversal reason is required.");
+      }
+      await payrollService.reversePayrollPayment({
+        payrollRunId: id,
+        reason,
+      });
+    },
+    onSuccess: () => {
+      invalidatePayrollViews();
+      setPaymentReversalReason("");
+      toast.success("Payroll payment reversed. You can now reverse the payroll accrual.");
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Failed to reverse payroll payment");
+    },
+  });
+
+  const reversePayrollMutation = useMutation({
+    mutationFn: async () => {
+      if (!id) throw new Error("Payroll run not found");
+      const reason = reversalReason.trim();
+      if (!reason) {
+        throw new Error("Reversal reason is required.");
+      }
+      await payrollService.reversePayroll({
+        payrollRunId: id,
+        reason,
+      });
+    },
+    onSuccess: () => {
+      invalidatePayrollViews();
+      setReversalReason("");
+      toast.success("Payroll reversed. Original and reversal entries are kept for audit.");
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Failed to reverse payroll");
     },
   });
 
@@ -460,17 +656,29 @@ export default function PayrollDetail() {
         return <Badge variant="outline" className="border-yellow-500 text-yellow-600">Draft</Badge>;
       case "trial":
         return <Badge variant="secondary" className="bg-blue-100 text-blue-700">Trial Run</Badge>;
+      case "processed":
       case "final":
-        return <Badge className="bg-green-600">Finalized</Badge>;
+        return <Badge className="bg-blue-600">Posted</Badge>;
+      case "paid":
+        return <Badge className="bg-green-600">Paid</Badge>;
+      case "payment_reversed":
+        return <Badge variant="outline" className="border-rose-500 text-rose-600">Payment Reversed</Badge>;
+      case "reversed":
+        return <Badge variant="outline" className="border-orange-500 text-orange-600">Reversed</Badge>;
       default:
         return <Badge variant="outline">Unknown</Badge>;
     }
   };
 
   const payrollStatus = payrollRun?.payroll_status as PayrollStatus | null;
+  const canReverseByRole = ["super_admin", "admin", "hr_manager", "financial_manager", "accountant"].includes(userRole || "");
   const isDraft = payrollStatus === "draft";
   const isTrial = payrollStatus === "trial";
-  const isFinal = payrollStatus === "final";
+  const isProcessed = payrollStatus === "processed" || payrollStatus === "final";
+  const isPaid = payrollStatus === "paid";
+  const isPaymentReversed = payrollStatus === "payment_reversed";
+  const isReversed = payrollStatus === "reversed";
+  const canReversePayroll = (isProcessed || isPaymentReversed) && canReverseByRole;
 
   if (isLoading) {
     return (
@@ -506,7 +714,7 @@ export default function PayrollDetail() {
             </p>
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap justify-end">
           {isDraft && (
             <Button 
               onClick={() => runTrialMutation.mutate()}
@@ -539,22 +747,21 @@ export default function PayrollDetail() {
                 <AlertDialogTrigger asChild>
                   <Button className="bg-green-600 hover:bg-green-700">
                     <CheckCircle className="h-4 w-4 mr-2" />
-                    Finalize Payroll
+                    Post Payroll
                   </Button>
                 </AlertDialogTrigger>
                 <AlertDialogContent>
                   <AlertDialogHeader>
                     <AlertDialogTitle className="flex items-center gap-2">
                       <AlertTriangle className="h-5 w-5 text-amber-500" />
-                      Finalize Payroll
+                      Post Payroll
                     </AlertDialogTitle>
                     <AlertDialogDescription className="space-y-2">
                       <p>This action will:</p>
                       <ul className="list-disc list-inside space-y-1 text-sm">
-                        <li>Lock the payroll permanently - no further edits allowed</li>
-                        <li>Post journal entries to the General Ledger</li>
-                        <li>Create statutory liability accounts (PAYE, NAPSA, NHIMA)</li>
-                        <li>Generate payroll number for reference</li>
+                        <li>Post payroll accrual to the General Ledger</li>
+                        <li>Create Salary Expense and Salary Payable entries</li>
+                        <li>Lock this run for further draft edits</li>
                       </ul>
                       <p className="font-medium mt-4">Are you sure you want to proceed?</p>
                     </AlertDialogDescription>
@@ -569,14 +776,69 @@ export default function PayrollDetail() {
                       {finalizeMutation.isPending ? (
                         <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                       ) : null}
-                      Finalize & Post to GL
+                      Post Payroll
                     </AlertDialogAction>
                   </AlertDialogFooter>
                 </AlertDialogContent>
               </AlertDialog>
             </>
           )}
-          {isFinal && (
+          {isProcessed && (
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button className="bg-green-600 hover:bg-green-700">
+                  <Banknote className="h-4 w-4 mr-2" />
+                  Pay Salaries
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Post Payroll Payment</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This creates: Dr Salary Payable and Cr Bank/Cash.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <div className="space-y-3">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Payment Account</label>
+                    <Select value={paymentAccountId} onValueChange={setPaymentAccountId}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select payment account" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {paymentAccounts.map((account) => (
+                          <SelectItem key={account.id} value={account.id}>
+                            {account.accountName}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Payment Date</label>
+                    <Input
+                      type="date"
+                      value={paymentDate}
+                      onChange={(event) => setPaymentDate(event.target.value)}
+                    />
+                  </div>
+                </div>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={() => payPayrollMutation.mutate()}
+                    disabled={payPayrollMutation.isPending || !paymentAccountId}
+                  >
+                    {payPayrollMutation.isPending ? (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    ) : null}
+                    Confirm Payment
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          )}
+          {isPaid && (
             <>
               <Button onClick={sendPayslipEmails} variant="outline">
                 Email Payslips
@@ -584,7 +846,95 @@ export default function PayrollDetail() {
               <Button onClick={downloadBatchPayslips} variant="outline">
                 Download All
               </Button>
+              {canReverseByRole && (
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <Button variant="outline" className="border-rose-500 text-rose-600 hover:text-rose-600">
+                      <RotateCcw className="h-4 w-4 mr-2" />
+                      Reverse Payment
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle className="flex items-center gap-2">
+                        <AlertTriangle className="h-5 w-5 text-rose-500" />
+                        Reverse Payroll Payment
+                      </AlertDialogTitle>
+                      <AlertDialogDescription className="space-y-2">
+                        <p>Are you sure you want to reverse salary payment? This action cannot be undone.</p>
+                        <p>The system will post the opposite payment journal and move payroll to payment_reversed.</p>
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">Payment Reversal Reason</label>
+                      <Textarea
+                        value={paymentReversalReason}
+                        onChange={(event) => setPaymentReversalReason(event.target.value)}
+                        rows={3}
+                        placeholder="Explain why payment reversal is required"
+                      />
+                    </div>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogAction
+                        onClick={() => reversePayrollPaymentMutation.mutate()}
+                        disabled={reversePayrollPaymentMutation.isPending || !paymentReversalReason.trim()}
+                        className="bg-rose-600 hover:bg-rose-700"
+                      >
+                        {reversePayrollPaymentMutation.isPending ? (
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        ) : null}
+                        Confirm Payment Reversal
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              )}
             </>
+          )}
+          {canReversePayroll && (
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button variant="outline" className="border-orange-500 text-orange-600 hover:text-orange-600">
+                  <RotateCcw className="h-4 w-4 mr-2" />
+                  Reverse Payroll
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle className="flex items-center gap-2">
+                    <AlertTriangle className="h-5 w-5 text-orange-500" />
+                    Reverse Payroll
+                  </AlertDialogTitle>
+                  <AlertDialogDescription className="space-y-2">
+                    <p>Are you sure you want to reverse this payroll? This action cannot be undone.</p>
+                    <p>The system will create opposite journal entries and keep all original records for audit.</p>
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Reversal Reason</label>
+                  <Textarea
+                    value={reversalReason}
+                    onChange={(event) => setReversalReason(event.target.value)}
+                    rows={3}
+                    placeholder="Explain the financial correction reason"
+                  />
+                </div>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={() => reversePayrollMutation.mutate()}
+                    disabled={reversePayrollMutation.isPending || !reversalReason.trim()}
+                    className="bg-orange-600 hover:bg-orange-700"
+                  >
+                    {reversePayrollMutation.isPending ? (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    ) : null}
+                    Confirm Reversal
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           )}
           <Button onClick={exportToCSV} variant="outline">
             <Download className="mr-2 h-4 w-4" />
@@ -602,7 +952,7 @@ export default function PayrollDetail() {
               <div>
                 <p className="font-medium text-blue-900">Trial Payroll Run</p>
                 <p className="text-sm text-blue-700">
-                  Review the calculations below. No GL entries have been posted. Click "Finalize Payroll" when ready.
+                  Review the calculations below. No GL entries have been posted yet. Use "Post Payroll" when ready.
                 </p>
               </div>
             </div>
@@ -610,8 +960,86 @@ export default function PayrollDetail() {
         </Card>
       )}
 
-      {/* GL Posting Info for Final */}
-      {isFinal && glJournals && glJournals.length > 0 && (
+      {(isPaymentReversed || Boolean(payrollRun?.payment_reversal_journal_entry_id)) && (
+        <Card className="border-rose-200 bg-rose-50">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-lg">Payment Reversal Audit Trail</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            <p>
+              <span className="font-medium">Payment Journal ID:</span>{" "}
+              <span className="font-mono">{payrollRun?.payment_journal_entry_id || "-"}</span>
+            </p>
+            <p>
+              <span className="font-medium">Payment Reversal Journal ID:</span>{" "}
+              <span className="font-mono">{payrollRun?.payment_reversal_journal_entry_id || "-"}</span>
+            </p>
+            <p>
+              <span className="font-medium">Reason:</span> {payrollRun?.payment_reversal_reason || "-"}
+            </p>
+            <p>
+              <span className="font-medium">Reversed By:</span> {payrollRun?.payment_reversed_by || "-"}
+            </p>
+            <p>
+              <span className="font-medium">Reversed At:</span>{" "}
+              {payrollRun?.payment_reversed_at ? format(new Date(payrollRun.payment_reversed_at), "dd MMM yyyy HH:mm") : "-"}
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
+      {isReversed && (
+        <Card className="border-orange-200 bg-orange-50">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-lg">Reversal Audit Trail</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            <p>
+              <span className="font-medium">Reversal Reference:</span>{" "}
+              <span className="font-mono">{payrollRun?.reversal_reference_id || payrollRun?.reversal_journal_entry_id || "-"}</span>
+            </p>
+            <p>
+              <span className="font-medium">Reason:</span> {payrollRun?.reversal_reason || "-"}
+            </p>
+            <p>
+              <span className="font-medium">Reversed By:</span> {payrollRun?.reversed_by || "-"}
+            </p>
+            <p>
+              <span className="font-medium">Reversed At:</span>{" "}
+              {payrollRun?.reversed_at ? format(new Date(payrollRun.reversed_at), "dd MMM yyyy HH:mm") : "-"}
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
+      {payrollRun && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-lg">Posting References</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-2 text-sm md:grid-cols-2">
+            <p>
+              <span className="font-medium">Journal Entry ID:</span>{" "}
+              <span className="font-mono">{payrollRun.journal_entry_id || "-"}</span>
+            </p>
+            <p>
+              <span className="font-medium">Reversal Journal ID:</span>{" "}
+              <span className="font-mono">{payrollRun.reversal_journal_entry_id || "-"}</span>
+            </p>
+            <p>
+              <span className="font-medium">Payment Journal ID:</span>{" "}
+              <span className="font-mono">{payrollRun.payment_journal_entry_id || "-"}</span>
+            </p>
+            <p>
+              <span className="font-medium">Payment Reversal Journal ID:</span>{" "}
+              <span className="font-mono">{payrollRun.payment_reversal_journal_entry_id || "-"}</span>
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* GL Posting Info */}
+      {(isProcessed || isPaid || isPaymentReversed || isReversed) && glJournals && glJournals.length > 0 && (
         <Card className="border-green-200 bg-green-50">
           <CardHeader className="pb-2">
             <CardTitle className="text-lg flex items-center gap-2">
@@ -633,7 +1061,16 @@ export default function PayrollDetail() {
                         format(new Date(journal.journal_entries.entry_date), "dd MMM yyyy")
                       }
                     </p>
-                    <Badge variant="outline" className="text-green-600 border-green-600">Posted</Badge>
+                    <Badge
+                      variant="outline"
+                      className={
+                        String(journal.journal_entries?.description || "").toLowerCase().includes("reversal")
+                          ? "text-orange-600 border-orange-600"
+                          : "text-green-600 border-green-600"
+                      }
+                    >
+                      {String(journal.journal_entries?.description || "").toLowerCase().includes("reversal") ? "Reversal" : "Posted"}
+                    </Badge>
                   </div>
                 </div>
               ))}
@@ -643,7 +1080,7 @@ export default function PayrollDetail() {
               className="mt-2 p-0 h-auto text-green-700"
               onClick={() => navigate("/journal-entries")}
             >
-              View all journal entries →
+              View all journal entries -&gt;
             </Button>
           </CardContent>
         </Card>
@@ -739,3 +1176,4 @@ export default function PayrollDetail() {
     </div>
   );
 }
+

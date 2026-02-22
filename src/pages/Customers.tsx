@@ -27,6 +27,7 @@ import { ImportDialog } from "@/components/shared/ImportDialog";
 import { ImportColumn, transformers } from "@/utils/importFromExcel";
 import { exportToCSV, ExportColumn } from "@/utils/exportToExcel";
 import { useAuth } from "@/contexts/AuthContext";
+import { useUserRole } from "@/hooks/useUserRole";
 import { companyService } from "@/services/firebase";
 import { COLLECTIONS } from "@/services/firebase/collectionNames";
 import {
@@ -90,6 +91,8 @@ export default function Customers() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { user } = useAuth();
+  const { data: userRole } = useUserRole();
+  const canDeleteCustomers = userRole === "super_admin" || userRole === "admin";
   const [searchQuery, setSearchQuery] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isImportOpen, setIsImportOpen] = useState(false);
@@ -204,6 +207,9 @@ export default function Customers() {
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
+      if (!canDeleteCustomers) {
+        throw new Error("Only Admin users can delete customers.");
+      }
       await deleteDoc(doc(firestore, COLLECTIONS.CUSTOMERS, id));
     },
     onSuccess: () => {
@@ -503,9 +509,11 @@ export default function Customers() {
                       <Button variant="ghost" size="icon" onClick={() => handleEdit(customer)}>
                         <Pencil className="h-4 w-4" />
                       </Button>
-                      <Button variant="ghost" size="icon" onClick={() => deleteMutation.mutate(customer.id)}>
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                      {canDeleteCustomers && (
+                        <Button variant="ghost" size="icon" onClick={() => deleteMutation.mutate(customer.id)}>
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      )}
                     </div>
                   </TableCell>
                 </TableRow>

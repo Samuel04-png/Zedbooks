@@ -17,6 +17,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 interface PayrollRunRecord {
   id: string;
   runDate: string;
+  status: "draft" | "trial" | "processed" | "paid" | "payment_reversed" | "reversed" | "final";
 }
 
 interface PayrollItemRecord {
@@ -65,6 +66,16 @@ const toDateOnly = (value: unknown): string => {
   return "";
 };
 
+const normalizePayrollStatus = (raw: unknown): PayrollRunRecord["status"] => {
+  const value = String(raw || "").toLowerCase().trim();
+  if (value === "approved") return "processed";
+  if (value === "completed") return "paid";
+  if (["draft", "trial", "processed", "paid", "payment_reversed", "reversed", "final"].includes(value)) {
+    return value as PayrollRunRecord["status"];
+  }
+  return "draft";
+};
+
 const toNumber = (value: unknown): number => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
@@ -92,6 +103,7 @@ const downloadCSV = (headers: string[], rows: Array<Array<string | number | null
 export default function ZRACompliance() {
   const { user } = useAuth();
   const [month, setMonth] = useState(format(new Date(), "yyyy-MM"));
+  const [includeReversed, setIncludeReversed] = useState(false);
 
   const companyQuery = useQuery({
     queryKey: ["zra-company-id", user?.id],
@@ -121,6 +133,7 @@ export default function ZRACompliance() {
           return {
             id: docSnap.id,
             runDate: toDateOnly(row.runDate ?? row.run_date),
+            status: normalizePayrollStatus(row.payrollStatus ?? row.payroll_status ?? row.status),
           } satisfies PayrollRunRecord;
         })
         .filter((run) => run.runDate >= startDate && run.runDate <= endDate)
@@ -130,13 +143,24 @@ export default function ZRACompliance() {
   });
 
   const payrollItemsQuery = useQuery({
-    queryKey: ["payroll-items-zra", companyId, month, payrollRunsQuery.data?.map((run) => run.id).join(",")],
+    queryKey: [
+      "payroll-items-zra",
+      companyId,
+      month,
+      includeReversed ? "with-reversed" : "without-reversed",
+      payrollRunsQuery.data?.map((run) => run.id).join(","),
+    ],
     queryFn: async () => {
       if (!companyId || !payrollRunsQuery.data || payrollRunsQuery.data.length === 0) {
         return [] as PayrollItemWithEmployee[];
       }
 
-      const runIds = payrollRunsQuery.data.map((run) => run.id);
+      const runIds = payrollRunsQuery.data
+        .filter((run) => includeReversed || run.status !== "reversed")
+        .map((run) => run.id);
+      if (runIds.length === 0) {
+        return [] as PayrollItemWithEmployee[];
+      }
       const itemsRef = collection(firestore, COLLECTIONS.PAYROLL_ITEMS);
       const runChunks = chunk(runIds, 30);
 
@@ -194,7 +218,10 @@ export default function ZRACompliance() {
     enabled: Boolean(companyId) && Boolean(payrollRunsQuery.data) && (payrollRunsQuery.data?.length ?? 0) > 0,
   });
 
-  const payrollItems = payrollItemsQuery.data ?? [];
+  const payrollItems = useMemo(
+    () => payrollItemsQuery.data ?? [],
+    [payrollItemsQuery.data],
+  );
   const isLoading = companyQuery.isLoading || payrollRunsQuery.isLoading || payrollItemsQuery.isLoading;
 
   const totalPAYE = useMemo(
@@ -297,6 +324,14 @@ export default function ZRACompliance() {
       <div className="max-w-xs">
         <Label>Select Month</Label>
         <Input type="month" value={month} onChange={(event) => setMonth(event.target.value)} />
+        <label className="mt-3 flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={includeReversed}
+            onChange={(event) => setIncludeReversed(event.target.checked)}
+          />
+          Include reversed payroll runs
+        </label>
       </div>
 
       <div className="grid gap-4 md:grid-cols-3">

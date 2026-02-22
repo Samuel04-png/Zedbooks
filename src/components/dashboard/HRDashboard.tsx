@@ -70,7 +70,7 @@ export function HRDashboard() {
         monthlyPayroll: payrollRuns
           .filter((p) => {
             const status = readString(p, ["status", "payrollStatus", "payroll_status"]).toLowerCase();
-            return ["processed", "paid", "approved", "final"].includes(status);
+            return ["processed", "paid", "payment_reversed", "approved", "final"].includes(status);
           })
           .reduce((sum, p) => sum + readNumber(p, ["totalNet", "total_net"]), 0),
         pendingPayroll: payrollRuns.filter((p) => {

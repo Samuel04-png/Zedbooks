@@ -114,7 +114,7 @@ export function AuditorDashboard() {
 
   const approvedPayrolls = payrollRuns.filter((run) => {
     const status = readString(run, ["status", "payrollStatus", "payroll_status"]).toLowerCase();
-    return ["approved", "final", "processed", "paid"].includes(status);
+    return ["approved", "final", "processed", "paid", "payment_reversed"].includes(status);
   }).length;
 
   const totalExpenseAmount = expenseRows.reduce((sum, expense) => sum + Number(expense.amount || 0), 0);

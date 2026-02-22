@@ -3,8 +3,10 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { UseFormReturn } from "react-hook-form";
 
+type EmployeeFormValues = Record<string, string | number | boolean | null | undefined>;
+
 interface EmployeePersonalTabProps {
-  form: UseFormReturn<any>;
+  form: UseFormReturn<EmployeeFormValues>;
 }
 
 export function EmployeePersonalTab({ form }: EmployeePersonalTabProps) {

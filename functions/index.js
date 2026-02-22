@@ -754,7 +754,7 @@ exports.acceptInvitation = onCall(async (request) => {
   };
 });
 
-exports.listCompanyUsers = onCall(async (request) => {
+exports.listCompanyMembers = onCall(async (request) => {
   const uid = assertAuthenticated(request);
   const payload = request.data || {};
   const companyId = payload.companyId || (await pickPrimaryMembership(uid)).companyId;
@@ -935,114 +935,6 @@ exports.getTrialBalance = onCall(accounting.getTrialBalance);
 
 // --- END ACCOUNTING MODULE ---
 
-exports.createPayrollDraft = onCall(async (request) => {
-  const uid = assertAuthenticated(request);
-  const payload = request.data || {};
-  const companyId = payload.companyId;
-  if (!companyId || typeof companyId !== "string") {
-    throw new HttpsError("invalid-argument", "companyId is required.");
-  }
-
-  await assertCompanyRole(uid, companyId, PAYROLL_ROLES);
-
-  // Validate dates - provide defaults if missing or invalid
-  const periodStart = payload.periodStart ? formatDateOnly(payload.periodStart) : formatDateOnly(new Date());
-  const periodEnd = payload.periodEnd ? formatDateOnly(payload.periodEnd) : formatDateOnly(new Date());
-  const runDate = payload.runDate ? formatDateOnly(payload.runDate) : formatDateOnly(new Date());
-
-  // Validate date logic
-  if (periodStart > periodEnd) {
-    throw new HttpsError("invalid-argument", "Period start date must be before or equal to period end date.");
-  }
-
-  const payrollRef = db.collection("payrollRuns").doc();
-  await payrollRef.set({
-    companyId,
-    periodStart,
-    periodEnd,
-    runDate,
-    notes: payload.notes || null,
-    payrollStatus: "draft",
-    totalGross: normalizeMoney(payload.totalGross || 0),
-    totalDeductions: normalizeMoney(payload.totalDeductions || 0),
-    totalNet: normalizeMoney(payload.totalNet || 0),
-    createdBy: uid,
-    createdAt: FieldValue.serverTimestamp(),
-    updatedAt: FieldValue.serverTimestamp(),
-  });
-
-  await createAuditLog(companyId, uid, "payroll_draft_created", { payrollRunId: payrollRef.id });
-  return { payrollRunId: payrollRef.id };
-});
-
-// Seed Expense Categories - Map categories to GL accounts
-exports.seedExpenseCategories = onCall(async (request) => {
-  const uid = assertAuthenticated(request);
-  const payload = request.data || {};
-  const companyId = payload.companyId;
-
-  if (!companyId || typeof companyId !== "string") {
-    throw new HttpsError("invalid-argument", "companyId is required.");
-  }
-
-  await assertCompanyRole(uid, companyId, ["super_admin", "admin"]);
-
-  // Default expense categories matching those in frontend
-  const defaultCategories = [
-    "Office Supplies",
-    "Travel",
-    "Meals & Entertainment",
-    "Utilities",
-    "Rent",
-    "Professional Services",
-    "Marketing",
-    "Equipment",
-    "Software & Subscriptions",
-    "Training",
-    "Insurance",
-    "Maintenance",
-    "Other",
-  ];
-
-  const batch = db.batch();
-
-  for (const categoryName of defaultCategories) {
-    // Find or use default expense account
-    // For simplicity, we'll use a generic Expense account
-    // In production, you'd want specific accounts for each category
-    const accountsSnap = await db.collection("chartOfAccounts")
-      .where("companyId", "==", companyId)
-      .where("accountType", "==", "Expense")
-      .where("status", "==", "active")
-      .limit(1)
-      .get();
-
-    if (accountsSnap.empty) {
-      throw new HttpsError("failed-precondition", "No active Expense accounts found. Please create Chart of Accounts first.");
-    }
-
-    const accountId = accountsSnap.docs[0].id;
-
-    const mappingRef = db.collection("expenseCategoryMappings").doc();
-    batch.set(mappingRef, {
-      companyId,
-      categoryName,
-      accountId,
-      createdBy: uid,
-      createdAt: FieldValue.serverTimestamp(),
-      updatedAt: FieldValue.serverTimestamp(),
-    });
-  }
-
-  await batch.commit();
-
-  await createAuditLog(companyId, uid, "expense_categories_seeded", {
-    categoriesCount: defaultCategories.length,
-  });
-
-  return { success: true, categoriesSeeded: defaultCategories.length };
-});
-
 exports.runPayrollTrial = onCall(async (request) => {
   const uid = assertAuthenticated(request);
   const payrollRunId = request.data?.payrollRunId;
@@ -1071,89 +963,6 @@ exports.runPayrollTrial = onCall(async (request) => {
 
   await createAuditLog(payroll.companyId, uid, "payroll_trial_completed", { payrollRunId });
   return { success: true };
-});
-
-exports.finalizePayroll = onCall(async (request) => {
-  const uid = assertAuthenticated(request);
-  const payrollRunId = request.data?.payrollRunId;
-  if (!payrollRunId || typeof payrollRunId !== "string") {
-    throw new HttpsError("invalid-argument", "payrollRunId is required.");
-  }
-
-  const payrollRef = db.collection("payrollRuns").doc(payrollRunId);
-  const payrollSnap = await payrollRef.get();
-  if (!payrollSnap.exists) {
-    throw new HttpsError("not-found", "Payroll run not found.");
-  }
-
-  const payroll = payrollSnap.data();
-  const companyId = payroll.companyId;
-  await assertCompanyRole(uid, companyId, PAYROLL_ROLES);
-
-  let journalEntryId = payroll.glJournalId || null;
-  const totalNet = normalizeMoney(payroll.totalNet || 0);
-
-  if (!journalEntryId && totalNet > 0) {
-    const debitAccountId = await accounting.resolveAccountIdFromSource(
-      companyId,
-      payroll,
-      ["salaryExpenseAccountId", "debitAccountId"],
-      "Expense",
-    );
-    const creditAccountId = await accounting.resolveAccountIdFromSource(
-      companyId,
-      payroll,
-      ["cashAccountId", "payrollPayableAccountId", "creditAccountId"],
-      "Liability",
-    );
-
-    journalEntryId = await accounting.createPostedJournalEntry({
-      companyId,
-      entryDate: payroll.runDate || new Date().toISOString(),
-      description: `Payroll Finalization ${payroll.payrollNumber || payrollRunId}`,
-      referenceNumber: payroll.payrollNumber || payrollRunId,
-      sourceType: "payroll",
-      sourceId: payrollRunId,
-      createdByUid: uid,
-      lines: [
-        { accountId: debitAccountId, debit: totalNet, credit: 0, description: "Payroll expense" },
-        { accountId: creditAccountId, debit: 0, credit: totalNet, description: "Payroll payable/cash" },
-      ],
-    });
-  }
-
-  await payrollRef.set(
-    {
-      payrollStatus: "final",
-      finalizedBy: uid,
-      finalizedAt: FieldValue.serverTimestamp(),
-      glPosted: Boolean(journalEntryId),
-      glJournalId: journalEntryId,
-      updatedAt: FieldValue.serverTimestamp(),
-    },
-    { merge: true },
-  );
-
-  if (journalEntryId) {
-    await db
-      .collection("payrollJournals")
-      .doc(`${payrollRunId}_${journalEntryId}`)
-      .set(
-        {
-          companyId,
-          payrollRunId,
-          journalEntryId,
-          journalType: "payroll_expense",
-          description: "Monthly payroll GL posting",
-          createdAt: FieldValue.serverTimestamp(),
-          updatedAt: FieldValue.serverTimestamp(),
-        },
-        { merge: true },
-      );
-  }
-
-  await createAuditLog(companyId, uid, "payroll_finalized", { payrollRunId, journalEntryId });
-  return { journalEntryId };
 });
 
 exports.sendPayslipEmail = onCall(async (request) => {
@@ -1348,8 +1157,7 @@ exports.listCompanyUsers = onCall(async (request) => {
     throw new HttpsError("invalid-argument", "companyId is required.");
   }
 
-  // Ensure requester is a member (any status? usually active)
-  await getMembership(uid, companyId);
+  await assertCompanyRole(uid, companyId, ["super_admin", "admin"]);
 
   // 1. Fetch all company members (active, suspended, etc.)
   // Removed .where("status", "==", "active") to see suspended users
@@ -1520,18 +1328,6 @@ exports.updateUserRole = onCall(async (request) => {
   return { success: true };
 });
 
-// Payroll Processing Cloud Functions
-exports.processPayroll = onCall(async (request) => {
-  const uid = assertAuthenticated(request);
-  const { payrollRunId } = request.data || {};
-  return payroll.processPayroll(db, uid, payrollRunId, assertCompanyRole, createAuditLog);
-});
-
-exports.payPayroll = onCall(async (request) => {
-  const uid = assertAuthenticated(request);
-  const { payrollRunId, bankAccountId, paymentDate } = request.data || {};
-  return payroll.payPayroll(db, uid, payrollRunId, bankAccountId, paymentDate, assertCompanyRole, createAuditLog);
-});
 // Export AI Functions
 exports.askDeepSeek = ai.askDeepSeek;
 exports.analyzeTransactionAnomaly = ai.analyzeTransactionAnomaly;
@@ -1545,32 +1341,6 @@ exports.signInvoice = require("./zra").signInvoice;
 // Export Accounting Functions
 exports.postBillPaymentToGL = onCall(accounting.postBillPaymentToGL);
 exports.postInvoicePaymentToGL = onCall(accounting.postInvoicePaymentToGL);
-
-// Export Reporting Functions
-exports.getExpenseReport = onCall(async (request) => {
-  const uid = assertAuthenticated(request);
-  const { companyId, startDate, endDate } = request.data || {};
-  if (!companyId) throw new HttpsError("invalid-argument", "companyId is required");
-  return accounting.getExpenseReport(companyId, uid, startDate, endDate, assertCompanyRole);
-});
-
-exports.getGeneralLedger = onCall(async (request) => {
-  const uid = assertAuthenticated(request);
-  const { companyId, accountId, startDate, endDate } = request.data || {};
-  if (!companyId) throw new HttpsError("invalid-argument", "companyId is required");
-  return accounting.getGeneralLedger(companyId, uid, accountId, startDate, endDate, assertCompanyRole);
-});
-
-exports.getCashFlowData = onCall(async (request) => {
-  const uid = assertAuthenticated(request);
-  const { companyId, startDate, endDate } = request.data || {};
-  if (!companyId) throw new HttpsError("invalid-argument", "companyId is required");
-  return accounting.getCashFlowData(companyId, uid, startDate, endDate, assertCompanyRole);
-});
-
-// Export AI Functions
-exports.askDeepSeek = ai.askDeepSeek;
-exports.analyzeTransactionAnomaly = ai.analyzeTransactionAnomaly;
 
 // Firestore Triggers
 // Note: onInvitationCreated function removed due to Firebase deployment constraint.
@@ -1764,6 +1534,52 @@ exports.payPayroll = onCall(async (request) => {
     payrollRunId,
     paymentAccountId,
     paymentDate,
+    assertCompanyRole,
+    createAuditLog,
+  );
+});
+
+exports.reversePayrollPayment = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const payrollRunId = String(payload.payrollRunId || payload.payroll_run_id || "");
+  const reason = String(
+    payload.reason ||
+    payload.reversalReason ||
+    payload.reversal_reason ||
+    "",
+  ).trim();
+  const reversalDate = payload.reversalDate || payload.reversal_date || null;
+
+  return payroll.reversePayrollPayment(
+    db,
+    uid,
+    payrollRunId,
+    reason,
+    reversalDate,
+    assertCompanyRole,
+    createAuditLog,
+  );
+});
+
+exports.reversePayroll = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const payrollRunId = String(payload.payrollRunId || payload.payroll_run_id || "");
+  const reason = String(
+    payload.reason ||
+    payload.reversalReason ||
+    payload.reversal_reason ||
+    "",
+  ).trim();
+  const reversalDate = payload.reversalDate || payload.reversal_date || null;
+
+  return payroll.reversePayroll(
+    db,
+    uid,
+    payrollRunId,
+    reason,
+    reversalDate,
     assertCompanyRole,
     createAuditLog,
   );

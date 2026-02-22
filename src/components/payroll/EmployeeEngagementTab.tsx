@@ -6,8 +6,10 @@ import { UseFormReturn } from "react-hook-form";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { AlertCircle } from "lucide-react";
 
+type EmployeeFormValues = Record<string, string | number | boolean | null | undefined>;
+
 interface EmployeeEngagementTabProps {
-  form: UseFormReturn<any>;
+  form: UseFormReturn<EmployeeFormValues>;
 }
 
 export function EmployeeEngagementTab({ form }: EmployeeEngagementTabProps) {

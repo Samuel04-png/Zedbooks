@@ -11,10 +11,21 @@ export interface PayrollRunRecord {
   periodStart: string;
   periodEnd: string;
   runDate: string;
-  payrollStatus: "draft" | "processed" | "paid" | "trial" | "final" | "reversed";
+  payrollStatus: "draft" | "processed" | "paid" | "trial" | "final" | "reversed" | "payment_reversed";
   totalGross: number;
   totalDeductions: number;
   totalNet: number;
+  journalEntryId?: string | null;
+  paymentJournalEntryId?: string | null;
+  reversalJournalEntryId?: string | null;
+  paymentReversalJournalEntryId?: string | null;
+  paymentReversalReason?: string | null;
+  paymentReversedBy?: string | null;
+  paymentReversedAt?: string | null;
+  reversalReferenceId?: string | null;
+  reversalReason?: string | null;
+  reversedBy?: string | null;
+  reversedAt?: string | null;
   glPosted?: boolean;
   glJournalId?: string | null;
 }
@@ -95,6 +106,46 @@ export const payrollService = {
       journalEntryId: string;
       status: "Paid";
     }>("payPayroll", input);
+  },
+
+  async reversePayroll(input: {
+    payrollRunId: string;
+    reason: string;
+    reversalDate?: string;
+  }): Promise<{
+    payrollRunId: string;
+    payrollJournalEntryId: string;
+    paymentJournalEntryId: string | null;
+    reversalJournalEntryId: string;
+    paymentReversalJournalEntryId: string | null;
+    status: "Reversed";
+  }> {
+    return callFunction<typeof input, {
+      payrollRunId: string;
+      payrollJournalEntryId: string;
+      paymentJournalEntryId: string | null;
+      reversalJournalEntryId: string;
+      paymentReversalJournalEntryId: string | null;
+      status: "Reversed";
+    }>("reversePayroll", input);
+  },
+
+  async reversePayrollPayment(input: {
+    payrollRunId: string;
+    reason: string;
+    reversalDate?: string;
+  }): Promise<{
+    payrollRunId: string;
+    paymentJournalEntryId: string;
+    paymentReversalJournalEntryId: string;
+    status: "Payment Reversed";
+  }> {
+    return callFunction<typeof input, {
+      payrollRunId: string;
+      paymentJournalEntryId: string;
+      paymentReversalJournalEntryId: string;
+      status: "Payment Reversed";
+    }>("reversePayrollPayment", input);
   },
 
   async finalizePayroll(input: { payrollRunId: string }): Promise<{

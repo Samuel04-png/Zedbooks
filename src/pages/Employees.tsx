@@ -13,6 +13,7 @@ import {
 import { formatZMW } from "@/utils/zambianTaxCalculations";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
+import { useUserRole } from "@/hooks/useUserRole";
 import { companyService } from "@/services/firebase";
 import { COLLECTIONS } from "@/services/firebase/collectionNames";
 import { collection, deleteDoc, doc, getDocs, query, where } from "firebase/firestore";
@@ -31,6 +32,8 @@ interface EmployeeRecord {
 export default function Employees() {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { data: userRole } = useUserRole();
+  const canDeleteEmployees = userRole === "super_admin" || userRole === "admin";
 
   const { data: employees, isLoading, refetch } = useQuery({
     queryKey: ["employees", user?.id],
@@ -64,6 +67,10 @@ export default function Employees() {
   });
 
   const handleDelete = async (id: string) => {
+    if (!canDeleteEmployees) {
+      toast.error("Only Admin users can delete employee records.");
+      return;
+    }
     if (!confirm("Are you sure you want to delete this employee?")) return;
 
     try {
@@ -137,9 +144,11 @@ export default function Employees() {
                     >
                       <Pencil className="h-4 w-4" />
                     </Button>
-                    <Button variant="ghost" size="sm" onClick={() => handleDelete(employee.id)}>
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+                    {canDeleteEmployees && (
+                      <Button variant="ghost" size="sm" onClick={() => handleDelete(employee.id)}>
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    )}
                   </TableCell>
                 </TableRow>
               ))}

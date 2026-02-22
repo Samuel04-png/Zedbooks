@@ -6,6 +6,7 @@ import { format } from "date-fns";
 import { ClipboardList, DollarSign, Download, FolderOpen, Pencil, Plus, Receipt, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
+import { useUserRole } from "@/hooks/useUserRole";
 import { companyService } from "@/services/firebase";
 import { firestore } from "@/integrations/firebase/client";
 import { COLLECTIONS } from "@/services/firebase/collectionNames";
@@ -87,6 +88,8 @@ const progressStatusStyles: Record<ProjectProgressStatus, { label: string; dotCl
 
 export default function Projects() {
   const { user } = useAuth();
+  const { data: userRole } = useUserRole();
+  const canDeleteProjects = userRole === "super_admin" || userRole === "admin";
   const queryClient = useQueryClient();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
@@ -276,6 +279,7 @@ export default function Projects() {
   const deleteMutation = useMutation({
     mutationFn: async (project: Project) => {
       if (!companyId || !user) throw new Error("No active company context");
+      if (!canDeleteProjects) throw new Error("Only Admin users can delete projects.");
 
       await projectActivityService.create({
         companyId,
@@ -719,14 +723,16 @@ export default function Projects() {
                             <Button variant="ghost" size="icon" onClick={() => handleEdit(project)} title="Edit Project">
                               <Pencil className="h-4 w-4" />
                             </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => deleteMutation.mutate(project)}
-                              title="Delete Project"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
+                            {canDeleteProjects && (
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => deleteMutation.mutate(project)}
+                                title="Delete Project"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            )}
                           </div>
                         </TableCell>
                       </TableRow>

@@ -141,26 +141,27 @@ export const rolePermissions: Record<AppRole, string[]> = {
     "dashboard", "invoices", "customers", "estimates", "sales-orders",
     "vendors", "bills", "purchase-orders", "expenses", "bank-accounts",
     "reconciliation", "reports", "settings", "chart-of-accounts", "journal-entries",
-    "accounts-payable", "accounts-receivable",
+    "accounts-payable", "accounts-receivable", "payroll", "payroll-reports",
     "fixed-assets", "asset-depreciation", "opening-balances", "financial-periods", "tax-calculator"
   ],
   assistant_accountant: [
     "dashboard", "invoices", "customers", "estimates", "sales-orders",
     "vendors", "bills", "purchase-orders", "expenses", "chart-of-accounts",
-    "journal-entries", "accounts-payable", "accounts-receivable"
+    "journal-entries", "accounts-payable", "accounts-receivable", "financial-periods"
   ],
   finance_officer: [
     "dashboard", "invoices", "expenses", "bills", "bank-accounts",
     "reconciliation", "reports", "chart-of-accounts", "journal-entries",
-    "accounts-payable", "accounts-receivable"
+    "accounts-payable", "accounts-receivable", "financial-periods"
   ],
   bookkeeper: [
     "dashboard", "invoices", "customers", "estimates", "sales-orders",
     "vendors", "bills", "purchase-orders", "expenses", "chart-of-accounts",
-    "journal-entries", "fixed-assets", "reconciliation", "accounts-payable", "accounts-receivable"
+    "journal-entries", "fixed-assets", "reconciliation", "accounts-payable", "accounts-receivable",
+    "financial-periods"
   ],
   cashier: [
-    "dashboard", "bank-accounts", "expenses", "reconciliation"
+    "dashboard", "bank-accounts", "expenses", "reconciliation", "products", "inventory"
   ],
   inventory_manager: [
     "dashboard", "inventory", "products", "purchase-orders", "vendors"

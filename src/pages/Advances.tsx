@@ -44,6 +44,25 @@ const advanceSchema = z.object({
 
 type AdvanceFormData = z.infer<typeof advanceSchema>;
 
+interface AdvanceRow {
+  id: string;
+  employee_id: string;
+  amount: number;
+  date_given: string;
+  reason: string | null;
+  status: string;
+  months_to_repay: number;
+  monthly_deduction: number;
+  remaining_balance: number;
+  months_deducted: number;
+  created_at: string;
+  employees: {
+    full_name: string;
+    employee_number: string | null;
+    department: string | null;
+  } | null;
+}
+
 export default function Advances() {
   const { user } = useAuth();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -147,7 +166,7 @@ export default function Advances() {
         .map((row) => ({
           ...row,
           employees: employeeMap.get(row.employee_id) ?? null,
-        }))
+        }) as AdvanceRow)
         .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
     },
     enabled: Boolean(companyId),
@@ -205,7 +224,7 @@ export default function Advances() {
   });
 
   const recordDeductionMutation = useMutation({
-    mutationFn: async (advance: any) => {
+    mutationFn: async (advance: AdvanceRow) => {
       const newMonthsDeducted = (advance.months_deducted || 0) + 1;
       const newRemainingBalance = Number(advance.remaining_balance) - Number(advance.monthly_deduction);
       const isFullyRepaid = newMonthsDeducted >= advance.months_to_repay;
@@ -331,7 +350,7 @@ export default function Advances() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {advances?.map((advance: any) => {
+                {advances?.map((advance) => {
                   const employee = advance.employees;
                   const monthsDeducted = advance.months_deducted || 0;
                   const monthsToRepay = advance.months_to_repay || 1;

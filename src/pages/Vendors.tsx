@@ -26,6 +26,7 @@ import { useNavigate } from "react-router-dom";
 import { exportToCSV } from "@/utils/exportToExcel";
 import { ImportDialog } from "@/components/shared/ImportDialog";
 import { useAuth } from "@/contexts/AuthContext";
+import { useUserRole } from "@/hooks/useUserRole";
 import { companyService } from "@/services/firebase";
 import { COLLECTIONS } from "@/services/firebase/collectionNames";
 import {
@@ -68,6 +69,8 @@ export default function Vendors() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { user } = useAuth();
+  const { data: userRole } = useUserRole();
+  const canDeleteVendors = userRole === "super_admin" || userRole === "admin";
   const [searchQuery, setSearchQuery] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [showImportDialog, setShowImportDialog] = useState(false);
@@ -184,6 +187,9 @@ export default function Vendors() {
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
+      if (!canDeleteVendors) {
+        throw new Error("Only Admin users can delete vendors.");
+      }
       await deleteDoc(doc(firestore, COLLECTIONS.VENDORS, id));
     },
     onSuccess: () => {
@@ -491,9 +497,11 @@ export default function Vendors() {
                       <Button variant="ghost" size="icon" onClick={() => handleEdit(vendor)}>
                         <Pencil className="h-4 w-4" />
                       </Button>
-                      <Button variant="ghost" size="icon" onClick={() => deleteMutation.mutate(vendor.id)}>
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                      {canDeleteVendors && (
+                        <Button variant="ghost" size="icon" onClick={() => deleteMutation.mutate(vendor.id)}>
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      )}
                     </div>
                   </TableCell>
                 </TableRow>

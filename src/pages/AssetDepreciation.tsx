@@ -39,6 +39,24 @@ import { format, startOfMonth, endOfMonth, subMonths } from "date-fns";
 import { formatZMW } from "@/utils/zambianTaxCalculations";
 import { useDepreciationRunner } from "@/hooks/useDepreciationRunner";
 
+interface DepreciationRecord {
+  id: string;
+  asset_id: string;
+  depreciation_amount: number;
+  accumulated_depreciation: number;
+  net_book_value: number;
+  is_posted: boolean;
+  period_start: string;
+  period_end: string;
+  created_at: string;
+  fixed_assets: {
+    asset_number: string;
+    name: string;
+    purchase_cost: number;
+    depreciation_method: string;
+  } | null;
+}
+
 export default function AssetDepreciation() {
   const { user } = useAuth();
   const [selectedMonth, setSelectedMonth] = useState(format(subMonths(new Date(), 1), "yyyy-MM"));
@@ -81,7 +99,7 @@ export default function AssetDepreciation() {
         });
       });
 
-      return entriesSnapshot.docs
+      return (entriesSnapshot.docs
         .map((docSnap) => {
           const row = docSnap.data() as Record<string, unknown>;
           const periodStart = String(row.periodStart ?? row.period_start ?? "");
@@ -98,7 +116,7 @@ export default function AssetDepreciation() {
             created_at: String(row.createdAt ?? row.created_at ?? ""),
             fixed_assets: assetsMap.get(String(row.assetId ?? row.asset_id ?? "")) ?? null,
           };
-        })
+        }) as DepreciationRecord[])
         .filter((record) => record.period_start >= start && record.period_end <= end)
         .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
     },
@@ -245,7 +263,7 @@ export default function AssetDepreciation() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {depreciationRecords.map((record: any) => (
+                  {depreciationRecords.map((record) => (
                     <TableRow key={record.id}>
                       <TableCell>
                         <div>

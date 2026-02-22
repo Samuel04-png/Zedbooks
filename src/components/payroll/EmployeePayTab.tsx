@@ -5,8 +5,10 @@ import { UseFormReturn } from "react-hook-form";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatZMW } from "@/utils/zambianTaxCalculations";
 
+type EmployeeFormValues = Record<string, string | number | boolean | null | undefined>;
+
 interface EmployeePayTabProps {
-  form: UseFormReturn<any>;
+  form: UseFormReturn<EmployeeFormValues>;
 }
 
 export function EmployeePayTab({ form }: EmployeePayTabProps) {

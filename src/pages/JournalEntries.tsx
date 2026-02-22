@@ -50,6 +50,7 @@ interface JournalEntryRow {
   isReversal: boolean;
   isReversed: boolean;
   reversalEntryId: string | null;
+  reversalOf: string | null;
 }
 
 interface JournalEntryLineRow {
@@ -130,6 +131,7 @@ export default function JournalEntries() {
             isReversal: Boolean(row.isReversal ?? row.is_reversal ?? false),
             isReversed: Boolean(row.isReversed ?? row.is_reversed ?? false),
             reversalEntryId: (row.reversalEntryId ?? row.reversal_entry_id ?? null) as string | null,
+            reversalOf: (row.reversalOf ?? row.reversal_of ?? null) as string | null,
           } satisfies JournalEntryRow;
         })
         .filter((entry) => !entry.isDeleted)
@@ -231,20 +233,26 @@ export default function JournalEntries() {
     const matchesStatus =
       statusFilter === "all" ||
       (statusFilter === "posted" && entry.isPosted) ||
-      (statusFilter === "draft" && !entry.isPosted);
+      (statusFilter === "draft" && !entry.isPosted) ||
+      (statusFilter === "reversed" && entry.isReversed) ||
+      (statusFilter === "reversal" && entry.isReversal);
 
     return Boolean(matchesSearch || (!searchTerm && matchesStatus)) && matchesStatus;
   });
 
   const totalDebits = entryLines?.reduce((sum, line) => sum + line.debitAmount, 0) || 0;
   const totalCredits = entryLines?.reduce((sum, line) => sum + line.creditAmount, 0) || 0;
-  const canReverseEntry = (entry: JournalEntryRow) =>
-    entry.isPosted && !entry.isReversal && !entry.isReversed;
+  const canReverseEntry = (entry: JournalEntryRow) => {
+    const refType = String(entry.referenceType || "").toLowerCase();
+    const isPayrollEntry = refType === "payroll" || refType === "payrollpayment";
+    return entry.isPosted && !entry.isReversal && !entry.isReversed && !isPayrollEntry;
+  };
 
   const summaryStats = {
     total: journalEntries?.length || 0,
     posted: journalEntries?.filter((entry) => entry.isPosted).length || 0,
     draft: journalEntries?.filter((entry) => !entry.isPosted).length || 0,
+    reversed: journalEntries?.filter((entry) => entry.isReversed || entry.isReversal).length || 0,
   };
 
   return (
@@ -260,7 +268,7 @@ export default function JournalEntries() {
         </Button>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <Card>
           <CardHeader className="pb-2">
             <CardDescription className="flex items-center gap-2">
@@ -280,6 +288,12 @@ export default function JournalEntries() {
           <CardHeader className="pb-2">
             <CardDescription>Draft</CardDescription>
             <CardTitle className="text-2xl text-amber-600">{summaryStats.draft}</CardTitle>
+          </CardHeader>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription>Reversal Related</CardDescription>
+            <CardTitle className="text-2xl text-orange-600">{summaryStats.reversed}</CardTitle>
           </CardHeader>
         </Card>
       </div>
@@ -303,6 +317,8 @@ export default function JournalEntries() {
             <SelectItem value="all">All Status</SelectItem>
             <SelectItem value="posted">Posted</SelectItem>
             <SelectItem value="draft">Draft</SelectItem>
+            <SelectItem value="reversed">Reversed</SelectItem>
+            <SelectItem value="reversal">Reversal Entries</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -324,7 +340,9 @@ export default function JournalEntries() {
                   <TableRow>
                     <TableHead>Date</TableHead>
                     <TableHead>Reference</TableHead>
+                    <TableHead>Source</TableHead>
                     <TableHead>Description</TableHead>
+                    <TableHead>Reversal Ref</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
@@ -334,7 +352,16 @@ export default function JournalEntries() {
                     <TableRow key={entry.id}>
                       <TableCell>{entry.entryDate ? format(new Date(entry.entryDate), "dd MMM yyyy") : "-"}</TableCell>
                       <TableCell className="font-mono">{entry.referenceNumber || "-"}</TableCell>
+                      <TableCell>
+                        {entry.referenceType || "-"}
+                        {entry.referenceId ? (
+                          <p className="font-mono text-xs text-muted-foreground">{entry.referenceId}</p>
+                        ) : null}
+                      </TableCell>
                       <TableCell>{entry.description || "-"}</TableCell>
+                      <TableCell className="font-mono text-xs">
+                        {entry.reversalEntryId || entry.reversalOf || "-"}
+                      </TableCell>
                       <TableCell>
                         {entry.isReversal ? (
                           <Badge variant="secondary">Reversal</Badge>
@@ -444,7 +471,15 @@ export default function JournalEntries() {
                     <p className="font-mono text-sm">{selectedEntry.referenceId}</p>
                   </div>
                 )}
-                {!selectedEntry.isReversal && !selectedEntry.isReversed && selectedEntry.isPosted && (
+                {(selectedEntry.reversalEntryId || selectedEntry.reversalOf) && (
+                  <div>
+                    <p className="text-sm text-muted-foreground">Reversal Reference</p>
+                    <p className="font-mono text-sm">
+                      {selectedEntry.reversalEntryId || selectedEntry.reversalOf}
+                    </p>
+                  </div>
+                )}
+                {!selectedEntry.isReversal && !selectedEntry.isReversed && selectedEntry.isPosted && canReverseEntry(selectedEntry) && (
                   <div className="col-span-2">
                     <Button
                       variant="outline"
@@ -460,6 +495,13 @@ export default function JournalEntries() {
                       <RotateCcw className="h-4 w-4 mr-2" />
                       Reverse Entry
                     </Button>
+                  </div>
+                )}
+                {!selectedEntry.isReversal && !selectedEntry.isReversed && selectedEntry.isPosted && !canReverseEntry(selectedEntry) && (
+                  <div className="col-span-2">
+                    <p className="text-sm text-muted-foreground">
+                      Payroll journal reversals are controlled from the payroll module to preserve sequence and audit trail.
+                    </p>
                   </div>
                 )}
               </div>

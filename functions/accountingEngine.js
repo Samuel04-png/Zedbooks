@@ -2,6 +2,7 @@ const admin = require("firebase-admin");
 const { HttpsError } = require("firebase-functions/v2/https");
 const { FieldValue } = require("firebase-admin/firestore");
 const {
+  SUPPORTED_REFERENCE_TYPES,
   normalizeMoney,
   formatDateOnly,
   isActiveAccount,
@@ -115,6 +116,7 @@ const DEFAULT_CHART_OF_ACCOUNTS = [
 ];
 
 const DEFAULT_EXPENSE_CATEGORY_MAPPINGS = [
+  ["Utilities", 5010],
   ["Fuel", 5000],
   ["Transport", 5001],
   ["Travel", 5002],
@@ -132,8 +134,10 @@ const DEFAULT_EXPENSE_CATEGORY_MAPPINGS = [
   ["Office Cleaning", 5023],
   ["Office Maintenance", 5024],
   ["Rent", 5030],
+  ["Repairs", 5031],
   ["Building Maintenance", 5031],
   ["Security", 5032],
+  ["Salaries", 5040],
   ["Staff Welfare", 5041],
   ["Staff Training", 5042],
   ["Staff Transport", 5043],
@@ -200,6 +204,11 @@ const toIsoTimestamp = (value) => {
   if (value instanceof Date) return value.toISOString();
   return null;
 };
+
+const normalizePayrollRunStatus = (payroll) =>
+  String(payroll.payrollStatus || payroll.payroll_status || payroll.status || "")
+    .toLowerCase()
+    .trim();
 
 const isLockedStatus = (status) => {
   if (!status) return false;
@@ -1698,14 +1707,31 @@ const reverseJournalEntry = async ({
       };
     });
 
+    const entryReferenceType = String(entry.referenceType || entry.reference_type || "").trim();
+    const entryReferenceId = String(entry.referenceId || entry.reference_id || "").trim();
+    const allowPayrollReversal = data.allowPayrollReversal === true;
+    if (
+      (entryReferenceType === "Payroll" || entryReferenceType === "PayrollPayment")
+      && !allowPayrollReversal
+    ) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Payroll journals must be reversed from the payroll module.",
+      );
+    }
+    const reversalReferenceType = SUPPORTED_REFERENCE_TYPES.has(entryReferenceType)
+      ? entryReferenceType
+      : "ManualEntry";
+    const reversalReferenceId = entryReferenceId || journalEntryId;
+
     const reversalEntryId = await createJournalEntry({
       companyId,
       entryDate: reversalDate,
       description: reason
         ? `Reversal of ${journalEntryId}: ${reason}`
         : `Reversal of ${journalEntryId}`,
-      referenceType: "ManualEntry",
-      referenceId: journalEntryId,
+      referenceType: reversalReferenceType,
+      referenceId: reversalReferenceId,
       lines: reversalLines,
       createdBy: userId,
       db,
@@ -1714,12 +1740,159 @@ const reverseJournalEntry = async ({
         isReversal: true,
         reversalOf: journalEntryId,
         reason,
-        originalReferenceType: entry.referenceType || entry.reference_type || null,
+        originalReferenceType: entryReferenceType || null,
       },
     });
 
-    const entryReferenceType = String(entry.referenceType || entry.reference_type || "");
-    const entryReferenceId = String(entry.referenceId || entry.reference_id || "").trim();
+    if ((entryReferenceType === "Payroll" || entryReferenceType === "PayrollPayment") && entryReferenceId) {
+      const payrollRef = db.collection("payrollRuns").doc(entryReferenceId);
+      const payrollSnap = await tx.get(payrollRef);
+      if (payrollSnap.exists) {
+        const payroll = payrollSnap.data();
+        const payrollOwner = payroll.companyId || payroll.organizationId;
+        if (payrollOwner === companyId) {
+          const payrollStatus = normalizePayrollRunStatus(payroll);
+          const payrollJournalEntryId = String(
+            payroll.journalEntryId ||
+            payroll.journal_entry_id ||
+            payroll.glJournalId ||
+            payroll.gl_journal_id ||
+            "",
+          ).trim();
+          const paymentJournalEntryId = String(
+            payroll.paymentJournalEntryId ||
+            payroll.payment_journal_entry_id ||
+            "",
+          ).trim();
+
+          const isPayrollAccrualEntry = entryReferenceType === "Payroll"
+            && (!payrollJournalEntryId || payrollJournalEntryId === journalEntryId);
+          const isPayrollPaymentEntry = entryReferenceType === "PayrollPayment"
+            && (!paymentJournalEntryId || paymentJournalEntryId === journalEntryId);
+
+          if (isPayrollAccrualEntry && paymentJournalEntryId) {
+            const paymentEntryRef = db.collection("journalEntries").doc(paymentJournalEntryId);
+            const paymentEntrySnap = await tx.get(paymentEntryRef);
+            if (!paymentEntrySnap.exists) {
+              throw new HttpsError(
+                "failed-precondition",
+                "Payroll payment journal is missing. Reverse payroll from the payroll module.",
+              );
+            }
+
+            const paymentEntry = paymentEntrySnap.data();
+            const paymentIsReversed = paymentEntry.isReversed === true
+              || Boolean(paymentEntry.reversalEntryId || paymentEntry.reversal_entry_id);
+            if (!paymentIsReversed) {
+              throw new HttpsError(
+                "failed-precondition",
+                "Reverse payroll payment first before reversing payroll accrual.",
+              );
+            }
+          }
+
+          const payrollUpdate = {
+            updatedAt: FieldValue.serverTimestamp(),
+            updatedBy: userId,
+            updated_by: userId,
+          };
+
+          if (isPayrollPaymentEntry) {
+            if (payrollStatus !== "reversed") {
+              payrollUpdate.status = "Payment Reversed";
+              payrollUpdate.payrollStatus = "payment_reversed";
+              payrollUpdate.payroll_status = "payment_reversed";
+            }
+            payrollUpdate.paymentReversalJournalEntryId = reversalEntryId;
+            payrollUpdate.payment_reversal_journal_entry_id = reversalEntryId;
+            payrollUpdate.paymentReversalReason = reason || null;
+            payrollUpdate.payment_reversal_reason = reason || null;
+            payrollUpdate.paymentReversedBy = userId;
+            payrollUpdate.payment_reversed_by = userId;
+            payrollUpdate.paymentReversedAt = FieldValue.serverTimestamp();
+            payrollUpdate.payment_reversed_at = FieldValue.serverTimestamp();
+          }
+
+          if (isPayrollAccrualEntry) {
+            payrollUpdate.status = "Reversed";
+            payrollUpdate.payrollStatus = "reversed";
+            payrollUpdate.payroll_status = "reversed";
+            payrollUpdate.reversalJournalEntryId = reversalEntryId;
+            payrollUpdate.reversal_journal_entry_id = reversalEntryId;
+            payrollUpdate.reversalReferenceId = reversalEntryId;
+            payrollUpdate.reversal_reference_id = reversalEntryId;
+            payrollUpdate.reversalReason = reason || null;
+            payrollUpdate.reversal_reason = reason || null;
+            payrollUpdate.reversedBy = userId;
+            payrollUpdate.reversed_by = userId;
+            payrollUpdate.reversedAt = FieldValue.serverTimestamp();
+            payrollUpdate.reversed_at = FieldValue.serverTimestamp();
+            payrollUpdate.reversalDate = reversalDate;
+            payrollUpdate.reversal_date = reversalDate;
+          }
+
+          if (isPayrollAccrualEntry || isPayrollPaymentEntry) {
+            tx.set(payrollRef, payrollUpdate, { merge: true });
+
+            tx.set(
+              db.collection("payrollJournals").doc(`${entryReferenceId}_${reversalEntryId}`),
+              {
+                companyId,
+                payrollRunId: entryReferenceId,
+                payroll_run_id: entryReferenceId,
+                journalEntryId: reversalEntryId,
+                journal_entry_id: reversalEntryId,
+                journalType: isPayrollAccrualEntry ? "payroll_reversal" : "payroll_payment_reversal",
+                description: isPayrollAccrualEntry ? "Payroll accrual reversal" : "Payroll payment reversal",
+                createdBy: userId,
+                created_by: userId,
+                createdAt: FieldValue.serverTimestamp(),
+                updatedAt: FieldValue.serverTimestamp(),
+              },
+              { merge: true },
+            );
+          }
+
+          if (isPayrollAccrualEntry) {
+            let payrollItemsSnap = await tx.get(
+              db.collection("payrollItems").where("payrollRunId", "==", entryReferenceId),
+            );
+            if (payrollItemsSnap.empty) {
+              payrollItemsSnap = await tx.get(
+                db.collection("payrollItems").where("payroll_run_id", "==", entryReferenceId),
+              );
+            }
+            payrollItemsSnap.docs.forEach((docSnap) => {
+              tx.set(docSnap.ref, {
+                payrollStatus: "reversed",
+                payroll_status: "reversed",
+                updatedAt: FieldValue.serverTimestamp(),
+                updatedBy: userId,
+                updated_by: userId,
+              }, { merge: true });
+            });
+          } else if (isPayrollPaymentEntry) {
+            let payrollItemsSnap = await tx.get(
+              db.collection("payrollItems").where("payrollRunId", "==", entryReferenceId),
+            );
+            if (payrollItemsSnap.empty) {
+              payrollItemsSnap = await tx.get(
+                db.collection("payrollItems").where("payroll_run_id", "==", entryReferenceId),
+              );
+            }
+            payrollItemsSnap.docs.forEach((docSnap) => {
+              tx.set(docSnap.ref, {
+                payrollStatus: "payment_reversed",
+                payroll_status: "payment_reversed",
+                updatedAt: FieldValue.serverTimestamp(),
+                updatedBy: userId,
+                updated_by: userId,
+              }, { merge: true });
+            });
+          }
+        }
+      }
+    }
 
     if (entryReferenceType === "BillPayment" && entryReferenceId) {
       const paymentRef = db.collection("billPayments").doc(entryReferenceId);

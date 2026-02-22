@@ -44,6 +44,35 @@ interface Donor {
   active_grants: number;
 }
 
+interface DonorSummaryRow {
+  name: string;
+  totalGrants: number;
+  totalBudget: number;
+  activeGrants: number;
+}
+
+interface DonorImportRow {
+  name?: string;
+  donor_name?: string;
+  grant_reference?: string;
+  budget?: string | number;
+  start_date?: string;
+  end_date?: string;
+}
+
+interface ProjectGrantRow {
+  id: string;
+  donor_name: string | null;
+  grant_reference: string | null;
+  start_date: string | null;
+  end_date: string | null;
+  status: string;
+  budget: number;
+  spent: number;
+  name: string;
+  created_at: string;
+}
+
 // We'll use the existing projects table to derive donors
 export default function Donors() {
   const { user } = useAuth();
@@ -62,13 +91,19 @@ export default function Donors() {
   });
 
   // Fetch unique donors from projects
-  const { data: donorData = [], isLoading } = useQuery({
+  const { data: donorData = [], isLoading } = useQuery<DonorSummaryRow[]>({
     queryKey: ["donors-from-projects", companyId],
     queryFn: async () => {
       if (!companyId) return [];
       const ref = collection(firestore, COLLECTIONS.PROJECTS);
       const snapshot = await getDocs(query(ref, where("companyId", "==", companyId)));
-      const data = snapshot.docs.map((docSnap) => {
+      const data: Array<{
+        donor_name: string;
+        grant_reference: string | null;
+        budget: number;
+        spent: number;
+        status: string;
+      }> = snapshot.docs.map((docSnap) => {
         const row = docSnap.data() as Record<string, unknown>;
         return {
           donor_name: String(row.donorName ?? row.donor_name ?? ""),
@@ -81,7 +116,7 @@ export default function Donors() {
 
       // Aggregate by donor name
       const donorMap = new Map<string, { grants: number; totalBudget: number; activeGrants: number }>();
-      data.forEach((project: any) => {
+      data.forEach((project) => {
         if (project.donor_name) {
           const existing = donorMap.get(project.donor_name) || { grants: 0, totalBudget: 0, activeGrants: 0 };
           donorMap.set(project.donor_name, {
@@ -92,37 +127,44 @@ export default function Donors() {
         }
       });
 
-      return Array.from(donorMap.entries()).map(([name, data]) => ({
+      return Array.from(donorMap.entries()).map(([name, summary]) => ({
         name,
-        totalGrants: data.grants,
-        totalBudget: data.totalBudget,
-        activeGrants: data.activeGrants
+        totalGrants: summary.grants,
+        totalBudget: summary.totalBudget,
+        activeGrants: summary.activeGrants
       }));
     },
     enabled: Boolean(companyId),
   });
 
   // Fetch all projects for the full list
-  const { data: projects = [] } = useQuery({
+  const { data: projects = [] } = useQuery<ProjectGrantRow[]>({
     queryKey: ["projects-for-donors", companyId],
     queryFn: async () => {
       if (!companyId) return [];
       const ref = collection(firestore, COLLECTIONS.PROJECTS);
       const snapshot = await getDocs(query(ref, where("companyId", "==", companyId)));
       return snapshot.docs
-        .map((docSnap) => {
+        .map((docSnap): ProjectGrantRow => {
           const row = docSnap.data() as Record<string, unknown>;
           const createdAt = row.createdAt ?? row.created_at;
           const createdAtIso = typeof createdAt === "string"
             ? createdAt
             : (createdAt as { toDate?: () => Date })?.toDate?.().toISOString() ?? "";
+          const donorName = row.donorName ?? row.donor_name;
+          const grantReference = row.grantReference ?? row.grant_reference;
+          const startDate = row.startDate ?? row.start_date;
+          const endDate = row.endDate ?? row.end_date;
           return {
             id: docSnap.id,
-            ...row,
-            donor_name: (row.donorName ?? row.donor_name ?? null) as string | null,
-            grant_reference: (row.grantReference ?? row.grant_reference ?? null) as string | null,
-            start_date: (row.startDate ?? row.start_date ?? null) as string | null,
-            end_date: (row.endDate ?? row.end_date ?? null) as string | null,
+            donor_name: donorName === null || donorName === undefined ? null : String(donorName),
+            grant_reference: grantReference === null || grantReference === undefined ? null : String(grantReference),
+            start_date: startDate === null || startDate === undefined ? null : String(startDate),
+            end_date: endDate === null || endDate === undefined ? null : String(endDate),
+            status: String(row.status ?? "active"),
+            budget: Number(row.budget ?? 0),
+            spent: Number(row.spent ?? 0),
+            name: String(row.name ?? ""),
             created_at: createdAtIso,
           };
         })
@@ -153,7 +195,7 @@ export default function Donors() {
       { header: "Active Grants", key: "activeGrants" },
       { header: "Total Budget (ZMW)", key: "totalBudget" }
     ];
-    exportToCSV(filteredDonors as any, columns, "donors-report");
+    exportToCSV(filteredDonors, columns, "donors-report");
   };
 
   const donorImportColumns = [
@@ -165,15 +207,18 @@ export default function Donors() {
     { key: "end_date", header: "End Date", required: false }
   ];
 
-  const handleDonorImport = async (data: any[]) => {
+  const handleDonorImport = async (data: DonorImportRow[]) => {
     if (!companyId || !user) throw new Error("No active company context");
     for (const row of data) {
+      const budgetValue = typeof row.budget === "number"
+        ? row.budget
+        : parseFloat(String(row.budget ?? 0)) || 0;
       await addDoc(collection(firestore, COLLECTIONS.PROJECTS), {
         companyId,
-        name: row.name,
-        donorName: row.donor_name,
+        name: row.name ?? "",
+        donorName: row.donor_name ?? "",
         grantReference: row.grant_reference || null,
-        budget: parseFloat(row.budget) || 0,
+        budget: budgetValue,
         spent: 0,
         startDate: row.start_date || null,
         endDate: row.end_date || null,
@@ -329,7 +374,7 @@ export default function Donors() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {projects.filter(p => p.donor_name).map((project: any) => (
+              {projects.filter((p) => p.donor_name).map((project) => (
                 <TableRow key={project.id}>
                   <TableCell className="font-mono">{project.grant_reference || "-"}</TableCell>
                   <TableCell className="font-medium">{project.name}</TableCell>

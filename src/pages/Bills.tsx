@@ -70,6 +70,17 @@ interface PaymentAccountOption {
   accountName: string;
 }
 
+const FALLBACK_EXPENSE_CATEGORY_NAMES = [
+  "Utilities",
+  "Transport",
+  "Office Supplies",
+  "Rent",
+  "Salaries",
+  "Marketing",
+  "Repairs",
+  "Miscellaneous",
+];
+
 export default function Bills() {
   const { user } = useAuth();
   const { data: userRole } = useUserRole();
@@ -149,10 +160,21 @@ export default function Bills() {
     queryKey: ["bill-expense-category-mappings", companyId],
     queryFn: async () => {
       if (!companyId) return [] as ExpenseCategoryOption[];
-      const snapshot = await getDocs(
+      let snapshot = await getDocs(
         query(collection(firestore, COLLECTIONS.EXPENSE_CATEGORY_MAPPINGS), where("companyId", "==", companyId)),
       );
-      return snapshot.docs
+      if (snapshot.empty) {
+        try {
+          await accountingService.seedDefaultExpenseCategories({ companyId });
+          snapshot = await getDocs(
+            query(collection(firestore, COLLECTIONS.EXPENSE_CATEGORY_MAPPINGS), where("companyId", "==", companyId)),
+          );
+        } catch {
+          // Keep UI operable with fallback labels; posting will still enforce mapped categories server-side.
+        }
+      }
+
+      const mapped = snapshot.docs
         .map((docSnap) => {
           const row = docSnap.data() as Record<string, unknown>;
           return {
@@ -162,6 +184,15 @@ export default function Bills() {
         })
         .filter((row) => row.categoryName)
         .sort((a, b) => a.categoryName.localeCompare(b.categoryName));
+
+      if (mapped.length > 0) {
+        return mapped;
+      }
+
+      return FALLBACK_EXPENSE_CATEGORY_NAMES.map((categoryName) => ({
+        id: `fallback-${categoryName.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+        categoryName,
+      }));
     },
     enabled: Boolean(companyId),
   });
