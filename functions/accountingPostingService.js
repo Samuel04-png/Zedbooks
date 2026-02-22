@@ -130,21 +130,44 @@ const getAccountById = async (companyId, accountId, tx, db = getDb()) => {
   };
 };
 
-const findAccountByName = async (companyId, names, db = getDb()) => {
-  for (const name of names) {
+const listCompanyAccounts = async (companyId, db = getDb()) => {
+  const ownerFields = ["companyId", "organizationId", "organization_id"];
+  const byId = new Map();
+
+  for (const ownerField of ownerFields) {
     const snapshot = await db
       .collection("chartOfAccounts")
-      .where("companyId", "==", companyId)
-      .where("accountName", "==", name)
-      .limit(1)
+      .where(ownerField, "==", companyId)
+      .limit(2000)
       .get();
 
-    if (!snapshot.empty) {
-      const docSnap = snapshot.docs[0];
-      const row = docSnap.data();
-      if (isActiveAccount(row)) {
-        return { id: docSnap.id, ...row };
+    snapshot.docs.forEach((docSnap) => {
+      if (!byId.has(docSnap.id)) {
+        byId.set(docSnap.id, {
+          id: docSnap.id,
+          ...docSnap.data(),
+        });
       }
+    });
+  }
+
+  return [...byId.values()];
+};
+
+const findAccountByName = async (companyId, names, db = getDb()) => {
+  const normalizedNames = new Set(
+    names
+      .map((name) => String(name || "").trim().toLowerCase())
+      .filter(Boolean),
+  );
+  if (!normalizedNames.size) return null;
+
+  const accounts = await listCompanyAccounts(companyId, db);
+  for (const account of accounts) {
+    if (!isActiveAccount(account)) continue;
+    const accountName = String(account.accountName || account.account_name || "").trim().toLowerCase();
+    if (normalizedNames.has(accountName)) {
+      return account;
     }
   }
 
@@ -152,20 +175,19 @@ const findAccountByName = async (companyId, names, db = getDb()) => {
 };
 
 const findAccountByCode = async (companyId, accountCode, db = getDb()) => {
-  const snapshot = await db
-    .collection("chartOfAccounts")
-    .where("companyId", "==", companyId)
-    .where("accountCode", "==", Number(accountCode))
-    .limit(1)
-    .get();
+  const numericCode = Number(accountCode);
+  if (!Number.isFinite(numericCode)) return null;
 
-  if (snapshot.empty) return null;
+  const accounts = await listCompanyAccounts(companyId, db);
+  for (const account of accounts) {
+    if (!isActiveAccount(account)) continue;
+    const rowCode = Number(account.accountCode ?? account.account_code ?? Number.NaN);
+    if (rowCode === numericCode) {
+      return account;
+    }
+  }
 
-  const docSnap = snapshot.docs[0];
-  const row = docSnap.data();
-  if (!isActiveAccount(row)) return null;
-
-  return { id: docSnap.id, ...row };
+  return null;
 };
 
 const createJournalEntry = async ({
@@ -206,7 +228,9 @@ const createJournalEntry = async ({
   tx.set(journalEntryRef, {
     companyId: scopedCompanyId,
     organizationId: scopedCompanyId,
+    date: normalizedEntryDate,
     entryDate: normalizedEntryDate,
+    entry_date: normalizedEntryDate,
     description: description || null,
     referenceType,
     reference_type: referenceType,
@@ -217,12 +241,16 @@ const createJournalEntry = async ({
     creditTotal: totalCredits,
     isBalanced: true,
     isPosted: true,
+    is_posted: true,
     metadata,
     createdBy,
+    created_by: createdBy,
     postedBy: createdBy,
+    posted_by: createdBy,
     createdAt: FieldValue.serverTimestamp(),
     updatedAt: FieldValue.serverTimestamp(),
     postedAt: FieldValue.serverTimestamp(),
+    posted_at: FieldValue.serverTimestamp(),
   });
 
   normalized.forEach((line, index) => {
@@ -231,16 +259,24 @@ const createJournalEntry = async ({
       companyId: scopedCompanyId,
       organizationId: scopedCompanyId,
       entryId: journalEntryRef.id,
+      entry_id: journalEntryRef.id,
       journalEntryId: journalEntryRef.id,
+      journal_entry_id: journalEntryRef.id,
       lineNumber: index + 1,
+      line_number: index + 1,
       accountId: line.accountId,
+      account_id: line.accountId,
       debit: line.debitAmount,
       credit: line.creditAmount,
       debitAmount: line.debitAmount,
+      debit_amount: line.debitAmount,
       creditAmount: line.creditAmount,
+      credit_amount: line.creditAmount,
       description: line.description || null,
       entryDate: normalizedEntryDate,
+      entry_date: normalizedEntryDate,
       isPosted: true,
+      is_posted: true,
       createdAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
     });

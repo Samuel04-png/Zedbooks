@@ -61,11 +61,11 @@ const COMMERCIAL_ROLES = [
 const PAYROLL_ROLES = ["super_admin", "admin", "hr_manager", "financial_manager", "accountant"];
 
 const ACCOUNT_TYPE_RANGES = {
-  Asset: [1000, 19999],
-  Liability: [2000, 29999],
-  Equity: [3000, 39999],
-  Income: [4000, 49999],
-  Expense: [5000, 99999],
+  Asset: [1000, 1999],
+  Liability: [2000, 2999],
+  Equity: [3000, 3999],
+  Income: [4000, 4999],
+  Expense: [5000, 5999],
 };
 
 const COA_TEMPLATES = {

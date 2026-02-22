@@ -308,6 +308,26 @@ const resolveSystemAccount = async ({
   return account;
 };
 
+const getOwnedDocsInTransaction = async (tx, db, collectionName, companyId) => {
+  const ownerFields = ["companyId", "organizationId", "organization_id"];
+  const byId = new Map();
+
+  for (const ownerField of ownerFields) {
+    const snap = await tx.get(
+      db.collection(collectionName)
+        .where(ownerField, "==", companyId)
+        .limit(2000),
+    );
+    snap.docs.forEach((docSnap) => {
+      if (!byId.has(docSnap.id)) {
+        byId.set(docSnap.id, docSnap);
+      }
+    });
+  }
+
+  return [...byId.values()];
+};
+
 const getCategoryMappingByIdOrName = async (tx, db, companyId, input) => {
   const categoryId = String(input.categoryId || input.category_id || "").trim();
   const categoryName = String(input.categoryName || input.category_name || input.category || "").trim();
@@ -317,7 +337,7 @@ const getCategoryMappingByIdOrName = async (tx, db, companyId, input) => {
     const categorySnap = await tx.get(categoryRef);
     if (categorySnap.exists) {
       const category = categorySnap.data();
-      const owner = category.companyId || category.organizationId;
+      const owner = category.companyId || category.organizationId || category.organization_id;
       if (owner !== companyId) {
         throw new HttpsError("permission-denied", "Category does not belong to this organization.");
       }
@@ -337,29 +357,24 @@ const getCategoryMappingByIdOrName = async (tx, db, companyId, input) => {
     throw new HttpsError("invalid-argument", "categoryId/categoryName is required.");
   }
 
-  const categoryQuery = db
-    .collection("expenseCategoryMappings")
-    .where("companyId", "==", companyId)
-    .where("categoryName", "==", categoryName)
-    .limit(1);
-  const categorySnap = await tx.get(categoryQuery);
-  if (!categorySnap.empty) {
-    const docSnap = categorySnap.docs[0];
-    const category = docSnap.data();
+  const allCategoriesDocs = await getOwnedDocsInTransaction(tx, db, "expenseCategoryMappings", companyId);
+  const normalizedInputLower = categoryName.toLowerCase();
+  const matchedByExactName = allCategoriesDocs.find((doc) => {
+    const row = doc.data();
+    const rowName = String(row.categoryName || row.category_name || "").trim().toLowerCase();
+    return rowName === normalizedInputLower;
+  });
+  if (matchedByExactName) {
+    const category = matchedByExactName.data();
     if (category.isActive === false || category.status === "inactive") {
       throw new HttpsError("failed-precondition", "Expense category is inactive.");
     }
-
-    return { id: docSnap.id, ...category };
+    return { id: matchedByExactName.id, ...category };
   }
 
-  // Fallback to case-insensitive + slug lookup against existing category docs.
-  const allCategoriesSnap = await tx.get(
-    db.collection("expenseCategoryMappings")
-      .where("companyId", "==", companyId),
-  );
+  // Fallback to slug lookup against existing category docs.
   const normalizedInputName = slugify(categoryName);
-  const matchedBySlug = allCategoriesSnap.docs.find((doc) => {
+  const matchedBySlug = allCategoriesDocs.find((doc) => {
     const row = doc.data();
     const rowName = String(row.categoryName || row.category_name || "").trim();
     return slugify(rowName) === normalizedInputName;
@@ -386,30 +401,22 @@ const getCategoryMappingByIdOrName = async (tx, db, companyId, input) => {
 
     if (defaultAccountSnap.exists) {
       const row = defaultAccountSnap.data();
+      const owner = row.companyId || row.organizationId || row.organization_id;
+      const accountType = String(row.accountType || row.account_type || "").toLowerCase();
       const isActive = row.isActive !== false
         && row.is_active !== false
-        && String(row.status || "").toLowerCase() !== "inactive";
+        && String(row.status || "").toLowerCase() !== "inactive"
+        && owner === companyId
+        && accountType === "expense";
       if (isActive) {
         linkedExpenseAccountId = defaultAccountSnap.id;
       }
     }
 
     if (!linkedExpenseAccountId) {
-      const accountQuerySnap = await tx.get(
-        db.collection("chartOfAccounts")
-          .where("companyId", "==", companyId)
-          .where("accountCode", "==", accountCode)
-          .limit(1),
-      );
-      if (!accountQuerySnap.empty) {
-        const candidate = accountQuerySnap.docs[0];
-        const row = candidate.data();
-        const isActive = row.isActive !== false
-          && row.is_active !== false
-          && String(row.status || "").toLowerCase() !== "inactive";
-        if (isActive) {
-          linkedExpenseAccountId = candidate.id;
-        }
+      const mappedAccount = await findAccountByCode(companyId, accountCode, db);
+      if (mappedAccount && String(mappedAccount.accountType || mappedAccount.account_type || "").toLowerCase() === "expense") {
+        linkedExpenseAccountId = mappedAccount.id;
       }
     }
 
@@ -435,6 +442,7 @@ const getCategoryMappingByIdOrName = async (tx, db, companyId, input) => {
       categoryName: resolvedCategoryName,
       linkedExpenseAccountId,
       linked_expense_account_id: linkedExpenseAccountId,
+      linked_account_id: linkedExpenseAccountId,
       accountId: linkedExpenseAccountId,
       accountCode,
       isActive: true,
@@ -452,6 +460,7 @@ const getCategoryMappingByIdOrName = async (tx, db, companyId, input) => {
       categoryName: resolvedCategoryName,
       linkedExpenseAccountId,
       linked_expense_account_id: linkedExpenseAccountId,
+      linked_account_id: linkedExpenseAccountId,
       accountId: linkedExpenseAccountId,
       accountCode,
       isActive: true,
@@ -463,17 +472,11 @@ const getCategoryMappingByIdOrName = async (tx, db, companyId, input) => {
 };
 
 const findAnyActiveExpenseAccount = async (tx, db, companyId) => {
-  const accountsSnap = await tx.get(
-    db.collection("chartOfAccounts")
-      .where("companyId", "==", companyId)
-      .where("accountType", "==", "Expense")
-      .limit(100),
-  );
-
-  if (accountsSnap.empty) return null;
-
-  const activeDoc = accountsSnap.docs.find((docSnap) => {
+  const accountDocs = await getOwnedDocsInTransaction(tx, db, "chartOfAccounts", companyId);
+  const activeDoc = accountDocs.find((docSnap) => {
     const row = docSnap.data();
+    const accountType = String(row.accountType || row.account_type || "").toLowerCase();
+    if (accountType !== "expense") return false;
     if (row.isActive === false || row.is_active === false) return false;
     if (String(row.status || "").toLowerCase() === "inactive") return false;
     return true;
@@ -484,19 +487,30 @@ const findAnyActiveExpenseAccount = async (tx, db, companyId) => {
 };
 
 const resolveExpenseAccountId = async (tx, db, companyId, category) => {
-  const linkedAccountId = category.linkedExpenseAccountId || category.linked_expense_account_id || category.accountId;
+  const linkedAccountId = category.linkedExpenseAccountId
+    || category.linked_expense_account_id
+    || category.linked_account_id
+    || category.accountId;
   if (linkedAccountId) {
     try {
       const account = await getAccountById(companyId, String(linkedAccountId), tx, db);
+      const accountType = String(account.accountType || account.account_type || "");
+      if (accountType !== "Expense") {
+        throw new HttpsError(
+          "failed-precondition",
+          `Category '${category.categoryName || category.category_name || "Unknown"}' is linked to non-expense account ${account.accountName}.`,
+        );
+      }
       return account.id;
     } catch (error) {
       // Fall through to secondary resolution paths when mapping points to a removed/inactive account.
     }
   }
 
-  if (category.accountCode) {
-    const codeAccount = await findAccountByCode(companyId, category.accountCode, db);
-    if (codeAccount) return codeAccount.id;
+  const categoryAccountCode = category.accountCode ?? category.account_code;
+  if (categoryAccountCode != null) {
+    const codeAccount = await findAccountByCode(companyId, categoryAccountCode, db);
+    if (codeAccount && String(codeAccount.accountType || codeAccount.account_type || "") === "Expense") return codeAccount.id;
   }
 
   const fallbackByName = await findAccountByName(
@@ -505,6 +519,12 @@ const resolveExpenseAccountId = async (tx, db, companyId, category) => {
     db,
   );
   if (fallbackByName) {
+    if (String(fallbackByName.accountType || fallbackByName.account_type || "") !== "Expense") {
+      throw new HttpsError(
+        "failed-precondition",
+        `Configured fallback account '${fallbackByName.accountName}' is not an Expense account.`,
+      );
+    }
     return fallbackByName.id;
   }
 
@@ -795,11 +815,18 @@ const upsertAccountDoc = (batch, db, companyId, row) => {
     companyId,
     organizationId: companyId,
     accountCode: row.code,
+    account_code: row.code,
     accountName: row.name,
+    account_name: row.name,
     accountType: row.type,
+    account_type: row.type,
     parentAccountCode: row.parentCode || null,
+    parent_account_code: row.parentCode || null,
+    parentAccountId: null,
+    parent_account_id: null,
     status: "active",
     isActive: true,
+    is_active: true,
     isSystem: true,
     isSystemAccount: true,
     createdAt: FieldValue.serverTimestamp(),
@@ -843,6 +870,7 @@ const seedDefaultChartOfAccounts = async ({ companyId, userId, db: dbArg }) => {
     const parentDocId = getAccountDocIdByCode(companyId, row.parentCode);
     batch.set(childRef, {
       parentAccountId: parentDocId,
+      parent_account_id: parentDocId,
       updatedAt: FieldValue.serverTimestamp(),
     }, { merge: true });
   });
@@ -869,13 +897,18 @@ const seedDefaultExpenseCategories = async ({ companyId, userId, db: dbArg }) =>
   const batch = db.batch();
 
   for (const [categoryName, accountCode] of DEFAULT_EXPENSE_CATEGORY_MAPPINGS) {
-    const accountDocId = getAccountDocIdByCode(companyId, accountCode);
-    const accountRef = db.collection("chartOfAccounts").doc(accountDocId);
-    const accountSnap = await accountRef.get();
-    if (!accountSnap.exists) {
+    const account = await findAccountByCode(companyId, accountCode, db);
+    if (!account) {
       throw new HttpsError(
         "failed-precondition",
         `Expense account ${accountCode} missing. Seed chart of accounts first.`,
+      );
+    }
+    const accountType = String(account.accountType || account.account_type || "");
+    if (accountType !== "Expense") {
+      throw new HttpsError(
+        "failed-precondition",
+        `Account ${accountCode} is not an Expense account.`,
       );
     }
 
@@ -885,9 +918,10 @@ const seedDefaultExpenseCategories = async ({ companyId, userId, db: dbArg }) =>
       companyId,
       organizationId: companyId,
       categoryName,
-      linkedExpenseAccountId: accountDocId,
-      linked_expense_account_id: accountDocId,
-      accountId: accountDocId,
+      linkedExpenseAccountId: account.id,
+      linked_expense_account_id: account.id,
+      linked_account_id: account.id,
+      accountId: account.id,
       accountCode,
       isActive: true,
       status: "active",
@@ -931,6 +965,7 @@ const recordExpense = async ({
     await assertPeriodUnlocked(tx, companyId, expenseDate, db);
 
     const category = await getCategoryMappingByIdOrName(tx, db, companyId, data);
+    const categoryDisplayName = category.categoryName || category.category_name || "Expense";
     const expenseAccountId = await resolveExpenseAccountId(tx, db, companyId, category);
     await assertAssetPaymentAccount(tx, db, companyId, paymentAccountId);
 
@@ -941,8 +976,8 @@ const recordExpense = async ({
       amount,
       categoryId: category.id,
       category_id: category.id,
-      categoryName: category.categoryName,
-      category: category.categoryName,
+      categoryName: categoryDisplayName,
+      category: categoryDisplayName,
       paymentMethod,
       payment_method: paymentMethod,
       paymentAccountId,
@@ -965,7 +1000,7 @@ const recordExpense = async ({
     const journalEntryId = await createJournalEntry({
       companyId,
       entryDate: expenseDate,
-      description: `Expense: ${category.categoryName}${data.description ? ` - ${data.description}` : ""}`,
+      description: `Expense: ${categoryDisplayName}${data.description ? ` - ${data.description}` : ""}`,
       referenceType: "Expense",
       referenceId: expenseRef.id,
       lines: [
@@ -973,7 +1008,7 @@ const recordExpense = async ({
           accountId: expenseAccountId,
           debitAmount: amount,
           creditAmount: 0,
-          description: `${category.categoryName} expense`,
+          description: `${categoryDisplayName} expense`,
         },
         {
           accountId: paymentAccountId,
@@ -1003,7 +1038,7 @@ const recordExpense = async ({
       amount,
       transactionDate: expenseDate,
       direction: "outflow",
-      description: data.description || `Expense payment - ${category.categoryName}`,
+      description: data.description || `Expense payment - ${categoryDisplayName}`,
       referenceType: "Expense",
       referenceId: expenseRef.id,
       createdBy: userId,
@@ -1031,6 +1066,7 @@ const createBill = async ({ data, userId, companyId, db: dbArg }) => {
     await assertPeriodUnlocked(tx, companyId, billDate, db);
 
     const category = await getCategoryMappingByIdOrName(tx, db, companyId, data);
+    const categoryDisplayName = category.categoryName || category.category_name || "Expense";
     const expenseAccountId = await resolveExpenseAccountId(tx, db, companyId, category);
     const vendorEntityId = String(
       data.vendorId || data.vendor_id || data.supplierId || data.supplier_id || "",
@@ -1055,7 +1091,7 @@ const createBill = async ({ data, userId, companyId, db: dbArg }) => {
       amount_paid: 0,
       categoryId: category.id,
       category_id: category.id,
-      categoryName: category.categoryName,
+      categoryName: categoryDisplayName,
       billDate,
       bill_date: billDate,
       dueDate,
@@ -2304,8 +2340,11 @@ const reverseJournalEntry = async ({
 
     tx.set(entryRef, {
       isReversed: true,
+      is_reversed: true,
       reversedAt: FieldValue.serverTimestamp(),
+      reversed_at: FieldValue.serverTimestamp(),
       reversedBy: userId,
+      reversed_by: userId,
       reversalEntryId,
       reversal_entry_id: reversalEntryId,
       updatedAt: FieldValue.serverTimestamp(),
@@ -2316,6 +2355,7 @@ const reverseJournalEntry = async ({
     linesSnap.docs.forEach((lineDoc) => {
       tx.set(lineDoc.ref, {
         isReversed: true,
+        is_reversed: true,
         reversalEntryId,
         reversal_entry_id: reversalEntryId,
         updatedAt: FieldValue.serverTimestamp(),
@@ -2356,7 +2396,7 @@ const deleteChartOfAccount = async ({
     }
 
     const account = accountSnap.data();
-    const owner = account.companyId || account.organizationId;
+    const owner = account.companyId || account.organizationId || account.organization_id;
     if (owner !== companyId) {
       throw new HttpsError("permission-denied", "Account does not belong to this organization.");
     }
@@ -2365,43 +2405,35 @@ const deleteChartOfAccount = async ({
       throw new HttpsError("failed-precondition", "System accounts cannot be deleted.");
     }
 
-    const directChildrenSnap = await tx.get(
-      db.collection("chartOfAccounts")
-        .where("companyId", "==", companyId)
-        .where("parentAccountId", "==", accountId)
-        .limit(1),
-    );
-    if (!directChildrenSnap.empty) {
+    const accountDocs = await getOwnedDocsInTransaction(tx, db, "chartOfAccounts", companyId);
+    const hasChildren = accountDocs.some((docSnap) => {
+      if (docSnap.id === accountId) return false;
+      const row = docSnap.data();
+      const parentId = row.parentAccountId || row.parent_account_id || null;
+      return parentId === accountId;
+    });
+    if (hasChildren) {
       throw new HttpsError("failed-precondition", "Account has child accounts and cannot be deleted.");
     }
 
-    const legacyChildrenSnap = await tx.get(
-      db.collection("chartOfAccounts")
-        .where("companyId", "==", companyId)
-        .where("parent_account_id", "==", accountId)
-        .limit(1),
-    );
-    if (!legacyChildrenSnap.empty) {
-      throw new HttpsError("failed-precondition", "Account has child accounts and cannot be deleted.");
-    }
-
-    const journalLinesSnap = await tx.get(
-      db.collection("journalLines")
-        .where("companyId", "==", companyId)
-        .where("accountId", "==", accountId)
-        .limit(1),
-    );
-    if (!journalLinesSnap.empty) {
+    const journalLines = await getOwnedDocsInTransaction(tx, db, "journalLines", companyId);
+    const hasJournalHistory = journalLines.some((docSnap) => {
+      const row = docSnap.data();
+      return String(row.accountId || row.account_id || "") === accountId;
+    });
+    if (hasJournalHistory) {
       throw new HttpsError("failed-precondition", "Account has journal history and cannot be deleted.");
     }
 
-    const expenseCategoryLinks = await tx.get(
-      db.collection("expenseCategoryMappings")
-        .where("companyId", "==", companyId)
-        .where("linkedExpenseAccountId", "==", accountId)
-        .limit(1),
-    );
-    if (!expenseCategoryLinks.empty) {
+    const categoryDocs = await getOwnedDocsInTransaction(tx, db, "expenseCategoryMappings", companyId);
+    const hasCategoryLinks = categoryDocs.some((docSnap) => {
+      const row = docSnap.data();
+      return (row.linkedExpenseAccountId === accountId)
+        || (row.linked_expense_account_id === accountId)
+        || (row.linked_account_id === accountId)
+        || (row.accountId === accountId);
+    });
+    if (hasCategoryLinks) {
       throw new HttpsError(
         "failed-precondition",
         "Account is linked to an expense category and cannot be deleted.",
@@ -2413,46 +2445,81 @@ const deleteChartOfAccount = async ({
   });
 };
 
-const getChartAccounts = async (companyId, db) => {
-  const snap = await db
-    .collection("chartOfAccounts")
-    .where("companyId", "==", companyId)
-    .get();
+const getOwnedDocs = async (db, collectionName, companyId) => {
+  const ownerFields = ["companyId", "organizationId", "organization_id"];
+  const byId = new Map();
 
-  const accounts = snap.docs.map((docSnap) => ({
-    id: docSnap.id,
-    ...docSnap.data(),
-  })).filter((row) => isActiveAccount(row));
+  await Promise.all(ownerFields.map(async (ownerField) => {
+    const snap = await db
+      .collection(collectionName)
+      .where(ownerField, "==", companyId)
+      .limit(10000)
+      .get();
+    snap.docs.forEach((docSnap) => {
+      if (!byId.has(docSnap.id)) {
+        byId.set(docSnap.id, docSnap);
+      }
+    });
+  }));
+
+  return [...byId.values()];
+};
+
+const getChartAccounts = async (companyId, db) => {
+  const docs = await getOwnedDocs(db, "chartOfAccounts", companyId);
+  const accounts = docs
+    .map((docSnap) => {
+      const row = docSnap.data();
+      return {
+        id: docSnap.id,
+        ...row,
+        accountCode: Number(row.accountCode ?? row.account_code ?? 0),
+        accountName: String(row.accountName ?? row.account_name ?? ""),
+        accountType: String(row.accountType ?? row.account_type ?? ""),
+      };
+    })
+    .filter((row) => isActiveAccount(row));
 
   const byId = new Map(accounts.map((account) => [account.id, account]));
   return { accounts, byId };
 };
 
 const getJournalLinesForRange = async ({ companyId, startDate, endDate, db }) => {
-  let linesQuery = db
-    .collection("journalLines")
-    .where("companyId", "==", companyId)
-    .where("isPosted", "==", true);
+  const normalizedStart = startDate ? formatDateOnly(startDate) : null;
+  const normalizedEnd = endDate ? formatDateOnly(endDate) : null;
+  const docs = await getOwnedDocs(db, "journalLines", companyId);
 
-  if (startDate) {
-    linesQuery = linesQuery.where("entryDate", ">=", formatDateOnly(startDate));
-  }
-  if (endDate) {
-    linesQuery = linesQuery.where("entryDate", "<=", formatDateOnly(endDate));
-  }
-
-  const snap = await linesQuery.get();
-  return snap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
+  return docs
+    .map((docSnap) => {
+      const row = docSnap.data();
+      return {
+        id: docSnap.id,
+        ...row,
+        accountId: row.accountId || row.account_id || null,
+        entryId: row.entryId || row.entry_id || row.journalEntryId || row.journal_entry_id || null,
+        entryDate: String(row.entryDate || row.entry_date || ""),
+        debitAmount: Number(row.debitAmount ?? row.debit_amount ?? row.debit ?? 0),
+        creditAmount: Number(row.creditAmount ?? row.credit_amount ?? row.credit ?? 0),
+        isPosted: row.isPosted !== false && row.is_posted !== false,
+      };
+    })
+    .filter((row) => {
+      if (!row.isPosted) return false;
+      if (!row.entryDate) return false;
+      if (normalizedStart && row.entryDate < normalizedStart) return false;
+      if (normalizedEnd && row.entryDate > normalizedEnd) return false;
+      return true;
+    });
 };
 
 const aggregateByAccount = (lines) => {
   const totals = new Map();
   lines.forEach((line) => {
-    const accountId = line.accountId;
+    const accountId = line.accountId || line.account_id;
     if (!accountId) return;
     const current = totals.get(accountId) || { debit: 0, credit: 0 };
-    current.debit += Number(line.debitAmount ?? line.debit ?? 0);
-    current.credit += Number(line.creditAmount ?? line.credit ?? 0);
+    current.debit += Number(line.debitAmount ?? line.debit_amount ?? line.debit ?? 0);
+    current.credit += Number(line.creditAmount ?? line.credit_amount ?? line.credit ?? 0);
     totals.set(accountId, current);
   });
   return totals;
@@ -2463,6 +2530,17 @@ const toClosingBalance = (accountType, debitTotal, creditTotal) => {
     return normalizeMoney(debitTotal - creditTotal);
   }
   return normalizeMoney(creditTotal - debitTotal);
+};
+
+const normalizeAccountTypeLabel = (value) => {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return "";
+  if (raw === "asset") return "Asset";
+  if (raw === "liability") return "Liability";
+  if (raw === "equity") return "Equity";
+  if (raw === "income" || raw === "revenue") return "Income";
+  if (raw === "expense") return "Expense";
+  return String(value || "");
 };
 
 const getProfitLossReport = async ({
@@ -2490,11 +2568,15 @@ const getProfitLossReport = async ({
   let totalExpenses = 0;
 
   accounts
-    .filter((account) => account.accountType === "Income" || account.accountType === "Expense")
+    .filter((account) => {
+      const accountType = normalizeAccountTypeLabel(account.accountType);
+      return accountType === "Income" || accountType === "Expense";
+    })
     .sort((a, b) => Number(a.accountCode || 0) - Number(b.accountCode || 0))
     .forEach((account) => {
+      const accountType = normalizeAccountTypeLabel(account.accountType);
       const totals = totalsByAccount.get(account.id) || { debit: 0, credit: 0 };
-      if (account.accountType === "Income") {
+      if (accountType === "Income") {
         const balance = normalizeMoney(totals.credit - totals.debit);
         income.push({
           accountId: account.id,
@@ -2550,9 +2632,10 @@ const getBalanceSheetReport = async ({
   let totalEquity = 0;
 
   accounts.forEach((account) => {
-    if (!["Asset", "Liability", "Equity"].includes(account.accountType)) return;
+    const accountType = normalizeAccountTypeLabel(account.accountType);
+    if (!["Asset", "Liability", "Equity"].includes(accountType)) return;
     const totals = totalsByAccount.get(account.id) || { debit: 0, credit: 0 };
-    const balance = toClosingBalance(account.accountType, totals.debit, totals.credit);
+    const balance = toClosingBalance(accountType, totals.debit, totals.credit);
 
     const row = {
       accountId: account.id,
@@ -2561,10 +2644,10 @@ const getBalanceSheetReport = async ({
       balance,
     };
 
-    if (account.accountType === "Asset") {
+    if (accountType === "Asset") {
       assets.push(row);
       totalAssets = normalizeMoney(totalAssets + balance);
-    } else if (account.accountType === "Liability") {
+    } else if (accountType === "Liability") {
       liabilities.push(row);
       totalLiabilities = normalizeMoney(totalLiabilities + balance);
     } else {
@@ -2606,10 +2689,13 @@ const getTrialBalanceReport = async ({
 
   const rows = accounts
     .sort((a, b) => {
-      if (a.accountType === b.accountType) return Number(a.accountCode || 0) - Number(b.accountCode || 0);
-      return String(a.accountType || "").localeCompare(String(b.accountType || ""));
+      const aType = normalizeAccountTypeLabel(a.accountType);
+      const bType = normalizeAccountTypeLabel(b.accountType);
+      if (aType === bType) return Number(a.accountCode || 0) - Number(b.accountCode || 0);
+      return aType.localeCompare(bType);
     })
     .map((account) => {
+      const accountType = normalizeAccountTypeLabel(account.accountType);
       const totals = totalsByAccount.get(account.id) || { debit: 0, credit: 0 };
       const totalDebits = normalizeMoney(totals.debit);
       const totalCredits = normalizeMoney(totals.credit);
@@ -2618,10 +2704,10 @@ const getTrialBalanceReport = async ({
         accountId: account.id,
         accountCode: String(account.accountCode || ""),
         accountName: account.accountName,
-        accountType: account.accountType,
+        accountType,
         totalDebits,
         totalCredits,
-        closingBalance: toClosingBalance(account.accountType, totalDebits, totalCredits),
+        closingBalance: toClosingBalance(accountType, totalDebits, totalCredits),
       };
     });
 
@@ -2652,19 +2738,15 @@ const getGeneralLedgerReport = async ({
   const normalizedStart = formatDateOnly(startDate);
   const normalizedEnd = formatDateOnly(endDate);
   const account = await getAccountById(companyId, accountId, null, db);
+  const allLines = await getJournalLinesForRange({
+    companyId,
+    startDate: normalizedStart,
+    endDate: normalizedEnd,
+    db,
+  });
+  const lines = allLines.filter((line) => String(line.accountId || line.account_id || "") === accountId);
 
-  let linesQuery = db
-    .collection("journalLines")
-    .where("companyId", "==", companyId)
-    .where("accountId", "==", accountId)
-    .where("isPosted", "==", true)
-    .where("entryDate", ">=", normalizedStart)
-    .where("entryDate", "<=", normalizedEnd);
-
-  const linesSnap = await linesQuery.get();
-  const lines = linesSnap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
-
-  const entryIds = [...new Set(lines.map((line) => String(line.entryId || line.journalEntryId || "")).filter(Boolean))];
+  const entryIds = [...new Set(lines.map((line) => String(line.entryId || line.entry_id || line.journalEntryId || line.journal_entry_id || "")).filter(Boolean))];
   const entryMap = new Map();
   await Promise.all(entryIds.map(async (entryId) => {
     const snap = await db.collection("journalEntries").doc(entryId).get();
@@ -2673,29 +2755,32 @@ const getGeneralLedgerReport = async ({
     }
   }));
 
-  const debitNormal = account.accountType === "Asset" || account.accountType === "Expense";
+  const accountType = normalizeAccountTypeLabel(account.accountType || account.account_type);
+  const debitNormal = accountType === "Asset" || accountType === "Expense";
   let runningBalance = 0;
 
   const rows = lines
     .sort((a, b) => {
-      if (a.entryDate === b.entryDate) {
+      const aEntryDate = String(a.entryDate || a.entry_date || "");
+      const bEntryDate = String(b.entryDate || b.entry_date || "");
+      if (aEntryDate === bEntryDate) {
         return String(toIsoTimestamp(a.createdAt) || "").localeCompare(String(toIsoTimestamp(b.createdAt) || ""));
       }
-      return String(a.entryDate || "").localeCompare(String(b.entryDate || ""));
+      return aEntryDate.localeCompare(bEntryDate);
     })
     .map((line) => {
-      const debit = normalizeMoney(line.debitAmount ?? line.debit ?? 0);
-      const credit = normalizeMoney(line.creditAmount ?? line.credit ?? 0);
+      const debit = normalizeMoney(line.debitAmount ?? line.debit_amount ?? line.debit ?? 0);
+      const credit = normalizeMoney(line.creditAmount ?? line.credit_amount ?? line.credit ?? 0);
       runningBalance = debitNormal
         ? normalizeMoney(runningBalance + debit - credit)
         : normalizeMoney(runningBalance + credit - debit);
 
-      const entry = entryMap.get(String(line.entryId || line.journalEntryId || ""));
+      const entry = entryMap.get(String(line.entryId || line.entry_id || line.journalEntryId || line.journal_entry_id || ""));
       return {
-        entryDate: String(line.entryDate || ""),
+        entryDate: String(line.entryDate || line.entry_date || ""),
         description: entry?.description || line.description || null,
-        referenceType: entry?.referenceType || null,
-        referenceId: entry?.referenceId || null,
+        referenceType: entry?.referenceType || entry?.reference_type || null,
+        referenceId: entry?.referenceId || entry?.reference_id || null,
         debitAmount: debit,
         creditAmount: credit,
         runningBalance,
@@ -2704,8 +2789,8 @@ const getGeneralLedgerReport = async ({
 
   return {
     accountId,
-    accountCode: String(account.accountCode || ""),
-    accountName: account.accountName,
+    accountCode: String(account.accountCode || account.account_code || ""),
+    accountName: account.accountName || account.account_name,
     startDate: normalizedStart,
     endDate: normalizedEnd,
     rows,
@@ -2723,7 +2808,8 @@ const getCashFlowReport = async ({
   const normalizedEnd = formatDateOnly(endDate);
   const { accounts } = await getChartAccounts(companyId, db);
   const cashAccounts = accounts.filter(
-    (account) => account.accountType === "Asset" && CASH_AND_BANK_ACCOUNT_NAMES.includes(account.accountName),
+    (account) => normalizeAccountTypeLabel(account.accountType) === "Asset"
+      && CASH_AND_BANK_ACCOUNT_NAMES.includes(account.accountName),
   );
 
   if (!cashAccounts.length) {
@@ -2735,26 +2821,15 @@ const getCashFlowReport = async ({
   }
 
   const accountMap = new Map(cashAccounts.map((account) => [account.id, account.accountName]));
-  const rows = [];
+  const cashAccountIds = new Set(cashAccounts.map((account) => account.id));
+  const rows = (await getJournalLinesForRange({
+    companyId,
+    startDate: normalizedStart,
+    endDate: normalizedEnd,
+    db,
+  })).filter((line) => cashAccountIds.has(String(line.accountId || line.account_id || "")));
 
-  const accountChunks = [];
-  for (let index = 0; index < cashAccounts.length; index += 10) {
-    accountChunks.push(cashAccounts.slice(index, index + 10));
-  }
-
-  for (const chunk of accountChunks) {
-    let linesQuery = db
-      .collection("journalLines")
-      .where("companyId", "==", companyId)
-      .where("accountId", "in", chunk.map((account) => account.id))
-      .where("isPosted", "==", true)
-      .where("entryDate", ">=", normalizedStart)
-      .where("entryDate", "<=", normalizedEnd);
-    const linesSnap = await linesQuery.get();
-    linesSnap.docs.forEach((docSnap) => rows.push({ id: docSnap.id, ...docSnap.data() }));
-  }
-
-  const entryIds = [...new Set(rows.map((line) => String(line.entryId || line.journalEntryId || "")).filter(Boolean))];
+  const entryIds = [...new Set(rows.map((line) => String(line.entryId || line.entry_id || line.journalEntryId || line.journal_entry_id || "")).filter(Boolean))];
   const entries = new Map();
   await Promise.all(entryIds.map(async (entryId) => {
     const snap = await db.collection("journalEntries").doc(entryId).get();
@@ -2763,14 +2838,14 @@ const getCashFlowReport = async ({
 
   const resultRows = rows
     .map((line) => {
-      const entry = entries.get(String(line.entryId || line.journalEntryId || ""));
+      const entry = entries.get(String(line.entryId || line.entry_id || line.journalEntryId || line.journal_entry_id || ""));
       return {
-        entryDate: String(line.entryDate || ""),
+        entryDate: String(line.entryDate || line.entry_date || ""),
         description: entry?.description || line.description || null,
-        referenceType: entry?.referenceType || null,
-        moneyIn: normalizeMoney(line.debitAmount ?? line.debit ?? 0),
-        moneyOut: normalizeMoney(line.creditAmount ?? line.credit ?? 0),
-        account: accountMap.get(line.accountId) || null,
+        referenceType: entry?.referenceType || entry?.reference_type || null,
+        moneyIn: normalizeMoney(line.debitAmount ?? line.debit_amount ?? line.debit ?? 0),
+        moneyOut: normalizeMoney(line.creditAmount ?? line.credit_amount ?? line.credit ?? 0),
+        account: accountMap.get(String(line.accountId || line.account_id || "")) || null,
       };
     })
     .sort((a, b) => b.entryDate.localeCompare(a.entryDate));
@@ -2792,7 +2867,9 @@ const getExpenseReport = async ({
   const normalizedStart = formatDateOnly(startDate);
   const normalizedEnd = formatDateOnly(endDate);
   const { accounts, byId } = await getChartAccounts(companyId, db);
-  const expenseAccountIds = accounts.filter((account) => account.accountType === "Expense").map((account) => account.id);
+  const expenseAccountIds = accounts
+    .filter((account) => normalizeAccountTypeLabel(account.accountType) === "Expense")
+    .map((account) => account.id);
 
   if (!expenseAccountIds.length) {
     return {
@@ -2803,53 +2880,46 @@ const getExpenseReport = async ({
   }
 
   const grouped = new Map();
-  const accountChunks = [];
-  for (let index = 0; index < expenseAccountIds.length; index += 10) {
-    accountChunks.push(expenseAccountIds.slice(index, index + 10));
-  }
+  const expenseAccountIdSet = new Set(expenseAccountIds);
+  const lines = (await getJournalLinesForRange({
+    companyId,
+    startDate: normalizedStart,
+    endDate: normalizedEnd,
+    db,
+  })).filter((line) => expenseAccountIdSet.has(String(line.accountId || line.account_id || "")));
 
-  for (const accountChunk of accountChunks) {
-    let queryRef = db
-      .collection("journalLines")
-      .where("companyId", "==", companyId)
-      .where("accountId", "in", accountChunk)
-      .where("isPosted", "==", true)
-      .where("entryDate", ">=", normalizedStart)
-      .where("entryDate", "<=", normalizedEnd);
-    const linesSnap = await queryRef.get();
+  const entryIds = [...new Set(lines.map((line) => String(line.entryId || line.entry_id || line.journalEntryId || line.journal_entry_id || "")).filter(Boolean))];
+  const entryMap = new Map();
+  await Promise.all(entryIds.map(async (entryId) => {
+    const entrySnap = await db.collection("journalEntries").doc(entryId).get();
+    if (entrySnap.exists) entryMap.set(entryId, entrySnap.data());
+  }));
 
-    const entryIds = [...new Set(linesSnap.docs.map((docSnap) => String(docSnap.data().entryId || docSnap.data().journalEntryId || "")).filter(Boolean))];
-    const entryMap = new Map();
-    await Promise.all(entryIds.map(async (entryId) => {
-      const entrySnap = await db.collection("journalEntries").doc(entryId).get();
-      if (entrySnap.exists) entryMap.set(entryId, entrySnap.data());
-    }));
+  lines.forEach((line) => {
+    const accountId = String(line.accountId || line.account_id || "");
+    const account = byId.get(accountId);
+    if (!account) return;
+    const entry = entryMap.get(String(line.entryId || line.entry_id || line.journalEntryId || line.journal_entry_id || ""));
+    const groupKey = [
+      account.accountName,
+      String(line.entryDate || line.entry_date || ""),
+      String(entry?.description || line.description || ""),
+      String(entry?.referenceType || entry?.reference_type || ""),
+    ].join("|");
 
-    linesSnap.docs.forEach((docSnap) => {
-      const line = docSnap.data();
-      const account = byId.get(line.accountId);
-      if (!account) return;
-      const entry = entryMap.get(String(line.entryId || line.journalEntryId || ""));
-      const groupKey = [
-        account.accountName,
-        String(line.entryDate || ""),
-        String(entry?.description || line.description || ""),
-        String(entry?.referenceType || ""),
-      ].join("|");
-
-      const current = grouped.get(groupKey) || {
-        expenseAccount: account.accountName,
-        entryDate: String(line.entryDate || ""),
-        description: entry?.description || line.description || null,
-        referenceType: entry?.referenceType || null,
-        amount: 0,
-      };
-      current.amount = normalizeMoney(
-        current.amount + Number(line.debitAmount ?? line.debit ?? 0) - Number(line.creditAmount ?? line.credit ?? 0),
-      );
-      grouped.set(groupKey, current);
-    });
-  }
+    const current = grouped.get(groupKey) || {
+      expenseAccount: account.accountName,
+      entryDate: String(line.entryDate || line.entry_date || ""),
+      description: entry?.description || line.description || null,
+      referenceType: entry?.referenceType || entry?.reference_type || null,
+      amount: 0,
+    };
+    current.amount = normalizeMoney(
+      current.amount + Number(line.debitAmount ?? line.debit_amount ?? line.debit ?? 0)
+      - Number(line.creditAmount ?? line.credit_amount ?? line.credit ?? 0),
+    );
+    grouped.set(groupKey, current);
+  });
 
   const rows = [...grouped.values()].sort((a, b) => b.entryDate.localeCompare(a.entryDate));
   return {
@@ -2887,7 +2957,7 @@ const getDashboardLiveMetrics = async ({ companyId, db: dbArg }) => {
 
   const totalExpensesThisMonth = normalizeMoney(linesThisMonth.reduce((sum, line) => {
     const account = byId.get(line.accountId);
-    if (!account || account.accountType !== "Expense") return sum;
+    if (!account || normalizeAccountTypeLabel(account.accountType) !== "Expense") return sum;
     return sum + Number(line.debitAmount ?? line.debit ?? 0) - Number(line.creditAmount ?? line.credit ?? 0);
   }, 0));
 
@@ -2911,13 +2981,13 @@ const getDashboardLiveMetrics = async ({ companyId, db: dbArg }) => {
 
   const monthlyIncome = normalizeMoney(linesThisMonth.reduce((sum, line) => {
     const account = byId.get(line.accountId);
-    if (!account || account.accountType !== "Income") return sum;
+    if (!account || normalizeAccountTypeLabel(account.accountType) !== "Income") return sum;
     return sum + Number(line.creditAmount ?? line.credit ?? 0) - Number(line.debitAmount ?? line.debit ?? 0);
   }, 0));
 
   const monthlyExpenses = normalizeMoney(linesThisMonth.reduce((sum, line) => {
     const account = byId.get(line.accountId);
-    if (!account || account.accountType !== "Expense") return sum;
+    if (!account || normalizeAccountTypeLabel(account.accountType) !== "Expense") return sum;
     return sum + Number(line.debitAmount ?? line.debit ?? 0) - Number(line.creditAmount ?? line.credit ?? 0);
   }, 0));
 

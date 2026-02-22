@@ -57,11 +57,11 @@ const ACCOUNT_TYPES = [
 ] as const;
 
 const ACCOUNT_TYPE_RANGES: Record<string, [number, number]> = {
-  asset: [1000, 19999],
-  liability: [2000, 29999],
-  equity: [3000, 39999],
-  income: [4000, 49999],
-  expense: [5000, 99999],
+  asset: [1000, 1999],
+  liability: [2000, 2999],
+  equity: [3000, 3999],
+  income: [4000, 4999],
+  expense: [5000, 5999],
 };
 
 const validateAccountCode = (type: string, code: string): string | null => {
@@ -125,14 +125,24 @@ export default function ChartOfAccounts() {
       if (!membership?.companyId) return [] as Account[];
 
       const chartRef = collection(firestore, COLLECTIONS.CHART_OF_ACCOUNTS);
-      const snapshot = await getDocs(query(chartRef, where("companyId", "==", membership.companyId)));
+      const [byCompany, byOrganization, byOrganizationLegacy] = await Promise.all([
+        getDocs(query(chartRef, where("companyId", "==", membership.companyId))),
+        getDocs(query(chartRef, where("organizationId", "==", membership.companyId))),
+        getDocs(query(chartRef, where("organization_id", "==", membership.companyId))),
+      ]);
+      const byId = new Map();
+      [byCompany, byOrganization, byOrganizationLegacy].forEach((snap) => {
+        snap.docs.forEach((docSnap) => {
+          byId.set(docSnap.id, docSnap);
+        });
+      });
 
-      return snapshot.docs
+      return [...byId.values()]
         .map((docSnap) => {
           const row = docSnap.data() as Record<string, unknown>;
           return {
             id: docSnap.id,
-            companyId: String(row.companyId ?? ""),
+            companyId: String(row.companyId ?? row.organizationId ?? row.organization_id ?? ""),
             accountCode: Number(row.accountCode ?? row.account_code ?? 0),
             accountName: String(row.accountName ?? row.account_name ?? ""),
             accountType: toUiType(String(row.accountType ?? row.account_type ?? "expense")),
@@ -165,14 +175,21 @@ export default function ChartOfAccounts() {
 
       await addDoc(collection(firestore, COLLECTIONS.CHART_OF_ACCOUNTS), {
         companyId: membership.companyId,
+        organizationId: membership.companyId,
         accountCode,
+        account_code: accountCode,
         accountName: data.account_name,
+        account_name: data.account_name,
         accountType: toDbType(data.account_type),
+        account_type: toDbType(data.account_type),
         description: data.description || null,
         parentAccountId: data.parent_account_id || null,
+        parent_account_id: data.parent_account_id || null,
         status: "active",
         isSystem: false,
         isSystemAccount: false,
+        isActive: true,
+        is_active: true,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
@@ -203,11 +220,16 @@ export default function ChartOfAccounts() {
         doc(firestore, COLLECTIONS.CHART_OF_ACCOUNTS, data.id),
         {
           companyId: data.companyId,
+          organizationId: data.companyId,
           accountCode,
+          account_code: accountCode,
           accountName: data.account_name,
+          account_name: data.account_name,
           accountType: toDbType(data.account_type),
+          account_type: toDbType(data.account_type),
           description: data.description || null,
           parentAccountId: data.parent_account_id || null,
+          parent_account_id: data.parent_account_id || null,
           updatedAt: serverTimestamp(),
         },
         { merge: true },
@@ -286,11 +308,11 @@ export default function ChartOfAccounts() {
 
   const getAccountRange = (type: string) => {
     switch (normalizeType(type)) {
-      case "asset": return { min: 1000, max: 19999, label: "1000-19999" };
-      case "liability": return { min: 2000, max: 29999, label: "2000-29999" };
-      case "equity": return { min: 3000, max: 39999, label: "3000-39999" };
-      case "income": return { min: 4000, max: 49999, label: "4000-49999" };
-      case "expense": return { min: 5000, max: 99999, label: "5000-99999" };
+      case "asset": return { min: 1000, max: 1999, label: "1000-1999" };
+      case "liability": return { min: 2000, max: 2999, label: "2000-2999" };
+      case "equity": return { min: 3000, max: 3999, label: "3000-3999" };
+      case "income": return { min: 4000, max: 4999, label: "4000-4999" };
+      case "expense": return { min: 5000, max: 5999, label: "5000-5999" };
       default: return null;
     }
   };

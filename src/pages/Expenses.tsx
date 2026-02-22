@@ -72,6 +72,7 @@ interface ExpenseFormData {
 interface ExpenseCategoryOption {
   id: string;
   categoryName: string;
+  isActive?: boolean;
 }
 
 interface PaymentAccountOption {
@@ -209,12 +210,30 @@ export default function Expenses() {
     enabled: Boolean(user),
   });
 
+  const getCompanyScopedDocs = async (collectionName: string) => {
+    if (!companyId) return [];
+    const collectionRef = collection(firestore, collectionName);
+    const [byCompany, byOrganization, byOrganizationLegacy] = await Promise.all([
+      getDocs(query(collectionRef, where("companyId", "==", companyId))),
+      getDocs(query(collectionRef, where("organizationId", "==", companyId))),
+      getDocs(query(collectionRef, where("organization_id", "==", companyId))),
+    ]);
+
+    const byId = new Map();
+    [byCompany, byOrganization, byOrganizationLegacy].forEach((snap) => {
+      snap.docs.forEach((docSnap) => {
+        byId.set(docSnap.id, docSnap);
+      });
+    });
+    return [...byId.values()];
+  };
+
   const { data: expenses, isLoading } = useQuery({
     queryKey: ["expenses", companyId],
     queryFn: async () => {
       if (!companyId) return [] as Expense[];
-      const snapshot = await getDocs(query(collection(firestore, COLLECTIONS.EXPENSES), where("companyId", "==", companyId)));
-      return snapshot.docs
+      const docs = await getCompanyScopedDocs(COLLECTIONS.EXPENSES);
+      return docs
         .map((docSnap) => {
           const row = docSnap.data() as Record<string, unknown>;
           return {
@@ -243,32 +262,36 @@ export default function Expenses() {
     queryKey: ["expense-category-mappings", companyId],
     queryFn: async () => {
       if (!companyId) return [] as ExpenseCategoryOption[];
-      let snapshot = await getDocs(
-        query(collection(firestore, COLLECTIONS.EXPENSE_CATEGORY_MAPPINGS), where("companyId", "==", companyId)),
-      );
-      if (snapshot.empty) {
+      let docs = await getCompanyScopedDocs(COLLECTIONS.EXPENSE_CATEGORY_MAPPINGS);
+      if (docs.length === 0) {
         try {
           await accountingService.seedDefaultExpenseCategories({ companyId });
-          snapshot = await getDocs(
-            query(collection(firestore, COLLECTIONS.EXPENSE_CATEGORY_MAPPINGS), where("companyId", "==", companyId)),
-          );
+          docs = await getCompanyScopedDocs(COLLECTIONS.EXPENSE_CATEGORY_MAPPINGS);
         } catch {
           // Keep UI operable with fallback labels; posting will still enforce mapped categories server-side.
         }
       }
 
-      const mapped = snapshot.docs
+      const mapped = docs
         .map((docSnap) => {
           const row = docSnap.data() as Record<string, unknown>;
+          const status = String(row.status ?? "active").toLowerCase();
+          const isActive = row.isActive !== false && row.is_active !== false && status !== "inactive";
           return {
             id: docSnap.id,
             categoryName: String(row.categoryName ?? row.category_name ?? ""),
+            isActive,
           } satisfies ExpenseCategoryOption;
         })
-        .filter((row) => row.categoryName)
+        .filter((row) => row.categoryName && row.isActive);
+
+      const dedupedByName = new Map(
+        mapped.map((item) => [normalizeCategoryKey(item.categoryName), item]),
+      );
+      const dedupedMapped = [...dedupedByName.values()]
         .sort((a, b) => a.categoryName.localeCompare(b.categoryName));
 
-      const mappedCategoryKeys = new Set(mapped.map((item) => normalizeCategoryKey(item.categoryName)));
+      const mappedCategoryKeys = new Set(dedupedMapped.map((item) => normalizeCategoryKey(item.categoryName)));
       const missingFallbacks = FALLBACK_EXPENSE_CATEGORY_NAMES
         .filter((categoryName) => !mappedCategoryKeys.has(normalizeCategoryKey(categoryName)))
         .map((categoryName) => ({
@@ -276,7 +299,7 @@ export default function Expenses() {
           categoryName,
         }));
 
-      return [...mapped, ...missingFallbacks].sort((a, b) => a.categoryName.localeCompare(b.categoryName));
+      return [...dedupedMapped, ...missingFallbacks].sort((a, b) => a.categoryName.localeCompare(b.categoryName));
     },
     enabled: Boolean(companyId),
   });
@@ -285,23 +308,22 @@ export default function Expenses() {
     queryKey: ["expense-payment-accounts", companyId],
     queryFn: async () => {
       if (!companyId) return [] as PaymentAccountOption[];
-      const snapshot = await getDocs(
-        query(
-          collection(firestore, COLLECTIONS.CHART_OF_ACCOUNTS),
-          where("companyId", "==", companyId),
-          where("accountType", "==", "Asset"),
-          where("status", "==", "active"),
-        ),
-      );
-      return snapshot.docs
+      const docs = await getCompanyScopedDocs(COLLECTIONS.CHART_OF_ACCOUNTS);
+      return docs
         .map((docSnap) => {
           const row = docSnap.data() as Record<string, unknown>;
+          const accountType = String(row.accountType ?? row.account_type ?? "").toLowerCase();
+          const status = String(row.status ?? "active").toLowerCase();
+          const isActive = row.isActive !== false && row.is_active !== false && status !== "inactive";
+          if (accountType !== "asset" || !isActive) {
+            return null;
+          }
           return {
             id: docSnap.id,
-            accountName: String(row.accountName ?? ""),
+            accountName: String(row.accountName ?? row.account_name ?? ""),
           } satisfies PaymentAccountOption;
         })
-        .filter((row) => row.accountName)
+        .filter((row): row is PaymentAccountOption => Boolean(row?.accountName))
         .sort((a, b) => a.accountName.localeCompare(b.accountName));
     },
     enabled: Boolean(companyId),
@@ -344,9 +366,17 @@ export default function Expenses() {
         throw new Error("Expense category is required.");
       }
 
+      const selectedCategory = expenseCategories.find(
+        (category) => normalizeCategoryKey(category.categoryName) === normalizeCategoryKey(data.category),
+      );
+      const mappedCategoryId = selectedCategory && !selectedCategory.id.startsWith("fallback-")
+        ? selectedCategory.id
+        : undefined;
+
       await accountingService.recordExpense({
         companyId,
         amount: Number(data.amount),
+        categoryId: mappedCategoryId,
         categoryName: data.category,
         paymentMethod: normalizePaymentMethod(data.payment_method),
         paymentAccountId,
@@ -590,6 +620,10 @@ export default function Expenses() {
   const handleImport = async (data: Record<string, unknown>[]) => {
     if (!user?.id || !companyId) throw new Error("Not authenticated");
 
+    const categoryByNormalizedName = new Map(
+      expenseCategories.map((category) => [normalizeCategoryKey(category.categoryName), category]),
+    );
+
     for (const rawItem of data) {
       const item = rawItem as Record<string, unknown>;
       const paymentMethodRaw = String(item.payment_method ?? "cash");
@@ -597,10 +631,18 @@ export default function Expenses() {
       if (!paymentAccountId) {
         throw new Error("No active Asset payment account found in Chart of Accounts.");
       }
+      const categoryName = item.category ? String(item.category).trim() : "Miscellaneous";
+      const normalizedCategoryName = normalizeCategoryKey(categoryName);
+      const matchedCategory = categoryByNormalizedName.get(normalizedCategoryName);
+      const mappedCategoryId = matchedCategory && !matchedCategory.id.startsWith("fallback-")
+        ? matchedCategory.id
+        : undefined;
+
       await accountingService.recordExpense({
         companyId,
         description: String(item.description ?? "").trim(),
-        categoryName: item.category ? String(item.category).trim() : "Miscellaneous",
+        categoryId: mappedCategoryId,
+        categoryName,
         amount: Number(item.amount ?? 0),
         expenseDate: String(item.expense_date ?? new Date().toISOString().split("T")[0]),
         paymentMethod: normalizePaymentMethod(paymentMethodRaw),
@@ -869,7 +911,11 @@ export default function Expenses() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filteredExpenses?.map((expense) => (
+              {filteredExpenses?.map((expense) => {
+                const canReverseThisExpense = Boolean(expense.journal_entry_id) && !expense.is_reversed && canReversePostedEntries;
+                const canVoidThisExpense = !expense.journal_entry_id || expense.is_reversed;
+                const canRunDeleteAction = canReverseThisExpense || (canVoidThisExpense && canManageExpenses);
+                return (
                 <TableRow key={expense.id}>
                   <TableCell>
                     {format(new Date(expense.expense_date), "dd MMM yyyy")}
@@ -889,7 +935,7 @@ export default function Expenses() {
                   <TableCell>{getExpenseStatusBadge(expense)}</TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-2">
-                      {expense.journal_entry_id && !expense.is_reversed && canReversePostedEntries && (
+                      {canReverseThisExpense && (
                         <Button
                           variant="ghost"
                           size="icon"
@@ -919,15 +965,22 @@ export default function Expenses() {
                         variant="ghost"
                         size="icon"
                         onClick={() => handleDeleteAction(expense)}
-                        disabled={reverseExpenseMutation.isPending || voidExpenseMutation.isPending}
-                        title={expense.journal_entry_id && !expense.is_reversed ? "Delete via reversal" : "Void expense"}
+                        disabled={reverseExpenseMutation.isPending || voidExpenseMutation.isPending || !canRunDeleteAction}
+                        title={
+                          !canRunDeleteAction
+                            ? "You do not have permission for this action"
+                            : expense.journal_entry_id && !expense.is_reversed
+                              ? "Delete via reversal"
+                              : "Void expense"
+                        }
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>
                     </div>
                   </TableCell>
                 </TableRow>
-              ))}
+                );
+              })}
               {filteredExpenses?.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={7} className="text-center text-muted-foreground py-8">

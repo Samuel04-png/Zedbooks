@@ -91,11 +91,35 @@ service cloud.firestore {
     }
 
     function validAccountRange(accountType, accountCode) {
-      return (accountType == "Asset" && accountCode >= 1000 && accountCode <= 19999)
-        || (accountType == "Liability" && accountCode >= 2000 && accountCode <= 29999)
-        || (accountType == "Equity" && accountCode >= 3000 && accountCode <= 39999)
-        || (accountType == "Income" && accountCode >= 4000 && accountCode <= 49999)
-        || (accountType == "Expense" && accountCode >= 5000 && accountCode <= 99999);
+      return (accountType == "Asset" && accountCode >= 1000 && accountCode <= 1999)
+        || (accountType == "Liability" && accountCode >= 2000 && accountCode <= 2999)
+        || (accountType == "Equity" && accountCode >= 3000 && accountCode <= 3999)
+        || (accountType == "Income" && accountCode >= 4000 && accountCode <= 4999)
+        || (accountType == "Expense" && accountCode >= 5000 && accountCode <= 5999);
+    }
+
+    function isActiveExpenseAccount(companyId, accountId) {
+      return accountId is string
+        && exists(/databases/$(database)/documents/chartOfAccounts/$(accountId))
+        && (
+          get(/databases/$(database)/documents/chartOfAccounts/$(accountId)).data.companyId == companyId
+          || get(/databases/$(database)/documents/chartOfAccounts/$(accountId)).data.organizationId == companyId
+          || get(/databases/$(database)/documents/chartOfAccounts/$(accountId)).data.organization_id == companyId
+        )
+        && (
+          get(/databases/$(database)/documents/chartOfAccounts/$(accountId)).data.accountType == "Expense"
+          || get(/databases/$(database)/documents/chartOfAccounts/$(accountId)).data.account_type == "Expense"
+        )
+        && get(/databases/$(database)/documents/chartOfAccounts/$(accountId)).data.isActive != false
+        && get(/databases/$(database)/documents/chartOfAccounts/$(accountId)).data.is_active != false
+        && get(/databases/$(database)/documents/chartOfAccounts/$(accountId)).data.status != "inactive";
+    }
+
+    function hasLinkedExpenseAccount(data, companyId) {
+      return (data.linkedExpenseAccountId is string && isActiveExpenseAccount(companyId, data.linkedExpenseAccountId))
+        || (data.linked_expense_account_id is string && isActiveExpenseAccount(companyId, data.linked_expense_account_id))
+        || (data.linked_account_id is string && isActiveExpenseAccount(companyId, data.linked_account_id))
+        || (data.accountId is string && isActiveExpenseAccount(companyId, data.accountId));
     }
 
     match /users/{uid} {
@@ -464,7 +488,11 @@ service cloud.firestore {
 
     match /expenseCategoryMappings/{docId} {
       allow read: if isCompanyMember(resource.data.companyId);
-      allow create, update: if canManageAccounting(request.resource.data.companyId);
+      allow create: if canManageAccounting(request.resource.data.companyId)
+        && hasLinkedExpenseAccount(request.resource.data, request.resource.data.companyId);
+      allow update: if canManageAccounting(resource.data.companyId)
+        && request.resource.data.companyId == resource.data.companyId
+        && hasLinkedExpenseAccount(request.resource.data, resource.data.companyId);
       allow delete: if canManageCompany(resource.data.companyId);
     }
 
