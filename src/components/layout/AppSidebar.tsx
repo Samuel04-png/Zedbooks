@@ -102,6 +102,7 @@ const navigation: NavSection[] = [
       { title: "Employees", icon: Users, href: "/employees" },
       { title: "Payroll", icon: DollarSign, href: "/payroll" },
       { title: "Advances", icon: Wallet, href: "/advances" },
+      { title: "HR Operations", icon: Building2, href: "/hr-operations" },
       { title: "Time & Contractors", icon: Clock, href: "/time-tracking" },
     ],
   },

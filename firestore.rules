@@ -343,6 +343,68 @@ service cloud.firestore {
       allow delete: if canManageCompany(resource.data.companyId);
     }
 
+    match /leaveTypes/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create: if canManagePayroll(request.resource.data.companyId);
+      allow update: if canManagePayroll(resource.data.companyId)
+        && request.resource.data.companyId == resource.data.companyId;
+      allow delete: if false;
+    }
+
+    match /leaveBalances/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create: if canManagePayroll(request.resource.data.companyId);
+      allow update: if canManagePayroll(resource.data.companyId)
+        && request.resource.data.companyId == resource.data.companyId;
+      allow delete: if false;
+    }
+
+    match /leaveRequests/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create: if isCompanyMember(request.resource.data.companyId)
+        && (
+          request.resource.data.requestedBy == request.auth.uid
+          || request.resource.data.requested_by == request.auth.uid
+        );
+      allow update: if (
+        canManagePayroll(resource.data.companyId)
+        && request.resource.data.companyId == resource.data.companyId
+      ) || (
+        isCompanyMember(resource.data.companyId)
+        && request.resource.data.companyId == resource.data.companyId
+        && (
+          resource.data.requestedBy == request.auth.uid
+          || resource.data.requested_by == request.auth.uid
+        )
+        && request.resource.data.status == "cancelled"
+      );
+      allow delete: if false;
+    }
+
+    match /leaveLedger/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create: if canManagePayroll(request.resource.data.companyId);
+      allow update: if canManagePayroll(resource.data.companyId)
+        && request.resource.data.companyId == resource.data.companyId;
+      allow delete: if false;
+    }
+
+    match /attendanceRecords/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create: if isCompanyMember(request.resource.data.companyId);
+      allow update: if isCompanyMember(resource.data.companyId)
+        && request.resource.data.companyId == resource.data.companyId;
+      allow delete: if false;
+    }
+
+    match /disciplinaryRecords/{docId} {
+      allow read: if isCompanyMember(resource.data.companyId);
+      allow create: if canManagePayroll(request.resource.data.companyId);
+      allow update: if canManagePayroll(resource.data.companyId)
+        && request.resource.data.companyId == resource.data.companyId;
+      allow delete: if false;
+    }
+
     match /contractors/{docId} {
       allow read: if isCompanyMember(resource.data.companyId);
       allow create, update: if canManageProjects(request.resource.data.companyId);

@@ -8,6 +8,7 @@ const ai = require("./ai");
 const notifications = require("./notifications");
 const accounting = require("./accounting");
 const payroll = require("./payroll");
+const hr = require("./hr");
 const accountingEngine = require("./accountingEngine");
 
 if (!admin.apps.length) {
@@ -59,6 +60,7 @@ const COMMERCIAL_ROLES = [
 ];
 
 const PAYROLL_ROLES = ["super_admin", "admin", "hr_manager", "financial_manager", "accountant"];
+const HR_MANAGE_ROLES = PAYROLL_ROLES;
 
 const ACCOUNT_TYPE_RANGES = {
   Asset: [1000, 1999],
@@ -1363,6 +1365,11 @@ const assertCompanyMembership = async (uid, companyId) => {
   return companyId;
 };
 
+const getActorRoleForCompany = async (uid, companyId) => {
+  const membership = await getMembership(uid, companyId);
+  return membership.role;
+};
+
 // Canonical accounting engine callables (override legacy handlers)
 exports.seedDefaultChartOfAccounts = onCall(async (request) => {
   const uid = assertAuthenticated(request);
@@ -1587,6 +1594,192 @@ exports.reversePayroll = onCall(async (request) => {
 
 // Backward-compatible alias for existing UI action naming.
 exports.finalizePayroll = exports.processPayroll;
+
+// HR operations: leave, attendance, disciplinary workflows
+exports.seedDefaultLeaveTypes = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = await resolveCompanyIdFromPayload(uid, payload);
+  await assertCompanyRole(uid, companyId, HR_MANAGE_ROLES);
+
+  const result = await hr.seedDefaultLeaveTypes({
+    db,
+    companyId,
+    userId: uid,
+  });
+  await createAuditLog(companyId, uid, "leave_types_seeded", result);
+  return result;
+});
+
+exports.saveLeaveType = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = await resolveCompanyIdFromPayload(uid, payload);
+  await assertCompanyRole(uid, companyId, HR_MANAGE_ROLES);
+
+  const result = await hr.upsertLeaveType({
+    db,
+    companyId,
+    userId: uid,
+    data: payload,
+  });
+  await createAuditLog(companyId, uid, "leave_type_saved", {
+    leaveTypeId: result.leaveTypeId,
+  });
+  return result;
+});
+
+exports.setLeaveBalance = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = await resolveCompanyIdFromPayload(uid, payload);
+  await assertCompanyRole(uid, companyId, HR_MANAGE_ROLES);
+
+  const result = await hr.setLeaveBalance({
+    db,
+    companyId,
+    userId: uid,
+    data: payload,
+  });
+  await createAuditLog(companyId, uid, "leave_balance_set", {
+    balanceId: result.balanceId,
+    employeeId: payload.employeeId || payload.employee_id || null,
+    leaveTypeId: payload.leaveTypeId || payload.leave_type_id || null,
+    year: payload.year || null,
+  });
+  return result;
+});
+
+exports.submitLeaveRequest = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = await resolveCompanyIdFromPayload(uid, payload);
+  const membership = await getMembership(uid, companyId);
+
+  const result = await hr.submitLeaveRequest({
+    db,
+    companyId,
+    userId: uid,
+    actorRole: membership.role,
+    data: payload,
+  });
+  await createAuditLog(companyId, uid, "leave_request_submitted", {
+    leaveRequestId: result.leaveRequestId,
+    employeeId: payload.employeeId || payload.employee_id || null,
+    leaveTypeId: payload.leaveTypeId || payload.leave_type_id || null,
+  });
+  return result;
+});
+
+exports.reviewLeaveRequest = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = await resolveCompanyIdFromPayload(uid, payload);
+  const action = String(payload.action || "").toLowerCase().trim();
+
+  if (action === "cancel") {
+    await assertCompanyMembership(uid, companyId);
+  } else {
+    await assertCompanyRole(uid, companyId, HR_MANAGE_ROLES);
+  }
+
+  const actorRole = await getActorRoleForCompany(uid, companyId);
+  const result = await hr.reviewLeaveRequest({
+    db,
+    companyId,
+    userId: uid,
+    actorRole,
+    data: payload,
+  });
+  await createAuditLog(companyId, uid, "leave_request_reviewed", {
+    leaveRequestId: result.leaveRequestId,
+    action,
+    status: result.status,
+  });
+  return result;
+});
+
+exports.clockAttendance = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = await resolveCompanyIdFromPayload(uid, payload);
+  const membership = await getMembership(uid, companyId);
+
+  const result = await hr.clockAttendance({
+    db,
+    companyId,
+    userId: uid,
+    actorRole: membership.role,
+    data: payload,
+  });
+  await createAuditLog(companyId, uid, "attendance_clocked", {
+    attendanceRecordId: result.attendanceRecordId,
+    action: payload.action || null,
+  });
+  return result;
+});
+
+exports.adjustAttendance = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = await resolveCompanyIdFromPayload(uid, payload);
+  const membership = await assertCompanyRole(uid, companyId, HR_MANAGE_ROLES);
+
+  const result = await hr.adjustAttendance({
+    db,
+    companyId,
+    userId: uid,
+    actorRole: membership.role,
+    data: payload,
+  });
+  await createAuditLog(companyId, uid, "attendance_adjusted", {
+    attendanceRecordId: result.attendanceRecordId,
+    employeeId: payload.employeeId || payload.employee_id || null,
+    date: payload.attendanceDate || payload.attendance_date || null,
+  });
+  return result;
+});
+
+exports.logDisciplinaryRecord = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = await resolveCompanyIdFromPayload(uid, payload);
+  const membership = await assertCompanyRole(uid, companyId, HR_MANAGE_ROLES);
+
+  const result = await hr.logDisciplinaryRecord({
+    db,
+    companyId,
+    userId: uid,
+    actorRole: membership.role,
+    data: payload,
+  });
+  await createAuditLog(companyId, uid, "disciplinary_record_logged", {
+    disciplinaryRecordId: result.disciplinaryRecordId,
+    employeeId: payload.employeeId || payload.employee_id || null,
+    actionType: payload.actionType || payload.action_type || null,
+  });
+  return result;
+});
+
+exports.resolveDisciplinaryRecord = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = await resolveCompanyIdFromPayload(uid, payload);
+  const membership = await assertCompanyRole(uid, companyId, HR_MANAGE_ROLES);
+
+  const result = await hr.resolveDisciplinaryRecord({
+    db,
+    companyId,
+    userId: uid,
+    actorRole: membership.role,
+    data: payload,
+  });
+  await createAuditLog(companyId, uid, "disciplinary_record_resolved", {
+    disciplinaryRecordId: result.disciplinaryRecordId,
+    resolutionStatus: payload.resolutionStatus || payload.resolution_status || null,
+  });
+  return result;
+});
 
 // Journal-only reporting and dashboard metrics
 exports.getProfitLossReport = onCall(async (request) => {

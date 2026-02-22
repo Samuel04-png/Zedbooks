@@ -58,6 +58,7 @@ import EmployeePayrollSetupPage from "./pages/EmployeePayrollSetupPage";
 import PayrollSettings from "./pages/PayrollSettings";
 import Products from "./pages/Products";
 import OpeningBalances from "./pages/OpeningBalances";
+import HROperations from "./pages/HROperations";
 
 const FinancialReports = lazy(() => import("./pages/FinancialReports"));
 const PayrollReports = lazy(() => import("./pages/PayrollReports"));
@@ -126,6 +127,7 @@ const App = () => (
               <Route path="/payroll/:runId/payslip/:employeeId" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><Payslip /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/advances" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><Advances /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/time-tracking" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><TimeTracking /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+              <Route path="/hr-operations" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><HROperations /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/projects" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><Projects /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/projects/:projectId/expenses" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><ProjectExpenses /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/projects/:projectId/activity-log" element={<ProtectedRoute><AppLayout><RoleProtectedRoute><ProjectActivityLog /></RoleProtectedRoute></AppLayout></ProtectedRoute>} />

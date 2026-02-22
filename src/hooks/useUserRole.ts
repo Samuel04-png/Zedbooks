@@ -135,14 +135,14 @@ export const rolePermissions: Record<AppRole, string[]> = {
     "reconciliation", "reports", "settings", "chart-of-accounts", "journal-entries",
     "accounts-payable", "accounts-receivable",
     "payroll", "payroll-reports", "employees", "fixed-assets", "asset-depreciation", "opening-balances",
-    "financial-periods", "zra-compliance", "tax-calculator"
+    "financial-periods", "zra-compliance", "tax-calculator", "hr-operations"
   ],
   accountant: [
     "dashboard", "invoices", "customers", "estimates", "sales-orders",
     "vendors", "bills", "purchase-orders", "expenses", "bank-accounts",
     "reconciliation", "reports", "settings", "chart-of-accounts", "journal-entries",
     "accounts-payable", "accounts-receivable", "payroll", "payroll-reports",
-    "fixed-assets", "asset-depreciation", "opening-balances", "financial-periods", "tax-calculator"
+    "fixed-assets", "asset-depreciation", "opening-balances", "financial-periods", "tax-calculator", "hr-operations"
   ],
   assistant_accountant: [
     "dashboard", "invoices", "customers", "estimates", "sales-orders",
@@ -168,7 +168,7 @@ export const rolePermissions: Record<AppRole, string[]> = {
   ],
   hr_manager: [
     "dashboard", "employees", "payroll", "advances", "payroll-reports",
-    "time-tracking"
+    "time-tracking", "hr-operations"
   ],
   project_manager: [
     "dashboard", "projects", "donors", "time-tracking", "reports"
@@ -178,7 +178,7 @@ export const rolePermissions: Record<AppRole, string[]> = {
     "journal-entries", "chart-of-accounts"
   ],
   staff: [
-    "dashboard", "time-tracking"
+    "dashboard", "time-tracking", "hr-operations"
   ],
   read_only: [
     "dashboard"

@@ -2,6 +2,7 @@ export { authService } from "@/services/firebase/authService";
 export { companyService } from "@/services/firebase/companyService";
 export { accountingService } from "@/services/firebase/accountingService";
 export { payrollService } from "@/services/firebase/payrollService";
+export { hrService } from "@/services/firebase/hrService";
 export { storageService } from "@/services/firebase/storageService";
 export { dashboardService } from "@/services/firebase/dashboardService";
 export { projectActivityService } from "@/services/firebase/projectActivityService";
