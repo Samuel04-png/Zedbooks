@@ -10,6 +10,8 @@ const accounting = require("./accounting");
 const payroll = require("./payroll");
 const hr = require("./hr");
 const accountingEngine = require("./accountingEngine");
+const accountingUtils = require("./accountingUtils");
+const financialReports = require("./financialReports");
 
 if (!admin.apps.length) {
   admin.initializeApp();
@@ -934,6 +936,111 @@ exports.postExpenseToGL = onCall(accounting.postExpenseToGL);
 exports.postBillToGL = onCall(accounting.postBillToGL);
 exports.getGLBalances = onCall(accounting.getGLBalances);
 exports.getTrialBalance = onCall(accounting.getTrialBalance);
+
+// --- ACCOUNTING UTILITIES EXPORTS ---
+
+exports.getAccountingTrialBalance = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = await resolveCompanyIdFromPayload(uid, payload);
+  await assertCompanyMembership(uid, companyId);
+  return accountingUtils.getTrialBalance({
+    organizationId: companyId,
+    asOfDate: payload.asOfDate,
+  });
+});
+
+exports.getAccountingEquation = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = await resolveCompanyIdFromPayload(uid, payload);
+  await assertCompanyMembership(uid, companyId);
+  return accountingUtils.getAccountingEquation({
+    organizationId: companyId,
+    asOfDate: payload.asOfDate,
+  });
+});
+
+exports.getFinancialSummary = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = await resolveCompanyIdFromPayload(uid, payload);
+  await assertCompanyMembership(uid, companyId);
+  return accountingUtils.getFinancialSummary({
+    organizationId: companyId,
+    startDate: payload.startDate,
+    endDate: payload.endDate,
+  });
+});
+
+exports.getAccountsByType = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = await resolveCompanyIdFromPayload(uid, payload);
+  await assertCompanyMembership(uid, companyId);
+  return accountingUtils.getAccountsByType({
+    organizationId: companyId,
+  });
+});
+
+exports.validateAllJournalEntries = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = await resolveCompanyIdFromPayload(uid, payload);
+  await assertCompanyRole(uid, companyId, ["super_admin", "admin", "accountant"]);
+  return accountingUtils.validateAllJournalEntries({
+    organizationId: companyId,
+  });
+});
+
+// --- FINANCIAL REPORTS EXPORTS ---
+
+exports.getProfitAndLossStatement = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = await resolveCompanyIdFromPayload(uid, payload);
+  await assertCompanyMembership(uid, companyId);
+  return financialReports.getProfitAndLossStatement({
+    organizationId: companyId,
+    startDate: payload.startDate,
+    endDate: payload.endDate,
+  });
+});
+
+exports.getBalanceSheet = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = await resolveCompanyIdFromPayload(uid, payload);
+  await assertCompanyMembership(uid, companyId);
+  return financialReports.getBalanceSheet({
+    organizationId: companyId,
+    asOfDate: payload.asOfDate,
+  });
+});
+
+exports.getAccountTransactionHistory = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = await resolveCompanyIdFromPayload(uid, payload);
+  await assertCompanyMembership(uid, companyId);
+  return financialReports.getAccountTransactionHistory({
+    organizationId: companyId,
+    accountId: payload.accountId,
+    startDate: payload.startDate,
+    endDate: payload.endDate,
+  });
+});
+
+exports.getAccountsReceivableAging = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = await resolveCompanyIdFromPayload(uid, payload);
+  await assertCompanyMembership(uid, companyId);
+  return financialReports.getAccountsReceivableAging({
+    organizationId: companyId,
+    asOfDate: payload.asOfDate,
+  });
+});
 
 // --- END ACCOUNTING MODULE ---
 

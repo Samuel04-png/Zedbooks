@@ -44,7 +44,8 @@ import { useUserRole } from "@/hooks/useUserRole";
 interface Expense {
   id: string;
   description: string;
-  category: string | null;
+  category_id: string | null;
+  category_name: string | null;
   amount: number;
   expense_date: string;
   vendor_name: string | null;
@@ -60,7 +61,7 @@ interface Expense {
 
 interface ExpenseFormData {
   description: string;
-  category: string;
+  categoryId: string;
   amount: string;
   expense_date: string;
   vendor_name: string;
@@ -86,60 +87,6 @@ const normalizeCategoryKey = (value: string) =>
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
-
-const FALLBACK_EXPENSE_CATEGORY_NAMES = [
-  "Fuel",
-  "Travel",
-  "Vehicle Maintenance",
-  "Motor Vehicle Ins",
-  "Parking",
-  "Electricity",
-  "Water",
-  "Internet",
-  "Telephone",
-  "Airtime",
-  "Stationery",
-  "Printing",
-  "Office Cleaning",
-  "Office Maintenance",
-  "Building Maintenance",
-  "Security",
-  "Staff Welfare",
-  "Staff Training",
-  "Staff Transport",
-  "Staff Meals",
-  "Overtime",
-  "Advertising",
-  "Promotion",
-  "Branding & Design",
-  "Legal Fees",
-  "Accounting Fees",
-  "Consultancy",
-  "Audit Fees",
-  "Software",
-  "Website Hosting",
-  "Domain Renewal",
-  "IT Support",
-  "Bank Charges",
-  "Loan Interest",
-  "Transaction Fees",
-  "Mobile Money Charges",
-  "Inventory",
-  "Packaging",
-  "Delivery",
-  "Courier",
-  "Licenses & Permits",
-  "Regulatory Fees",
-  "Fines & Penalties",
-  "Utilities",
-  "Transport",
-  "Office Supplies",
-  "Rent",
-  "Salaries",
-  "Marketing",
-  "Repairs",
-  "Miscellaneous",
-];
 
 const expenseImportColumns: ImportColumn[] = [
   { header: "Description", key: "description", required: true, transform: transformers.trim },
@@ -191,7 +138,7 @@ export default function Expenses() {
 
   const [formData, setFormData] = useState<ExpenseFormData>({
     description: "",
-    category: "",
+    categoryId: "",
     amount: "",
     expense_date: new Date().toISOString().split("T")[0],
     vendor_name: "",
@@ -239,7 +186,8 @@ export default function Expenses() {
           return {
             id: docSnap.id,
             description: String(row.description ?? ""),
-            category: (row.category ?? null) as string | null,
+            category_id: (row.categoryId ?? row.category_id ?? null) as string | null,
+            category_name: (row.categoryName ?? row.category_name ?? null) as string | null,
             amount: Number(row.amount ?? 0),
             expense_date: String(row.expenseDate ?? row.expense_date ?? new Date().toISOString().slice(0, 10)),
             vendor_name: (row.vendorName ?? row.vendor_name ?? null) as string | null,
@@ -268,7 +216,8 @@ export default function Expenses() {
           await accountingService.seedDefaultExpenseCategories({ companyId });
           docs = await getCompanyScopedDocs(COLLECTIONS.EXPENSE_CATEGORY_MAPPINGS);
         } catch {
-          // Keep UI operable with fallback labels; posting will still enforce mapped categories server-side.
+          // If seeding fails, return empty - UI will show error message
+          return [];
         }
       }
 
@@ -288,18 +237,9 @@ export default function Expenses() {
       const dedupedByName = new Map(
         mapped.map((item) => [normalizeCategoryKey(item.categoryName), item]),
       );
-      const dedupedMapped = [...dedupedByName.values()]
-        .sort((a, b) => a.categoryName.localeCompare(b.categoryName));
-
-      const mappedCategoryKeys = new Set(dedupedMapped.map((item) => normalizeCategoryKey(item.categoryName)));
-      const missingFallbacks = FALLBACK_EXPENSE_CATEGORY_NAMES
-        .filter((categoryName) => !mappedCategoryKeys.has(normalizeCategoryKey(categoryName)))
-        .map((categoryName) => ({
-          id: `fallback-${normalizeCategoryKey(categoryName)}`,
-          categoryName,
-        }));
-
-      return [...dedupedMapped, ...missingFallbacks].sort((a, b) => a.categoryName.localeCompare(b.categoryName));
+      return [...dedupedByName.values()].sort((a, b) =>
+        a.categoryName.localeCompare(b.categoryName)
+      );
     },
     enabled: Boolean(companyId),
   });
@@ -358,26 +298,25 @@ export default function Expenses() {
   const createMutation = useMutation({
     mutationFn: async (data: ExpenseFormData) => {
       if (!companyId || !user) throw new Error("Not authenticated");
+      if (!data.categoryId) {
+        throw new Error("Expense category is required.");
+      }
+
+      const selectedCategory = expenseCategories.find((c) => c.id === data.categoryId);
+      if (!selectedCategory) {
+        throw new Error("Invalid expense category selected.");
+      }
+
       const paymentAccountId = resolvePaymentAccountId(data.payment_method);
       if (!paymentAccountId) {
         throw new Error("No active Asset payment account found in Chart of Accounts.");
       }
-      if (!data.category) {
-        throw new Error("Expense category is required.");
-      }
-
-      const selectedCategory = expenseCategories.find(
-        (category) => normalizeCategoryKey(category.categoryName) === normalizeCategoryKey(data.category),
-      );
-      const mappedCategoryId = selectedCategory && !selectedCategory.id.startsWith("fallback-")
-        ? selectedCategory.id
-        : undefined;
 
       await accountingService.recordExpense({
         companyId,
         amount: Number(data.amount),
-        categoryId: mappedCategoryId,
-        categoryName: data.category,
+        categoryId: selectedCategory.id,
+        categoryName: selectedCategory.categoryName,
         paymentMethod: normalizePaymentMethod(data.payment_method),
         paymentAccountId,
         expenseDate: data.expense_date,
@@ -398,23 +337,32 @@ export default function Expenses() {
 
   const updateMutation = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: ExpenseFormData }) => {
-      await setDoc(doc(firestore, COLLECTIONS.EXPENSES, id), {
-        description: data.description,
-        category: data.category || null,
-        amount: Number(data.amount),
-        expenseDate: data.expense_date,
-        vendorName: data.vendor_name || null,
-        paymentMethod: data.payment_method || null,
-        referenceNumber: data.reference_number || null,
-        notes: data.notes || null,
-        updatedAt: serverTimestamp(),
-      }, { merge: true });
+      const selectedCategory = expenseCategories.find((c) => c.id === data.categoryId);
+      if (!selectedCategory) {
+        throw new Error("Invalid expense category selected.");
+      }
+
+      await setDoc(
+        doc(firestore, COLLECTIONS.EXPENSES, id),
+        {
+          description: data.description,
+          categoryId: selectedCategory.id,
+          categoryName: selectedCategory.categoryName,
+          amount: Number(data.amount),
+          expenseDate: data.expense_date,
+          vendorName: data.vendor_name || null,
+          paymentMethod: data.payment_method || null,
+          referenceNumber: data.reference_number || null,
+          notes: data.notes || null,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
       return id;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["expenses", companyId] });
       toast.success("Expense updated successfully");
-
       resetForm();
     },
     onError: (error) => {
@@ -486,7 +434,7 @@ export default function Expenses() {
   const resetForm = () => {
     setFormData({
       description: "",
-      category: "",
+      categoryId: "",
       amount: "",
       expense_date: new Date().toISOString().split("T")[0],
       vendor_name: "",
@@ -514,7 +462,7 @@ export default function Expenses() {
     setEditingExpense(expense);
     setFormData({
       description: expense.description || "",
-      category: expense.category || "",
+      categoryId: expense.category_id || "",
       amount: expense.amount?.toString() || "",
       expense_date: expense.expense_date || new Date().toISOString().split("T")[0],
       vendor_name: expense.vendor_name || "",
@@ -591,7 +539,7 @@ export default function Expenses() {
     }).format(amount);
   };
 
-  const getCategoryVariant = (category: string): "default" | "secondary" | "outline" => {
+  const getCategoryVariant = (categoryName: string | null): "default" | "secondary" | "outline" => {
     const variants: Record<string, "default" | "secondary" | "outline"> = {
       "Office Supplies": "default",
       Travel: "secondary",
@@ -599,7 +547,7 @@ export default function Expenses() {
       Utilities: "default",
       Rent: "secondary",
     };
-    return variants[category] || "outline";
+    return variants[categoryName || ""] || "outline";
   };
 
   const activeExpenses = expenses?.filter((expense) => !expense.is_voided) || [];
@@ -607,7 +555,7 @@ export default function Expenses() {
   const filteredExpenses = activeExpenses.filter(
     (expense) =>
       expense.description?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      expense.category?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      expense.category_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
       expense.vendor_name?.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
@@ -621,38 +569,75 @@ export default function Expenses() {
     if (!user?.id || !companyId) throw new Error("Not authenticated");
 
     const categoryByNormalizedName = new Map(
-      expenseCategories.map((category) => [normalizeCategoryKey(category.categoryName), category]),
+      expenseCategories.map((category) => [
+        normalizeCategoryKey(category.categoryName),
+        category,
+      ])
     );
+
+    const validRows: typeof data = [];
 
     for (const rawItem of data) {
       const item = rawItem as Record<string, unknown>;
+      const categoryName = item.category
+        ? String(item.category).trim()
+        : undefined;
+
+      if (!categoryName) {
+        throw new Error(
+          "Missing category in import row. All rows must have a category."
+        );
+      }
+
+      const normalizedCategoryName = normalizeCategoryKey(categoryName);
+      const matchedCategory = categoryByNormalizedName.get(
+        normalizedCategoryName
+      );
+
+      if (!matchedCategory) {
+        throw new Error(
+          `Category "${categoryName}" not found in configured expense categories. Please configure this category first.`
+        );
+      }
+
+      validRows.push(item);
+    }
+
+    // Process all valid rows
+    for (const rawItem of validRows) {
+      const item = rawItem as Record<string, unknown>;
+      const categoryName = String(item.category || "").trim();
+      const normalizedCategoryName = normalizeCategoryKey(categoryName);
+      const matchedCategory = categoryByNormalizedName.get(
+        normalizedCategoryName
+      ) as ExpenseCategoryOption; // Already validated above
+
       const paymentMethodRaw = String(item.payment_method ?? "cash");
       const paymentAccountId = resolvePaymentAccountId(paymentMethodRaw);
       if (!paymentAccountId) {
-        throw new Error("No active Asset payment account found in Chart of Accounts.");
+        throw new Error(
+          "No active Asset payment account found in Chart of Accounts."
+        );
       }
-      const categoryName = item.category ? String(item.category).trim() : "Miscellaneous";
-      const normalizedCategoryName = normalizeCategoryKey(categoryName);
-      const matchedCategory = categoryByNormalizedName.get(normalizedCategoryName);
-      const mappedCategoryId = matchedCategory && !matchedCategory.id.startsWith("fallback-")
-        ? matchedCategory.id
-        : undefined;
 
       await accountingService.recordExpense({
         companyId,
         description: String(item.description ?? "").trim(),
-        categoryId: mappedCategoryId,
-        categoryName,
+        categoryId: matchedCategory.id,
+        categoryName: matchedCategory.categoryName,
         amount: Number(item.amount ?? 0),
-        expenseDate: String(item.expense_date ?? new Date().toISOString().split("T")[0]),
+        expenseDate: String(
+          item.expense_date ?? new Date().toISOString().split("T")[0]
+        ),
         paymentMethod: normalizePaymentMethod(paymentMethodRaw),
         paymentAccountId,
       });
     }
+
     queryClient.invalidateQueries({ queryKey: ["expenses", companyId] });
     queryClient.invalidateQueries({ queryKey: ["dashboard"] });
     queryClient.invalidateQueries({ queryKey: ["bank-accounts"] });
-    toast.success(`Imported ${data.length} expenses`);
+    toast.success(`Imported ${validRows.length} expenses`);
   };
 
   const handleExport = () => {
@@ -718,23 +703,29 @@ export default function Expenses() {
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="category">Category *</Label>
-                    <Select
-                      value={formData.category}
-                      onValueChange={(value) =>
-                        setFormData({ ...formData, category: value })
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select category" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {expenseCategories.map((category) => (
-                          <SelectItem key={category.id} value={category.categoryName}>
-                            {category.categoryName}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    {expenseCategories.length === 0 ? (
+                      <div className="p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+                        No expense categories configured. Please configure categories first.
+                      </div>
+                    ) : (
+                      <Select
+                        value={formData.categoryId}
+                        onValueChange={(value) =>
+                          setFormData({ ...formData, categoryId: value })
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select category" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {expenseCategories.map((category) => (
+                            <SelectItem key={category.id} value={category.id}>
+                              {category.categoryName}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="amount">Amount (ZMW) *</Label>
@@ -924,8 +915,8 @@ export default function Expenses() {
                     {expense.description}
                   </TableCell>
                   <TableCell>
-                    <Badge variant={getCategoryVariant(expense.category || "")}>
-                      {expense.category}
+                    <Badge variant={getCategoryVariant(expense.category_name)}>
+                      {expense.category_name || "-"}
                     </Badge>
                   </TableCell>
                   <TableCell>{expense.vendor_name || "-"}</TableCell>
