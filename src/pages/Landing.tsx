@@ -60,7 +60,8 @@ export default function Landing() {
   useEffect(() => {
     const handleBeforeInstallPrompt = (event: Event) => {
       const promptEvent = event as BeforeInstallPromptEvent;
-      promptEvent.preventDefault();
+      // Let the browser show its own prompt if it wants, 
+      // but still capture the event for our custom button.
       setDeferredPrompt(promptEvent);
     };
 

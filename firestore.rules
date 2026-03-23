@@ -10,15 +10,36 @@ service cloud.firestore {
       return /databases/$(database)/documents/companyUsers/$(companyId + "_" + request.auth.uid);
     }
 
-    function isCompanyMember(companyId) {
+    function userPath() {
+      return /databases/$(database)/documents/users/$(request.auth.uid);
+    }
+
+    function hasCanonicalMembership(companyId) {
+      return isSignedIn() && exists(membershipPath(companyId));
+    }
+
+    function hasLegacyDefaultCompany(companyId) {
       return isSignedIn()
-        && exists(membershipPath(companyId))
-        && get(membershipPath(companyId)).data.status == "active";
+        && exists(userPath())
+        && get(userPath()).data.defaultCompanyId == companyId;
+    }
+
+    function isCompanyMember(companyId) {
+      return (
+        hasCanonicalMembership(companyId)
+        && get(membershipPath(companyId)).data.status == "active"
+      ) || hasLegacyDefaultCompany(companyId);
     }
 
     function hasRole(companyId, roles) {
-      return isCompanyMember(companyId)
-        && get(membershipPath(companyId)).data.role in roles;
+      return (
+        hasCanonicalMembership(companyId)
+        && get(membershipPath(companyId)).data.status == "active"
+        && get(membershipPath(companyId)).data.role in roles
+      ) || (
+        hasLegacyDefaultCompany(companyId)
+        && get(userPath()).data.role in roles
+      );
     }
 
     function canManageCompany(companyId) {
@@ -123,7 +144,8 @@ service cloud.firestore {
     }
 
     match /users/{uid} {
-      allow read, write: if isSignedIn() && request.auth.uid == uid;
+      allow read: if isSignedIn() && request.auth.uid == uid;
+      allow create, update, delete: if false;
     }
 
     match /companies/{companyId} {
@@ -144,7 +166,15 @@ service cloud.firestore {
       allow read: if isSignedIn()
         && (
           resource.data.userId == request.auth.uid
-          || isCompanyMember(resource.data.companyId)
+          || resource.data.user_id == request.auth.uid
+          || (
+            resource.data.companyId is string
+            && isCompanyMember(resource.data.companyId)
+          )
+          || (
+            resource.data.company_id is string
+            && isCompanyMember(resource.data.company_id)
+          )
         );
       allow create, update, delete: if false;
     }
@@ -153,9 +183,14 @@ service cloud.firestore {
       allow read: if isSignedIn()
         && (
           resource.data.userId == request.auth.uid
+          || resource.data.user_id == request.auth.uid
           || (
             resource.data.companyId is string
             && isCompanyMember(resource.data.companyId)
+          )
+          || (
+            resource.data.company_id is string
+            && isCompanyMember(resource.data.company_id)
           )
         );
       allow create, update, delete: if false;

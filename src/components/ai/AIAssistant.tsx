@@ -26,9 +26,17 @@ export function AIAssistant() {
 
     useEffect(() => {
         async function loadCompany() {
-            if (user) {
+            if (!user) {
+                setCompanyId(undefined);
+                return;
+            }
+
+            try {
                 const membership = await companyService.getPrimaryMembershipByUser(user.id);
                 if (membership) setCompanyId(membership.companyId);
+            } catch (error) {
+                console.error("Unable to resolve AI company context:", error);
+                setCompanyId(undefined);
             }
         }
         loadCompany();
