@@ -1,8 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
-import { collection, getDocs, limit, query, where } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, limit, query, where } from "firebase/firestore";
 import { firestore, isFirebaseConfigured } from "@/integrations/firebase/client";
 import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { companyService } from "@/services/firebase/companyService";
 
 export type AppRole = 
   | "admin"
@@ -64,22 +65,34 @@ export function useUserRole() {
 
       try {
         const roles = new Set<AppRole>();
+        const membership = await companyService.getPrimaryMembershipByUser(user.id);
+        if (membership?.role) {
+          roles.add(membership.role);
+        }
 
-        const companyUsersRef = collection(firestore, COLLECTIONS.COMPANY_USERS);
-        const membershipQueries = [
-          query(companyUsersRef, where("userId", "==", user.id), where("status", "==", "active"), limit(20)),
-          query(companyUsersRef, where("user_id", "==", user.id), where("status", "==", "active"), limit(20)),
-          query(companyUsersRef, where("userId", "==", user.id), limit(20)),
-          query(companyUsersRef, where("user_id", "==", user.id), limit(20)),
-        ];
+        if (!roles.size) {
+          const companyUsersRef = collection(firestore, COLLECTIONS.COMPANY_USERS);
+          const membershipQueries = [
+            query(companyUsersRef, where("userId", "==", user.id), where("status", "==", "active"), limit(20)),
+            query(companyUsersRef, where("user_id", "==", user.id), where("status", "==", "active"), limit(20)),
+            query(companyUsersRef, where("userId", "==", user.id), limit(20)),
+            query(companyUsersRef, where("user_id", "==", user.id), limit(20)),
+          ];
 
-        for (const membershipQuery of membershipQueries) {
-          const membershipSnapshot = await getDocs(membershipQuery);
-          membershipSnapshot.docs.forEach((docSnap) => {
-            const role = docSnap.data().role as AppRole | undefined;
-            if (role) roles.add(role);
-          });
-          if (roles.size) break;
+          for (const membershipQuery of membershipQueries) {
+            let membershipSnapshot;
+            try {
+              membershipSnapshot = await getDocs(membershipQuery);
+            } catch {
+              continue;
+            }
+
+            membershipSnapshot.docs.forEach((docSnap) => {
+              const role = docSnap.data().role as AppRole | undefined;
+              if (role) roles.add(role);
+            });
+            if (roles.size) break;
+          }
         }
 
         if (!roles.size) {
@@ -90,7 +103,13 @@ export function useUserRole() {
           ];
 
           for (const roleQuery of roleQueries) {
-            const roleSnapshot = await getDocs(roleQuery);
+            let roleSnapshot;
+            try {
+              roleSnapshot = await getDocs(roleQuery);
+            } catch {
+              continue;
+            }
+
             roleSnapshot.docs.forEach((docSnap) => {
               const role = docSnap.data().role as AppRole | undefined;
               if (role) roles.add(role);
@@ -99,9 +118,37 @@ export function useUserRole() {
           }
         }
 
+        if (!roles.size) {
+          const userProfileRef = doc(firestore, COLLECTIONS.USERS, user.id);
+          const userProfileSnap = await getDoc(userProfileRef);
+          if (userProfileSnap.exists()) {
+            const profile = userProfileSnap.data() as Record<string, unknown>;
+            const defaultCompanyId = typeof profile.defaultCompanyId === "string"
+              ? profile.defaultCompanyId
+              : null;
+
+            if (defaultCompanyId) {
+              const canonicalMembershipRef = doc(
+                firestore,
+                COLLECTIONS.COMPANY_USERS,
+                `${defaultCompanyId}_${user.id}`,
+              );
+              const canonicalMembershipSnap = await getDoc(canonicalMembershipRef);
+              if (canonicalMembershipSnap.exists()) {
+                const role = canonicalMembershipSnap.data().role as AppRole | undefined;
+                if (role) roles.add(role);
+              }
+            }
+
+            const role = profile.role as AppRole | undefined;
+            if (role) roles.add(role);
+          }
+        }
+
         if (!roles.size) return "read_only" as AppRole;
         return resolveHighestRole(Array.from(roles));
       } catch (error) {
+        console.error("Error fetching user roles:", error);
         return "read_only" as AppRole;
       }
     },

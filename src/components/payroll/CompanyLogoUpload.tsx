@@ -11,6 +11,8 @@ import { isFirebaseConfigured } from "@/integrations/firebase/client";
 
 interface CompanyLogoUploadProps {
   onUploaded?: (logoUrl: string | null) => void;
+  companyName?: string;
+  onCompanyNameChange?: (companyName: string) => void;
 }
 
 interface CompanyLogoSettings {
@@ -19,29 +21,39 @@ interface CompanyLogoSettings {
   logoUrl: string | null;
 }
 
-export function CompanyLogoUpload({ onUploaded }: CompanyLogoUploadProps) {
+export function CompanyLogoUpload({
+  onUploaded,
+  companyName,
+  onCompanyNameChange,
+}: CompanyLogoUploadProps) {
   const [isUploading, setIsUploading] = useState(false);
   const [companyNameInput, setCompanyNameInput] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const queryClient = useQueryClient();
   const { user } = useAuth();
+  const isControlledName = typeof companyName === "string" && typeof onCompanyNameChange === "function";
 
-  const { data: settings } = useQuery({
+  const { data: brandContext } = useQuery({
     queryKey: ["company-settings", user?.id],
     queryFn: async (): Promise<CompanyLogoSettings | null> => {
       if (!user || !isFirebaseConfigured) return null;
 
       const membership = await companyService.getPrimaryMembershipByUser(user.id);
-      if (!membership) return null;
+      if (!membership?.companyId) return null;
 
-      const [company, companySettings] = await Promise.all([
+      const [companyResult, companySettingsResult] = await Promise.allSettled([
         companyService.getCompanyById(membership.companyId),
         companyService.getCompanySettings(membership.companyId),
       ]);
 
+      const company = companyResult.status === "fulfilled" ? companyResult.value : null;
+      const companySettings = companySettingsResult.status === "fulfilled"
+        ? companySettingsResult.value
+        : null;
+
       return {
         companyId: membership.companyId,
-        companyName: companySettings?.companyName || company?.name || "My Organization",
+        companyName: companySettings?.companyName || company?.name || companyName || "",
         logoUrl: companySettings?.logoUrl || company?.logoUrl || null,
       };
     },
@@ -50,10 +62,10 @@ export function CompanyLogoUpload({ onUploaded }: CompanyLogoUploadProps) {
 
   const updateMutation = useMutation({
     mutationFn: async ({ logoUrl, companyName }: { logoUrl?: string | null; companyName?: string }) => {
-      if (!settings) throw new Error("No company linked to current user.");
+      if (!brandContext?.companyId) throw new Error("No company linked to current user.");
 
       await companyService.updateCompanyBasics({
-        companyId: settings.companyId,
+        companyId: brandContext.companyId,
         logoUrl,
         name: companyName,
       });
@@ -71,19 +83,21 @@ export function CompanyLogoUpload({ onUploaded }: CompanyLogoUploadProps) {
 
   useEffect(() => {
     if (onUploaded) {
-      onUploaded(settings?.logoUrl || null);
+      onUploaded(brandContext?.logoUrl || null);
     }
-  }, [onUploaded, settings?.logoUrl]);
+  }, [brandContext?.logoUrl, onUploaded]);
 
   useEffect(() => {
-    setCompanyNameInput(settings?.companyName || "");
-  }, [settings?.companyName]);
+    if (!isControlledName) {
+      setCompanyNameInput(brandContext?.companyName || companyName || "");
+    }
+  }, [brandContext?.companyName, companyName, isControlledName]);
 
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
 
-    if (!settings) {
+    if (!brandContext?.companyId) {
       toast.error("No company linked to this user.");
       return;
     }
@@ -101,7 +115,7 @@ export function CompanyLogoUpload({ onUploaded }: CompanyLogoUploadProps) {
     setIsUploading(true);
 
     try {
-      const logoUrl = await storageService.uploadCompanyLogo(settings.companyId, file);
+      const logoUrl = await storageService.uploadCompanyLogo(brandContext.companyId, file);
       await updateMutation.mutateAsync({ logoUrl });
       onUploaded?.(logoUrl);
     } catch (error) {
@@ -113,17 +127,20 @@ export function CompanyLogoUpload({ onUploaded }: CompanyLogoUploadProps) {
   };
 
   const handleCompanyNameBlur = () => {
-    const trimmed = companyNameInput.trim();
-    if (!trimmed || !settings || trimmed === settings.companyName) return;
+    const nextName = isControlledName ? companyName : companyNameInput;
+    const trimmed = nextName?.trim() || "";
+    if (!trimmed || !brandContext?.companyId || trimmed === brandContext.companyName) return;
     updateMutation.mutate({ companyName: trimmed });
   };
+
+  const currentCompanyName = isControlledName ? companyName : companyNameInput;
 
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-4">
         <div className="h-20 w-20 rounded-lg border-2 border-dashed border-border flex items-center justify-center overflow-hidden bg-muted">
-          {settings?.logoUrl ? (
-            <img src={settings.logoUrl} alt="Company Logo" className="h-full w-full object-contain" />
+          {brandContext?.logoUrl ? (
+            <img src={brandContext.logoUrl} alt="Company Logo" className="h-full w-full object-contain" />
           ) : (
             <Building2 className="h-8 w-8 text-muted-foreground" />
           )}
@@ -141,7 +158,7 @@ export function CompanyLogoUpload({ onUploaded }: CompanyLogoUploadProps) {
             variant="outline"
             size="sm"
             onClick={() => fileInputRef.current?.click()}
-            disabled={isUploading || !settings}
+            disabled={isUploading || !brandContext?.companyId}
           >
             {isUploading ? (
               <>
@@ -160,11 +177,17 @@ export function CompanyLogoUpload({ onUploaded }: CompanyLogoUploadProps) {
       <div className="space-y-2">
         <Label>Company Name</Label>
         <Input
-          value={companyNameInput}
+          value={currentCompanyName || ""}
           placeholder="Enter company name"
-          onChange={(e) => setCompanyNameInput(e.target.value)}
+          onChange={(e) => {
+            const nextValue = e.target.value;
+            if (isControlledName) {
+              onCompanyNameChange?.(nextValue);
+            } else {
+              setCompanyNameInput(nextValue);
+            }
+          }}
           onBlur={handleCompanyNameBlur}
-          disabled={!settings}
         />
       </div>
     </div>

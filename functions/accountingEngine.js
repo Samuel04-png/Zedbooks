@@ -1529,6 +1529,92 @@ const createInvoice = async ({ data, userId, companyId, db: dbArg }) => {
   });
 };
 
+const MANUAL_INVOICE_STATUSES = new Map([
+  ["draft", "Draft"],
+  ["unpaid", "Unpaid"],
+  ["overdue", "Overdue"],
+  ["cancelled", "Cancelled"],
+]);
+
+const updateInvoiceStatus = async ({ data, userId, companyId, db: dbArg }) => {
+  const db = getDb(dbArg);
+  const invoiceId = String(data.invoiceId || data.invoice_id || "").trim();
+  if (!invoiceId) {
+    throw new HttpsError("invalid-argument", "invoiceId is required.");
+  }
+
+  const requestedStatusKey = String(data.status || data.nextStatus || data.next_status || "")
+    .trim()
+    .toLowerCase();
+  const nextStatus = MANUAL_INVOICE_STATUSES.get(requestedStatusKey);
+  if (!nextStatus) {
+    throw new HttpsError(
+      "invalid-argument",
+      "Status must be one of Draft, Unpaid, Overdue, or Cancelled.",
+    );
+  }
+
+  return db.runTransaction(async (tx) => {
+    const invoiceRef = db.collection("invoices").doc(invoiceId);
+    const invoiceSnap = await tx.get(invoiceRef);
+    if (!invoiceSnap.exists) {
+      throw new HttpsError("not-found", "Invoice not found.");
+    }
+
+    const invoice = invoiceSnap.data();
+    const owner = invoice.companyId || invoice.organizationId;
+    if (owner !== companyId) {
+      throw new HttpsError("permission-denied", "Invoice does not belong to this organization.");
+    }
+
+    const currentStatus = String(invoice.status || "").trim();
+    if (currentStatus === nextStatus) {
+      return { invoiceId, status: nextStatus };
+    }
+
+    const invoiceTotal = normalizeMoney(invoice.totalAmount ?? invoice.total ?? invoice.total_amount ?? 0);
+    const amountPaid = normalizeMoney(invoice.amountPaid ?? invoice.amount_paid ?? 0);
+    const dueDate = String(invoice.dueDate || invoice.due_date || "").trim();
+    const hasPostedJournal = Boolean(invoice.journalEntryId || invoice.journal_entry_id);
+    const today = new Date().toISOString().slice(0, 10);
+
+    if (amountPaid > 0.001) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Invoices with recorded payments cannot be changed manually from the invoice list.",
+      );
+    }
+
+    if (nextStatus === "Overdue" && (!dueDate || dueDate >= today)) {
+      throw new HttpsError("failed-precondition", "Invoice is not overdue yet.");
+    }
+
+    if (nextStatus === "Unpaid" && invoiceTotal <= 0) {
+      throw new HttpsError("failed-precondition", "Only invoices with a balance can be marked as Unpaid.");
+    }
+
+    if (hasPostedJournal && (nextStatus === "Draft" || nextStatus === "Cancelled")) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Reverse the posted invoice entry before moving this invoice to Draft or Cancelled.",
+      );
+    }
+
+    tx.set(
+      invoiceRef,
+      {
+        status: nextStatus,
+        updatedAt: FieldValue.serverTimestamp(),
+        updatedBy: userId,
+        updated_by: userId,
+      },
+      { merge: true },
+    );
+
+    return { invoiceId, status: nextStatus };
+  });
+};
+
 const recordInvoicePayment = async ({ data, userId, companyId, db: dbArg }) => {
   const db = getDb(dbArg);
   const invoiceId = String(data.invoiceId || data.invoice_id || "").trim();
@@ -3013,6 +3099,7 @@ module.exports = {
   payBill,
   updateOverdueBills,
   createInvoice,
+  updateInvoiceStatus,
   recordInvoicePayment,
   createQuotation,
   reverseJournalEntry,

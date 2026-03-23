@@ -91,6 +91,185 @@ export interface DashboardLiveMetrics {
   monthlyExpenses: number;
 }
 
+type MetricsRow = Record<string, unknown> & { id: string };
+
+const normalizeMetricKey = (value: string) => value.toLowerCase().replace(/[_\s-]/g, "");
+
+const getMetricValue = (row: MetricsRow, keys: string[]): unknown => {
+  const normalizedEntries = new Map<string, unknown>(
+    Object.entries(row).map(([key, value]) => [normalizeMetricKey(key), value]),
+  );
+
+  for (const key of keys) {
+    const direct = row[key];
+    if (direct !== undefined && direct !== null) return direct;
+
+    const normalized = normalizedEntries.get(normalizeMetricKey(key));
+    if (normalized !== undefined && normalized !== null) return normalized;
+  }
+
+  return null;
+};
+
+const readMetricNumber = (row: MetricsRow, keys: string[], fallback = 0): number => {
+  const parsed = Number(getMetricValue(row, keys));
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const readMetricString = (row: MetricsRow, keys: string[], fallback = ""): string => {
+  const value = getMetricValue(row, keys);
+  return typeof value === "string" ? value : fallback;
+};
+
+const readMetricDate = (row: MetricsRow, keys: string[]): Date | null => {
+  const value = getMetricValue(row, keys);
+  if (!value) return null;
+
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+
+  if (typeof value === "string" || typeof value === "number") {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  if (typeof value === "object") {
+    const maybeTimestamp = value as { toDate?: () => Date; seconds?: unknown };
+    if (typeof maybeTimestamp.toDate === "function") {
+      const parsed = maybeTimestamp.toDate();
+      return Number.isNaN(parsed.getTime()) ? null : parsed;
+    }
+
+    const seconds = Number(maybeTimestamp.seconds);
+    if (Number.isFinite(seconds)) {
+      const parsed = new Date(seconds * 1000);
+      return Number.isNaN(parsed.getTime()) ? null : parsed;
+    }
+  }
+
+  return null;
+};
+
+const isClosedStatus = (status: string) => {
+  const normalized = status.trim().toLowerCase();
+  return ["paid", "settled", "completed", "cancelled", "canceled", "void", "voided"].includes(normalized);
+};
+
+const queryCompanyRows = async (collectionName: string, companyId: string): Promise<MetricsRow[]> => {
+  const rows = new Map<string, MetricsRow>();
+  const candidates = [
+    query(collection(firestore, collectionName), where("companyId", "==", companyId), limit(1000)),
+    query(collection(firestore, collectionName), where("company_id", "==", companyId), limit(1000)),
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      const snapshot = await getDocs(candidate);
+      snapshot.docs.forEach((docSnap) => {
+        rows.set(docSnap.id, {
+          id: docSnap.id,
+          ...(docSnap.data() as Record<string, unknown>),
+        });
+      });
+    } catch {
+      continue;
+    }
+  }
+
+  return Array.from(rows.values());
+};
+
+const isCurrentMonthRow = (row: MetricsRow, keys: string[]) => {
+  const rowDate = readMetricDate(row, keys);
+  if (!rowDate) return false;
+
+  const now = new Date();
+  return rowDate.getUTCFullYear() === now.getUTCFullYear()
+    && rowDate.getUTCMonth() === now.getUTCMonth();
+};
+
+const resolveInvoiceAmount = (row: MetricsRow) => (
+  readMetricNumber(row, ["totalAmount", "total", "grandTotal", "invoiceTotal", "amount"])
+);
+
+const resolveExpenseAmount = (row: MetricsRow) => (
+  readMetricNumber(row, ["amount", "totalAmount", "grossAmount", "expenseAmount", "total"])
+);
+
+const resolveOutstandingAmount = (
+  row: MetricsRow,
+  balanceKeys: string[],
+  totalKeys: string[],
+  statusKeys: string[],
+) => {
+  const explicitBalance = readMetricNumber(row, balanceKeys, Number.NaN);
+  if (Number.isFinite(explicitBalance)) {
+    return Math.max(explicitBalance, 0);
+  }
+
+  if (isClosedStatus(readMetricString(row, statusKeys))) {
+    return 0;
+  }
+
+  return Math.max(readMetricNumber(row, totalKeys), 0);
+};
+
+const getLocalDashboardLiveMetrics = async (companyId: string): Promise<DashboardLiveMetrics> => {
+  const [invoices, bills, expenses, bankAccounts] = await Promise.all([
+    queryCompanyRows(COLLECTIONS.INVOICES, companyId),
+    queryCompanyRows(COLLECTIONS.BILLS, companyId),
+    queryCompanyRows(COLLECTIONS.EXPENSES, companyId),
+    queryCompanyRows(COLLECTIONS.BANK_ACCOUNTS, companyId),
+  ]);
+
+  const month = new Date().toISOString().slice(0, 7);
+  const monthlyIncome = invoices
+    .filter((row) => isCurrentMonthRow(row, ["invoiceDate", "issueDate", "date", "createdAt"]))
+    .reduce((sum, row) => sum + resolveInvoiceAmount(row), 0);
+  const monthlyExpenses = expenses
+    .filter((row) => isCurrentMonthRow(row, ["expenseDate", "date", "transactionDate", "createdAt"]))
+    .reduce((sum, row) => sum + resolveExpenseAmount(row), 0);
+  const bankDefaultBalance = bankAccounts.reduce(
+    (sum, row) => sum + readMetricNumber(row, ["currentBalance", "balance", "closingBalance", "ledgerBalance"]),
+    0,
+  );
+  const outstandingAccountsPayable = bills.reduce(
+    (sum, row) => sum + resolveOutstandingAmount(
+      row,
+      ["balanceDue", "remainingBalance", "amountDue", "outstandingAmount"],
+      ["totalAmount", "total", "grandTotal", "amount"],
+      ["status", "paymentStatus"],
+    ),
+    0,
+  );
+  const outstandingAccountsReceivable = invoices.reduce(
+    (sum, row) => sum + resolveOutstandingAmount(
+      row,
+      ["balanceDue", "remainingBalance", "amountDue", "outstandingAmount"],
+      ["totalAmount", "total", "grandTotal", "amount"],
+      ["status", "paymentStatus"],
+    ),
+    0,
+  );
+
+  return {
+    month,
+    totalExpensesThisMonth: monthlyExpenses,
+    bankDefaultBalance,
+    outstandingAccountsPayable,
+    outstandingAccountsReceivable,
+    monthlyProfit: monthlyIncome - monthlyExpenses,
+    monthlyIncome,
+    monthlyExpenses,
+  };
+};
+
+const shouldUseLocalDashboardMetrics = () => (
+  typeof window !== "undefined"
+  && ["localhost", "127.0.0.1"].includes(window.location.hostname)
+);
+
 export const accountingService = {
   async getPostedJournalLines(companyId: string, startDate?: string, endDate?: string): Promise<JournalLineRecord[]> {
     assertFirebaseConfigured();
@@ -214,6 +393,14 @@ export const accountingService = {
     }>;
   }): Promise<{ invoiceId: string; journalEntryId: string; invoiceNumber: string }> {
     return callFunction<typeof input, { invoiceId: string; journalEntryId: string; invoiceNumber: string }>("createInvoice", input);
+  },
+
+  async updateInvoiceStatus(input: {
+    companyId: string;
+    invoiceId: string;
+    status: string;
+  }): Promise<{ invoiceId: string; status: string }> {
+    return callFunction<typeof input, { invoiceId: string; status: string }>("updateInvoiceStatus", input);
   },
 
   async recordInvoicePayment(input: {
@@ -373,6 +560,15 @@ export const accountingService = {
   },
 
   async getDashboardLiveMetrics(input: { companyId: string }): Promise<DashboardLiveMetrics> {
-    return callFunction<typeof input, DashboardLiveMetrics>("getDashboardLiveMetrics", input);
+    if (shouldUseLocalDashboardMetrics()) {
+      return getLocalDashboardLiveMetrics(input.companyId);
+    }
+
+    try {
+      return await callFunction<typeof input, DashboardLiveMetrics>("getDashboardLiveMetrics", input);
+    } catch (error) {
+      console.warn("Falling back to local dashboard metrics:", error);
+      return getLocalDashboardLiveMetrics(input.companyId);
+    }
   },
 };

@@ -18,6 +18,8 @@ import { Plus, Search, Package, AlertTriangle, ArrowUpDown } from "lucide-react"
 
 interface InventoryItem {
   id: string;
+  product_id: string | null;
+  is_hidden: boolean;
   name: string;
   sku: string | null;
   category: string | null;
@@ -69,25 +71,65 @@ const Inventory = () => {
     queryFn: async () => {
       if (!companyId) return [] as InventoryItem[];
 
-      const ref = collection(firestore, COLLECTIONS.INVENTORY_ITEMS);
-      const snapshot = await getDocs(query(ref, where("companyId", "==", companyId)));
+      const inventoryRef = collection(firestore, COLLECTIONS.INVENTORY_ITEMS);
+      const productsRef = collection(firestore, COLLECTIONS.PRODUCTS);
+      const [inventorySnapshot, productsSnapshot] = await Promise.all([
+        getDocs(query(inventoryRef, where("companyId", "==", companyId))),
+        getDocs(query(productsRef, where("companyId", "==", companyId))),
+      ]);
 
-      return snapshot.docs
-        .map((docSnap) => {
-          const row = docSnap.data() as Record<string, unknown>;
-          return {
-            id: docSnap.id,
-            name: String(row.name ?? ""),
-            sku: (row.sku ?? null) as string | null,
-            category: (row.category ?? null) as string | null,
-            description: (row.description ?? null) as string | null,
-            unit_of_measure: (row.unitOfMeasure ?? row.unit_of_measure ?? "units") as string | null,
-            quantity_on_hand: Number(row.quantityOnHand ?? row.quantity_on_hand ?? 0),
-            reorder_point: Number(row.reorderPoint ?? row.reorder_point ?? 0),
-            unit_cost: Number(row.unitCost ?? row.unit_cost ?? 0),
-            selling_price: Number(row.sellingPrice ?? row.selling_price ?? 0),
-          } satisfies InventoryItem;
-        })
+      const itemsById = new Map<string, InventoryItem>();
+
+      inventorySnapshot.docs.forEach((docSnap) => {
+        const row = docSnap.data() as Record<string, unknown>;
+        itemsById.set(docSnap.id, {
+          id: docSnap.id,
+          product_id: (row.productId ?? row.product_id ?? null) as string | null,
+          is_hidden: Boolean(row.hiddenFromInventory ?? row.hidden_from_inventory ?? false),
+          name: String(row.name ?? ""),
+          sku: (row.sku ?? null) as string | null,
+          category: (row.category ?? null) as string | null,
+          description: (row.description ?? null) as string | null,
+          unit_of_measure: (row.unitOfMeasure ?? row.unit_of_measure ?? "units") as string | null,
+          quantity_on_hand: Number(row.quantityOnHand ?? row.quantity_on_hand ?? 0),
+          reorder_point: Number(row.reorderPoint ?? row.reorder_point ?? 0),
+          unit_cost: Number(row.unitCost ?? row.unit_cost ?? 0),
+          selling_price: Number(row.sellingPrice ?? row.selling_price ?? 0),
+        });
+      });
+
+      productsSnapshot.docs.forEach((docSnap) => {
+        const row = docSnap.data() as Record<string, unknown>;
+        const productType = String(row.type ?? "product");
+        const existingItem = itemsById.get(docSnap.id);
+
+        if (productType !== "product") {
+          if (existingItem?.product_id === docSnap.id) {
+            itemsById.set(docSnap.id, { ...existingItem, is_hidden: true });
+          }
+          return;
+        }
+
+        const syncedItem: InventoryItem = {
+          id: docSnap.id,
+          product_id: docSnap.id,
+          is_hidden: false,
+          name: String(row.name ?? existingItem?.name ?? ""),
+          sku: (row.sku ?? existingItem?.sku ?? null) as string | null,
+          category: (row.category ?? existingItem?.category ?? null) as string | null,
+          description: (row.description ?? existingItem?.description ?? null) as string | null,
+          unit_of_measure: (row.unitOfMeasure ?? row.unit_of_measure ?? existingItem?.unit_of_measure ?? "units") as string | null,
+          quantity_on_hand: existingItem?.quantity_on_hand ?? Number(row.quantityOnHand ?? row.quantity_on_hand ?? 0),
+          reorder_point: existingItem?.reorder_point ?? Number(row.reorderPoint ?? row.reorder_point ?? 0),
+          unit_cost: existingItem?.unit_cost ?? Number(row.costPrice ?? row.cost_price ?? 0),
+          selling_price: Number(row.sellingPrice ?? row.selling_price ?? existingItem?.selling_price ?? 0),
+        };
+
+        itemsById.set(docSnap.id, syncedItem);
+      });
+
+      return Array.from(itemsById.values())
+        .filter((item) => !item.is_hidden)
         .sort((a, b) => a.name.localeCompare(b.name));
     },
     enabled: Boolean(companyId),
@@ -99,6 +141,8 @@ const Inventory = () => {
 
       await addDoc(collection(firestore, COLLECTIONS.INVENTORY_ITEMS), {
         companyId,
+        productId: null,
+        hiddenFromInventory: false,
         name: item.name,
         sku: item.sku || null,
         category: item.category || null,
@@ -165,15 +209,31 @@ const Inventory = () => {
         createdAt: serverTimestamp(),
       });
 
-      batch.update(itemRef, {
+      batch.set(itemRef, {
+        companyId,
+        productId: item.product_id,
+        hiddenFromInventory: false,
         quantityOnHand: newQuantity,
+        reorderPoint: item.reorder_point,
+        unitCost: item.unit_cost,
+        sellingPrice: item.selling_price,
         updatedAt: serverTimestamp(),
-      });
+      }, { merge: true });
+
+      if (item.product_id) {
+        const productRef = doc(firestore, COLLECTIONS.PRODUCTS, item.product_id);
+        batch.set(productRef, {
+          quantityOnHand: newQuantity,
+          quantity_on_hand: newQuantity,
+          updatedAt: serverTimestamp(),
+        }, { merge: true });
+      }
 
       await batch.commit();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["inventory-items", companyId] });
+      queryClient.invalidateQueries({ queryKey: ["products"] });
       toast.success("Stock movement recorded");
       setIsMovementDialogOpen(false);
       setSelectedItem(null);

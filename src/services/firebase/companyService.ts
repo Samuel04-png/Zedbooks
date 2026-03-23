@@ -45,6 +45,9 @@ export interface CompanyUserSummary {
   updatedAt: string | null;
 }
 
+const MEMBERSHIP_CACHE_TTL_MS = 60 * 1000;
+const membershipCache = new Map<string, { membership: CompanyUser; expiresAt: number }>();
+
 const asStringOrNull = (value: unknown): string | null => {
   if (value === null || value === undefined) return null;
   const text = String(value);
@@ -89,10 +92,63 @@ const normalizeSettings = (id: string, row: Record<string, unknown>): CompanySet
   updatedAt: String(row.updatedAt ?? row.updated_at ?? ""),
 });
 
+const normalizeLegacyProfileMembership = (
+  userId: string,
+  row: Record<string, unknown>,
+): CompanyUser | null => {
+  const companyId = asStringOrNull(row.defaultCompanyId);
+  if (!companyId) return null;
+
+  return {
+    id: `${companyId}_${userId}`,
+    companyId,
+    userId,
+    role: (row.role as CompanyUser["role"]) ?? "read_only",
+    status: "active",
+    createdAt: String(row.createdAt ?? row.created_at ?? ""),
+    updatedAt: String(row.updatedAt ?? row.updated_at ?? ""),
+  };
+};
+
 export const companyService = {
   async getPrimaryMembershipByUser(userId: string): Promise<CompanyUser | null> {
     assertFirebaseConfigured();
+    const cachedMembership = membershipCache.get(userId);
+    if (cachedMembership && cachedMembership.expiresAt > Date.now()) {
+      return cachedMembership.membership;
+    }
+
     const membershipsRef = collection(firestore, COLLECTIONS.COMPANY_USERS);
+    const userRef = doc(firestore, COLLECTIONS.USERS, userId);
+    const userSnap = await getDoc(userRef);
+    const userProfile = userSnap.exists()
+      ? (userSnap.data() as Record<string, unknown>)
+      : null;
+    const defaultCompanyId = asStringOrNull(userProfile?.defaultCompanyId);
+
+    if (defaultCompanyId) {
+      const canonicalMembershipRef = doc(
+        firestore,
+        COLLECTIONS.COMPANY_USERS,
+        `${defaultCompanyId}_${userId}`,
+      );
+      const canonicalMembershipSnap = await getDoc(canonicalMembershipRef);
+
+      if (canonicalMembershipSnap.exists()) {
+        const canonicalMembership = normalizeMembership(
+          canonicalMembershipSnap.id,
+          canonicalMembershipSnap.data() as Record<string, unknown>,
+        );
+
+        if (canonicalMembership.status === "active") {
+          membershipCache.set(userId, {
+            membership: canonicalMembership,
+            expiresAt: Date.now() + MEMBERSHIP_CACHE_TTL_MS,
+          });
+          return canonicalMembership;
+        }
+      }
+    }
 
     const candidates = [
       query(membershipsRef, where("userId", "==", userId), where("status", "==", "active"), limit(1)),
@@ -102,14 +158,42 @@ export const companyService = {
     ];
 
     for (const candidate of candidates) {
-      const snapshot = await getDocs(candidate);
+      let snapshot;
+      try {
+        snapshot = await getDocs(candidate);
+      } catch {
+        continue;
+      }
+
       if (snapshot.empty) continue;
 
       const membership = snapshot.docs[0];
-      return normalizeMembership(membership.id, membership.data() as Record<string, unknown>);
+      const normalizedMembership = normalizeMembership(
+        membership.id,
+        membership.data() as Record<string, unknown>,
+      );
+
+      if (normalizedMembership.status === "active") {
+        membershipCache.set(userId, {
+          membership: normalizedMembership,
+          expiresAt: Date.now() + MEMBERSHIP_CACHE_TTL_MS,
+        });
+      }
+
+      return normalizedMembership;
     }
 
-    return null;
+    if (!userProfile) return null;
+
+    const legacyMembership = normalizeLegacyProfileMembership(userId, userProfile);
+    if (legacyMembership?.status === "active") {
+      membershipCache.set(userId, {
+        membership: legacyMembership,
+        expiresAt: Date.now() + MEMBERSHIP_CACHE_TTL_MS,
+      });
+    }
+
+    return legacyMembership;
   },
 
   async getCompanyById(companyId: string): Promise<Company | null> {

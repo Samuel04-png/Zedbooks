@@ -1,9 +1,22 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { format } from "date-fns";
+import { MoreHorizontal, Plus, Search } from "lucide-react";
+import { Link } from "react-router-dom";
+import { toast } from "sonner";
+import { collection, documentId, getDocs, query, where } from "firebase/firestore";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
 import {
   Table,
   TableBody,
@@ -12,17 +25,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Plus, Search, RotateCcw } from "lucide-react";
-import { Link } from "react-router-dom";
-import { format } from "date-fns";
 import { useAuth } from "@/contexts/AuthContext";
-import { accountingService, companyService } from "@/services/firebase";
-import { COLLECTIONS } from "@/services/firebase/collectionNames";
-import { collection, documentId, getDocs, query, where } from "firebase/firestore";
-import { firestore } from "@/integrations/firebase/client";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useUserRole } from "@/hooks/useUserRole";
-import { toast } from "sonner";
+import { firestore } from "@/integrations/firebase/client";
+import { COLLECTIONS } from "@/services/firebase/collectionNames";
+import { accountingService, companyService } from "@/services/firebase";
 
 interface InvoiceRecord {
   id: string;
@@ -36,6 +44,13 @@ interface InvoiceRecord {
   status: string;
   journal_entry_id: string | null;
 }
+
+const MANUAL_STATUS_OPTIONS = [
+  { value: "Draft", label: "Mark as Draft" },
+  { value: "Unpaid", label: "Mark as Unpaid" },
+  { value: "Overdue", label: "Mark as Overdue" },
+  { value: "Cancelled", label: "Cancel invoice" },
+] as const;
 
 const chunk = <T,>(items: T[], size: number): T[][] => {
   const chunks: T[][] = [];
@@ -58,6 +73,8 @@ const toDateString = (value: unknown): string => {
   return "";
 };
 
+const normalizeStatus = (status: string) => status.trim().toLowerCase();
+
 export default function Invoices() {
   const [searchQuery, setSearchQuery] = useState("");
   const { user } = useAuth();
@@ -70,6 +87,16 @@ export default function Invoices() {
     "financial_manager",
     "accountant",
     "assistant_accountant",
+  ].includes(userRole || "");
+  const canManageInvoices = [
+    "super_admin",
+    "admin",
+    "financial_manager",
+    "accountant",
+    "assistant_accountant",
+    "finance_officer",
+    "bookkeeper",
+    "cashier",
   ].includes(userRole || "");
 
   const { data: invoices, isLoading } = useQuery({
@@ -167,19 +194,121 @@ export default function Invoices() {
     },
   });
 
+  const updateInvoiceStatusMutation = useMutation({
+    mutationFn: async ({ invoice, status }: { invoice: InvoiceRecord; status: string }) => {
+      if (!user) throw new Error("Not authenticated");
+
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      if (!membership?.companyId) throw new Error("Company context not found");
+
+      return accountingService.updateInvoiceStatus({
+        companyId: membership.companyId,
+        invoiceId: invoice.id,
+        status,
+      });
+    },
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["invoices", user?.id] });
+      queryClient.invalidateQueries({ queryKey: ["accounts-receivable"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      toast.success(`Invoice ${variables.invoice.invoiceNumber} updated to ${variables.status}`);
+    },
+    onError: (error) => {
+      toast.error(`Failed to update invoice status: ${error.message}`);
+    },
+  });
+
   const getStatusVariant = (status: string) => {
-    switch (status) {
+    switch (normalizeStatus(status)) {
       case "paid":
         return "default" as const;
-      case "sent":
-        return "secondary" as const;
       case "overdue":
         return "destructive" as const;
       case "draft":
+      case "cancelled":
         return "outline" as const;
       default:
         return "secondary" as const;
     }
+  };
+
+  const getStatusOptions = (invoice: InvoiceRecord) => {
+    if (!canManageInvoices || Number(invoice.amountPaid || 0) > 0.001) return [];
+
+    const currentStatus = normalizeStatus(invoice.status || "draft");
+    const today = new Date().toISOString().slice(0, 10);
+    const dueDate = invoice.dueDate?.slice(0, 10) || "";
+
+    return MANUAL_STATUS_OPTIONS.filter((option) => {
+      const nextStatus = normalizeStatus(option.value);
+      if (nextStatus === currentStatus) return false;
+      if ((nextStatus === "draft" || nextStatus === "cancelled") && invoice.journal_entry_id) return false;
+      if (nextStatus === "overdue" && (!dueDate || dueDate >= today)) return false;
+      return true;
+    });
+  };
+
+  const handleReverseInvoice = (invoice: InvoiceRecord) => {
+    if (Number(invoice.amountPaid || 0) > 0.001) {
+      toast.error("Reverse invoice payments first before reversing this invoice.");
+      return;
+    }
+    if (!confirm("Reverse this invoice posting? This creates an opposite journal entry.")) {
+      return;
+    }
+    reverseInvoiceMutation.mutate(invoice);
+  };
+
+  const renderActions = (invoice: InvoiceRecord, fullWidth = false) => {
+    const statusOptions = getStatusOptions(invoice);
+    const showReverseAction = Boolean(invoice.journal_entry_id) && canReversePostedEntries;
+
+    if (!statusOptions.length && !showReverseAction) {
+      return <span className="text-sm text-muted-foreground">No actions</span>;
+    }
+
+    return (
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="outline"
+            size="sm"
+            className={fullWidth ? "w-full justify-between" : "gap-2"}
+          >
+            Actions
+            <MoreHorizontal className="h-4 w-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-52">
+          {statusOptions.length > 0 && (
+            <>
+              <DropdownMenuLabel>Change status</DropdownMenuLabel>
+              {statusOptions.map((option) => (
+                <DropdownMenuItem
+                  key={`${invoice.id}-${option.value}`}
+                  disabled={updateInvoiceStatusMutation.isPending}
+                  onSelect={() => updateInvoiceStatusMutation.mutate({ invoice, status: option.value })}
+                >
+                  {option.label}
+                </DropdownMenuItem>
+              ))}
+            </>
+          )}
+
+          {showReverseAction && (
+            <>
+              {statusOptions.length > 0 && <DropdownMenuSeparator />}
+              <DropdownMenuItem
+                disabled={reverseInvoiceMutation.isPending || Number(invoice.amountPaid || 0) > 0.001}
+                onSelect={() => handleReverseInvoice(invoice)}
+              >
+                Reverse posting
+              </DropdownMenuItem>
+            </>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
   };
 
   const filteredInvoices = invoices?.filter(
@@ -235,11 +364,10 @@ export default function Invoices() {
         </CardHeader>
         <CardContent>
           {isMobile ? (
-            /* Mobile Card View */
             <div className="space-y-4">
               {filteredInvoices?.map((invoice) => (
                 <div key={invoice.id} className="border rounded-lg p-4 space-y-3 bg-card shadow-sm">
-                  <div className="flex items-start justify-between">
+                  <div className="flex items-start justify-between gap-3">
                     <div>
                       <span className="font-semibold text-foreground">{invoice.invoiceNumber}</span>
                       <p className="text-sm text-muted-foreground">{invoice.customerName || "-"}</p>
@@ -262,29 +390,9 @@ export default function Invoices() {
                     <span className="text-sm font-medium text-muted-foreground">Total Amount</span>
                     <span className="text-lg font-bold text-primary">ZMW {invoice.total.toFixed(2)}</span>
                   </div>
-                  {invoice.journal_entry_id && canReversePostedEntries && (
-                    <div className="pt-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="w-full"
-                        disabled={reverseInvoiceMutation.isPending || Number(invoice.amountPaid || 0) > 0.001}
-                        onClick={() => {
-                          if (Number(invoice.amountPaid || 0) > 0.001) {
-                            toast.error("Reverse invoice payments first before reversing this invoice.");
-                            return;
-                          }
-                          if (!confirm("Reverse this invoice posting? This creates an opposite journal entry.")) {
-                            return;
-                          }
-                          reverseInvoiceMutation.mutate(invoice);
-                        }}
-                      >
-                        <RotateCcw className="h-4 w-4 mr-2" />
-                        Reverse Posting
-                      </Button>
-                    </div>
-                  )}
+                  <div className="pt-2">
+                    {renderActions(invoice, true)}
+                  </div>
                 </div>
               ))}
               {filteredInvoices?.length === 0 && (
@@ -294,7 +402,6 @@ export default function Invoices() {
               )}
             </div>
           ) : (
-            /* Desktop Table View */
             <Table>
               <TableHeader>
                 <TableRow>
@@ -323,30 +430,9 @@ export default function Invoices() {
                       <Badge variant={getStatusVariant(invoice.status || "draft")}>{invoice.status}</Badge>
                     </TableCell>
                     <TableCell className="text-right">
-                      {invoice.journal_entry_id && canReversePostedEntries && (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          disabled={reverseInvoiceMutation.isPending || Number(invoice.amountPaid || 0) > 0.001}
-                          onClick={() => {
-                            if (Number(invoice.amountPaid || 0) > 0.001) {
-                              toast.error("Reverse invoice payments first before reversing this invoice.");
-                              return;
-                            }
-                            if (!confirm("Reverse this invoice posting? This creates an opposite journal entry.")) {
-                              return;
-                            }
-                            reverseInvoiceMutation.mutate(invoice);
-                          }}
-                          title={
-                            Number(invoice.amountPaid || 0) > 0.001
-                              ? "Reverse payments first"
-                              : "Reverse invoice posting"
-                          }
-                        >
-                          <RotateCcw className="h-4 w-4" />
-                        </Button>
-                      )}
+                      <div className="flex justify-end">
+                        {renderActions(invoice)}
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}

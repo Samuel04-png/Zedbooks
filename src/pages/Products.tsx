@@ -51,12 +51,12 @@ import { COLLECTIONS } from "@/services/firebase/collectionNames";
 import {
   addDoc,
   collection,
-  deleteDoc,
   doc,
   getDocs,
   query,
   serverTimestamp,
   updateDoc,
+  writeBatch,
   where,
 } from "firebase/firestore";
 
@@ -209,7 +209,14 @@ export default function Products() {
 
   const saveProductMutation = useMutation({
     mutationFn: async (product: Partial<Product>) => {
-      if (!companyId) throw new Error("No company found");
+      if (!companyId || !user) throw new Error("No company found");
+
+      const productRef = product.id
+        ? doc(firestore, COLLECTIONS.PRODUCTS, product.id)
+        : doc(collection(firestore, COLLECTIONS.PRODUCTS));
+      const inventoryRef = doc(firestore, COLLECTIONS.INVENTORY_ITEMS, productRef.id);
+      const batch = writeBatch(firestore);
+      const productType = product.type || "product";
 
       const productData = {
         companyId,
@@ -231,16 +238,60 @@ export default function Products() {
       };
 
       if (product.id) {
-        await updateDoc(doc(firestore, COLLECTIONS.PRODUCTS, product.id), productData);
+        batch.set(productRef, productData, { merge: true });
       } else {
-        await addDoc(collection(firestore, COLLECTIONS.PRODUCTS), {
+        batch.set(productRef, {
           ...productData,
           createdAt: serverTimestamp(),
         });
       }
+
+      if (productType === "product") {
+        batch.set(
+          inventoryRef,
+          {
+            companyId,
+            productId: productRef.id,
+            hiddenFromInventory: false,
+            sourceProductType: "product",
+            name: product.name || "",
+            sku: product.sku || null,
+            category: product.category || null,
+            description: product.description || null,
+            unitOfMeasure: product.unit_of_measure || "Unit",
+            quantityOnHand: Number(product.quantity_on_hand || 0),
+            reorderPoint: Number(product.reorder_point || 0),
+            unitCost: Number(product.cost_price || 0),
+            sellingPrice: Number(product.selling_price || 0),
+            updatedAt: serverTimestamp(),
+            ...(product.id
+              ? {}
+              : {
+                  createdAt: serverTimestamp(),
+                  createdBy: user.id,
+                }),
+          },
+          { merge: true },
+        );
+      } else if (product.id) {
+        batch.set(
+          inventoryRef,
+          {
+            companyId,
+            productId: productRef.id,
+            hiddenFromInventory: true,
+            sourceProductType: "service",
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true },
+        );
+      }
+
+      await batch.commit();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["inventory-items"] });
       setIsProductDialogOpen(false);
       setEditingProduct(null);
       toast.success(editingProduct?.id ? "Product updated" : "Product created");
@@ -255,10 +306,14 @@ export default function Products() {
       if (!canDeleteMasterData) {
         throw new Error("Only Admin users can delete products.");
       }
-      await deleteDoc(doc(firestore, COLLECTIONS.PRODUCTS, id));
+      const batch = writeBatch(firestore);
+      batch.delete(doc(firestore, COLLECTIONS.PRODUCTS, id));
+      batch.delete(doc(firestore, COLLECTIONS.INVENTORY_ITEMS, id));
+      await batch.commit();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["inventory-items"] });
       toast.success("Product deleted");
     },
     onError: (error: Error) => {

@@ -23,6 +23,7 @@ setGlobalOptions({
   region: process.env.FUNCTIONS_REGION || "us-central1",
   cpu: "gcf_gen1",
   maxInstances: 2,
+  invoker: "public",
 });
 
 const VALID_ROLES = new Set([
@@ -332,7 +333,7 @@ const createAuditLog = async (companyId, actorUid, action, details = {}) => {
 
 
 
-exports.bootstrapUserAccount = onCall(async (request) => {
+exports.bootstrapUserAccount = onCall({ cors: true }, async (request) => {
   const uid = assertAuthenticated(request);
   const payload = request.data || {};
 
@@ -366,6 +367,7 @@ exports.bootstrapUserAccount = onCall(async (request) => {
   const existingUser = await userRef.get();
   if (existingUser.exists && existingUser.data().defaultCompanyId) {
     const existingCompanyId = existingUser.data().defaultCompanyId;
+    const existingRole = existingUser.data().role || "super_admin";
     await db
       .collection("companyUsers")
       .doc(membershipDocId(existingCompanyId, uid))
@@ -373,12 +375,20 @@ exports.bootstrapUserAccount = onCall(async (request) => {
         {
           companyId: existingCompanyId,
           userId: uid,
-          role: existingUser.data().role || "super_admin",
+          role: existingRole,
           status: "active",
           updatedAt: FieldValue.serverTimestamp(),
         },
         { merge: true },
       );
+
+    await userRef.set(
+      {
+        role: existingRole,
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
 
     return {
       success: true,
@@ -436,6 +446,7 @@ exports.bootstrapUserAccount = onCall(async (request) => {
         fullName: fullName || null,
         phone: phone || null,
         defaultCompanyId: companyId,
+        role: "super_admin",
         createdAt: FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp(),
       },
@@ -457,7 +468,7 @@ exports.bootstrapUserAccount = onCall(async (request) => {
   };
 });
 
-exports.ensureCurrentMembership = onCall(async (request) => {
+exports.ensureCurrentMembership = onCall({ cors: true }, async (request) => {
   const uid = assertAuthenticated(request);
   const companyUsersRef = db.collection("companyUsers");
 
@@ -508,6 +519,7 @@ exports.ensureCurrentMembership = onCall(async (request) => {
   await userRef.set(
     {
       defaultCompanyId: companyId,
+      role,
       updatedAt: FieldValue.serverTimestamp(),
       createdAt: FieldValue.serverTimestamp(),
     },
@@ -725,16 +737,21 @@ exports.acceptInvitation = onCall(async (request) => {
 
     const userRef = db.collection("users").doc(uid);
     const userSnap = await tx.get(userRef);
+    const shouldSetDefaultCompany = !(userSnap.exists && userSnap.data().defaultCompanyId);
+    const userPayload = {
+      email: authEmail || invitation.emailLower || null,
+      updatedAt: FieldValue.serverTimestamp(),
+      createdAt: FieldValue.serverTimestamp(),
+    };
+
+    if (shouldSetDefaultCompany) {
+      userPayload.defaultCompanyId = companyId;
+      userPayload.role = role;
+    }
+
     tx.set(
       userRef,
-      {
-        email: authEmail || invitation.emailLower || null,
-        defaultCompanyId: userSnap.exists && userSnap.data().defaultCompanyId
-          ? userSnap.data().defaultCompanyId
-          : companyId,
-        updatedAt: FieldValue.serverTimestamp(),
-        createdAt: FieldValue.serverTimestamp(),
-      },
+      userPayload,
       { merge: true },
     );
 
@@ -1557,6 +1574,19 @@ exports.createInvoice = onCall(async (request) => {
   });
 });
 
+exports.updateInvoiceStatus = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = await resolveCompanyIdFromPayload(uid, payload);
+  await assertCompanyRole(uid, companyId, COMMERCIAL_ROLES);
+  return accountingEngine.updateInvoiceStatus({
+    data: payload,
+    userId: uid,
+    companyId,
+    db,
+  });
+});
+
 exports.recordInvoicePayment = onCall(async (request) => {
   const uid = assertAuthenticated(request);
   const payload = request.data || {};
@@ -1971,7 +2001,7 @@ exports.getExpenseReport = onCall(async (request) => {
 exports.getGeneralLedger = exports.getGeneralLedgerReport;
 exports.getCashFlowData = exports.getCashFlowReport;
 
-exports.getDashboardLiveMetrics = onCall(async (request) => {
+exports.getDashboardLiveMetrics = onCall({ cors: true }, async (request) => {
   const uid = assertAuthenticated(request);
   const payload = request.data || {};
   const companyId = await resolveCompanyIdFromPayload(uid, payload);

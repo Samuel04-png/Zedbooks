@@ -7,12 +7,9 @@ import {
   Heart,
   Shield,
   ArrowRight,
-  MapPin,
   Phone,
   Mail,
   Hash,
-  CheckCircle2,
-  Upload
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -193,7 +190,6 @@ export default function CompanySetup() {
       if (!companyData.email) return !!toast.error("Email is required");
       if (!companyData.tpin || !/^\d{10}$/.test(companyData.tpin)) return !!toast.error("Valid 10-digit TPIN required");
     }
-    if (step === 2 && !companyLogoUrl) return !!toast.error("Logo is required");
     if (step === 3) {
       if (companyData.organizationType === "business" && companyData.taxType === "turnover_tax" && !companyData.turnoverTaxNumber)
         return !!toast.error("Turnover Tax Number required");
@@ -339,10 +335,14 @@ export default function CompanySetup() {
         {step === 2 && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6 text-center">
             <div className="border-2 border-dashed border-slate-200 rounded-xl p-8 bg-slate-50/50">
-              <CompanyLogoUpload onUploaded={setCompanyLogoUrl} />
+              <CompanyLogoUpload
+                companyName={companyData.name}
+                onCompanyNameChange={(value) => updateField("name", value)}
+                onUploaded={setCompanyLogoUrl}
+              />
             </div>
             <p className="text-sm text-muted-foreground">
-              Upload your official organization logo. This will be displayed on all your financial documents.
+              Upload your official organization logo if you have it ready. You can finish setup first and add it later.
             </p>
           </motion.div>
         )}
