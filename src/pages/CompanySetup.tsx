@@ -176,10 +176,12 @@ export default function CompanySetup() {
     },
     onSuccess: () => {
       if (user) {
+        companyService.clearCachedMembership(user.id);
         clearPendingCompanyContext(user.id);
       }
       queryClient.invalidateQueries({ queryKey: ["company-settings"] });
       queryClient.invalidateQueries({ queryKey: ["company"] });
+      queryClient.invalidateQueries({ queryKey: ["user-role"] });
       toast.success("Setup complete!");
       navigate("/dashboard");
     },

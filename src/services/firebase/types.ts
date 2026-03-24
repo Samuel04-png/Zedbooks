@@ -41,7 +41,10 @@ export interface Company {
   businessType?: string;
   taxType?: string;
   taxClassification?: string;
+  address?: string;
   tpin?: string;
+  registrationNumber?: string;
+  industryType?: string;
   phone?: string;
   email?: string;
   logoUrl?: string | null;

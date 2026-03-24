@@ -232,7 +232,7 @@ export default function Estimates() {
                       <Button
                         variant="ghost"
                         size="icon"
-                        onClick={() => navigate(`/invoices/new?customer=${estimate.customerId}`)}
+                        onClick={() => navigate(`/invoices/new?order=${estimate.id}`)}
                         title="Convert to Invoice"
                       >
                         <FileText className="h-4 w-4" />

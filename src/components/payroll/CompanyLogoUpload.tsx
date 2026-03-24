@@ -13,6 +13,7 @@ interface CompanyLogoUploadProps {
   onUploaded?: (logoUrl: string | null) => void;
   companyName?: string;
   onCompanyNameChange?: (companyName: string) => void;
+  autoSaveCompanyName?: boolean;
 }
 
 interface CompanyLogoSettings {
@@ -25,6 +26,7 @@ export function CompanyLogoUpload({
   onUploaded,
   companyName,
   onCompanyNameChange,
+  autoSaveCompanyName = true,
 }: CompanyLogoUploadProps) {
   const [isUploading, setIsUploading] = useState(false);
   const [companyNameInput, setCompanyNameInput] = useState("");
@@ -127,6 +129,8 @@ export function CompanyLogoUpload({
   };
 
   const handleCompanyNameBlur = () => {
+    if (!autoSaveCompanyName) return;
+
     const nextName = isControlledName ? companyName : companyNameInput;
     const trimmed = nextName?.trim() || "";
     if (!trimmed || !brandContext?.companyId || trimmed === brandContext.companyName) return;

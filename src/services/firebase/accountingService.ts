@@ -156,6 +156,11 @@ const isClosedStatus = (status: string) => {
   return ["paid", "settled", "completed", "cancelled", "canceled", "void", "voided"].includes(normalized);
 };
 
+const isNonPostingInvoiceStatus = (status: string) => {
+  const normalized = status.trim().toLowerCase();
+  return ["draft", "cancelled", "canceled", "rejected", "void", "voided"].includes(normalized);
+};
+
 const queryCompanyRows = async (collectionName: string, companyId: string): Promise<MetricsRow[]> => {
   const rows = new Map<string, MetricsRow>();
   const candidates = [
@@ -189,9 +194,13 @@ const isCurrentMonthRow = (row: MetricsRow, keys: string[]) => {
     && rowDate.getUTCMonth() === now.getUTCMonth();
 };
 
-const resolveInvoiceAmount = (row: MetricsRow) => (
-  readMetricNumber(row, ["totalAmount", "total", "grandTotal", "invoiceTotal", "amount"])
-);
+const resolveInvoiceAmount = (row: MetricsRow) => {
+  if (isNonPostingInvoiceStatus(readMetricString(row, ["status", "paymentStatus"]))) {
+    return 0;
+  }
+
+  return readMetricNumber(row, ["totalAmount", "total", "grandTotal", "invoiceTotal", "amount"]);
+};
 
 const resolveExpenseAmount = (row: MetricsRow) => (
   readMetricNumber(row, ["amount", "totalAmount", "grossAmount", "expenseAmount", "total"])
@@ -202,13 +211,19 @@ const resolveOutstandingAmount = (
   balanceKeys: string[],
   totalKeys: string[],
   statusKeys: string[],
+  options?: { nonPostingStatuses?: string[] },
 ) => {
+  const normalizedStatus = readMetricString(row, statusKeys).trim().toLowerCase();
+  if (options?.nonPostingStatuses?.includes(normalizedStatus)) {
+    return 0;
+  }
+
   const explicitBalance = readMetricNumber(row, balanceKeys, Number.NaN);
   if (Number.isFinite(explicitBalance)) {
     return Math.max(explicitBalance, 0);
   }
 
-  if (isClosedStatus(readMetricString(row, statusKeys))) {
+  if (isClosedStatus(normalizedStatus)) {
     return 0;
   }
 
@@ -249,6 +264,7 @@ const getLocalDashboardLiveMetrics = async (companyId: string): Promise<Dashboar
       ["balanceDue", "remainingBalance", "amountDue", "outstandingAmount"],
       ["totalAmount", "total", "grandTotal", "amount"],
       ["status", "paymentStatus"],
+      { nonPostingStatuses: ["draft", "cancelled", "canceled", "rejected", "void", "voided"] },
     ),
     0,
   );
@@ -377,12 +393,14 @@ export const accountingService = {
   async createInvoice(input: {
     companyId: string;
     customerId?: string;
+    customerName?: string;
     invoiceNumber?: string;
     invoiceDate: string;
     dueDate: string;
     status?: string;
     notes?: string;
     quotationId?: string;
+    salesOrderId?: string;
     revenueAccountId?: string;
     taxAmount?: number;
     totalAmount?: number;
@@ -391,8 +409,37 @@ export const accountingService = {
       quantity: number;
       unitPrice: number;
     }>;
-  }): Promise<{ invoiceId: string; journalEntryId: string; invoiceNumber: string }> {
-    return callFunction<typeof input, { invoiceId: string; journalEntryId: string; invoiceNumber: string }>("createInvoice", input);
+  }): Promise<{ invoiceId: string; journalEntryId: string | null; invoiceNumber: string }> {
+    return callFunction<typeof input, { invoiceId: string; journalEntryId: string | null; invoiceNumber: string }>("createInvoice", input);
+  },
+
+  async updateInvoiceDraft(input: {
+    companyId: string;
+    invoiceId: string;
+    customerId?: string;
+    customerName?: string;
+    invoiceNumber?: string;
+    invoiceDate: string;
+    dueDate: string;
+    notes?: string;
+    quotationId?: string;
+    salesOrderId?: string;
+    taxAmount?: number;
+    totalAmount?: number;
+    lineItems: Array<{
+      description: string;
+      quantity: number;
+      unitPrice: number;
+    }>;
+  }): Promise<{ invoiceId: string; invoiceNumber: string }> {
+    return callFunction<typeof input, { invoiceId: string; invoiceNumber: string }>("updateInvoiceDraft", input);
+  },
+
+  async deleteInvoice(input: {
+    companyId: string;
+    invoiceId: string;
+  }): Promise<{ invoiceId: string; deleted: boolean }> {
+    return callFunction<typeof input, { invoiceId: string; deleted: boolean }>("deleteInvoice", input);
   },
 
   async updateInvoiceStatus(input: {

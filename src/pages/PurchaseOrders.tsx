@@ -152,6 +152,12 @@ export default function PurchaseOrders() {
   const isVatRegistered = settings?.isVatRegistered || false;
   const vatRate = settings?.vatRate || 16;
 
+  const invalidatePurchaseOrderQueries = () => {
+    queryClient.invalidateQueries({ queryKey: ["purchase-orders"] });
+    queryClient.invalidateQueries({ queryKey: ["vendors"] });
+    queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+  };
+
   const subtotal = parseFloat(formData.amount) || 0;
   const vatAmount = isVatRegistered ? subtotal * (vatRate / 100) : 0;
   const total = subtotal + vatAmount;
@@ -176,7 +182,7 @@ export default function PurchaseOrders() {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["purchase-orders", companyId] });
+      invalidatePurchaseOrderQueries();
       toast.success("Purchase order created successfully");
       setIsDialogOpen(false);
       setFormData({
@@ -198,7 +204,7 @@ export default function PurchaseOrders() {
       await deleteDoc(doc(firestore, COLLECTIONS.PURCHASE_ORDERS, id));
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["purchase-orders", companyId] });
+      invalidatePurchaseOrderQueries();
       toast.success("Purchase order deleted successfully");
     },
     onError: (error) => {

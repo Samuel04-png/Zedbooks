@@ -4,7 +4,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { accountingService, companyService } from "@/services/firebase";
 import { firestore } from "@/integrations/firebase/client";
 import { COLLECTIONS } from "@/services/firebase/collectionNames";
-import { collection, getDocs, query, where } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, query, where } from "firebase/firestore";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -20,7 +20,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Plus, Trash2, Save, Send, FileCheck, AlertCircle } from "lucide-react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { useCompanySettings } from "@/hooks/useCompanySettings";
 import { useZRAInvoice } from "@/hooks/useZRAInvoice";
@@ -33,12 +33,42 @@ interface InvoiceLine {
   amount: number;
 }
 
+interface CustomerOption {
+  id: string;
+  name: string;
+  email: string | null;
+  address: string | null;
+  tpin: string | null;
+}
+
+interface SourceDocumentSummary {
+  salesOrderId: string;
+  quotationId: string | null;
+  orderNumber: string;
+  orderType: string;
+}
+
+const mapSourceLineToInvoiceLine = (line: Record<string, unknown>, index: number): InvoiceLine => {
+  const quantity = Number(line.quantity ?? 1);
+  const rate = Number(line.rate ?? line.unitPrice ?? line.unit_price ?? 0);
+
+  return {
+    id: String(line.id ?? index + 1),
+    description: String(line.description ?? ""),
+    quantity,
+    rate,
+    amount: quantity * rate,
+  };
+};
+
 export default function NewInvoice() {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const { id: routeInvoiceId } = useParams<{ id: string }>();
   const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
   const customerId = searchParams.get("customer");
+  const orderId = searchParams.get("order");
   const { data: settings } = useCompanySettings();
   const { submitToZRA, isSubmitting } = useZRAInvoice();
 
@@ -58,13 +88,17 @@ export default function NewInvoice() {
   const [lines, setLines] = useState<InvoiceLine[]>([
     { id: "1", description: "", quantity: 1, rate: 0, amount: 0 },
   ]);
+  const [sourceDocument, setSourceDocument] = useState<SourceDocumentSummary | null>(null);
+  const encodedLines = searchParams.get("lines");
+  const editingInvoiceId = String(routeInvoiceId || "").trim();
+  const isEditMode = editingInvoiceId.length > 0;
 
   const { data: customers } = useQuery({
     queryKey: ["customers", user?.id],
     queryFn: async () => {
-      if (!user) return [];
+      if (!user) return [] as CustomerOption[];
       const membership = await companyService.getPrimaryMembershipByUser(user.id);
-      if (!membership?.companyId) return [];
+      if (!membership?.companyId) return [] as CustomerOption[];
       const snapshot = await getDocs(query(collection(firestore, COLLECTIONS.CUSTOMERS), where("companyId", "==", membership.companyId)));
       return snapshot.docs
         .map((docSnap) => {
@@ -72,6 +106,9 @@ export default function NewInvoice() {
           return {
             id: docSnap.id,
             name: String(row.name ?? ""),
+            email: (row.email as string | null) ?? null,
+            address: (row.address as string | null) ?? null,
+            tpin: (row.tpin as string | null) ?? null,
           };
         })
         .sort((a, b) => a.name.localeCompare(b.name));
@@ -91,6 +128,170 @@ export default function NewInvoice() {
 
   const isVatRegistered = settings?.isVatRegistered || false;
   const vatRate = settings?.vatRate || 16;
+  const selectedCustomerData = customers?.find((customer) => customer.id === selectedCustomer) || null;
+
+  useEffect(() => {
+    if (!encodedLines) return;
+
+    try {
+      const parsedLines = JSON.parse(decodeURIComponent(encodedLines));
+      if (!Array.isArray(parsedLines) || parsedLines.length === 0) return;
+
+      setLines(parsedLines.map((line, index) => mapSourceLineToInvoiceLine(line as Record<string, unknown>, index)));
+    } catch {
+      toast.error("Failed to load the selected quotation lines.");
+    }
+  }, [encodedLines]);
+
+  useEffect(() => {
+    setCustomerTPIN(selectedCustomerData?.tpin ?? "");
+  }, [selectedCustomerData?.tpin]);
+
+  useEffect(() => {
+    if (!isEditMode || !companyId) return;
+
+    let isMounted = true;
+
+    const loadExistingInvoice = async () => {
+      try {
+        const invoiceSnap = await getDoc(doc(firestore, COLLECTIONS.INVOICES, editingInvoiceId));
+        if (!invoiceSnap.exists()) {
+          throw new Error("The selected invoice could not be found.");
+        }
+
+        const row = invoiceSnap.data() as Record<string, unknown>;
+        const owner = String(row.companyId ?? row.company_id ?? row.organizationId ?? row.organization_id ?? "");
+        if (owner && owner !== companyId) {
+          throw new Error("The selected invoice does not belong to this company.");
+        }
+
+        if (row.journalEntryId || row.journal_entry_id) {
+          throw new Error("Reverse the posted invoice before editing it.");
+        }
+
+        const amountPaid = Number(row.amountPaid ?? row.amount_paid ?? 0);
+        if (amountPaid > 0.001) {
+          throw new Error("Invoices with payments cannot be edited.");
+        }
+
+        const status = String(row.status ?? "draft").trim().toLowerCase();
+        if (status !== "draft") {
+          throw new Error("Only draft invoices can be edited.");
+        }
+
+        const itemsSnapshot = await getDocs(
+          query(collection(firestore, COLLECTIONS.INVOICE_ITEMS), where("invoiceId", "==", editingInvoiceId)),
+        );
+
+        if (!isMounted) return;
+
+        setSelectedCustomer(String(row.customerId ?? row.customer_id ?? ""));
+        setInvoiceNumber(String(row.invoiceNumber ?? row.invoice_number ?? ""));
+        setInvoiceDate(String(row.invoiceDate ?? row.invoice_date ?? new Date().toISOString().split("T")[0]).slice(0, 10));
+        setDueDate(String(row.dueDate ?? row.due_date ?? "").slice(0, 10));
+        setNotes(String(row.notes ?? ""));
+        setTerms("");
+
+        setLines(
+          itemsSnapshot.docs.length > 0
+            ? itemsSnapshot.docs.map((docSnap, index) =>
+              mapSourceLineToInvoiceLine(docSnap.data() as Record<string, unknown>, index))
+            : [{ id: "1", description: "", quantity: 1, rate: 0, amount: 0 }],
+        );
+
+        const salesOrderId = String(row.salesOrderId ?? row.sales_order_id ?? "").trim();
+        const quotationId = String(row.quotationId ?? row.quotation_id ?? "").trim();
+        if (salesOrderId || quotationId) {
+          setSourceDocument({
+            salesOrderId,
+            quotationId: quotationId || null,
+            orderNumber: salesOrderId || quotationId || editingInvoiceId,
+            orderType: "source document",
+          });
+        }
+      } catch (error) {
+        if (!isMounted) return;
+        const message = error instanceof Error ? error.message : "Failed to load the selected invoice.";
+        toast.error(message);
+        navigate("/invoices");
+      }
+    };
+
+    loadExistingInvoice();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [companyId, editingInvoiceId, isEditMode, navigate]);
+
+  useEffect(() => {
+    if (isEditMode || !orderId || !companyId) return;
+
+    let isMounted = true;
+
+    const loadSourceOrder = async () => {
+      try {
+        const orderSnap = await getDoc(doc(firestore, COLLECTIONS.SALES_ORDERS, orderId));
+        if (!orderSnap.exists()) {
+          throw new Error("The selected sales document could not be found.");
+        }
+
+        const row = orderSnap.data() as Record<string, unknown>;
+        const owner = String(row.companyId ?? row.company_id ?? row.organizationId ?? row.organization_id ?? "");
+        if (owner && owner !== companyId) {
+          throw new Error("The selected sales document does not belong to this company.");
+        }
+
+        const sourceLineItems = Array.isArray(row.lineItems)
+          ? row.lineItems
+          : Array.isArray(row.line_items)
+            ? row.line_items
+            : [];
+
+        if (!isMounted) return;
+
+        const customerFromOrder = String(row.customerId ?? row.customer_id ?? "").trim();
+        const sourceDueDate = String(row.validUntil ?? row.valid_until ?? row.dueDate ?? row.due_date ?? "").trim();
+        const sourceNotes = String(row.notes ?? "").trim();
+        const quotationIdFromOrder = String(row.quotationId ?? row.quotation_id ?? "").trim() || null;
+
+        setSourceDocument({
+          salesOrderId: orderSnap.id,
+          quotationId: quotationIdFromOrder,
+          orderNumber: String(row.orderNumber ?? row.order_number ?? orderSnap.id),
+          orderType: String(row.orderType ?? row.order_type ?? "sale"),
+        });
+
+        if (customerFromOrder) {
+          setSelectedCustomer(customerFromOrder);
+        }
+
+        if (sourceLineItems.length > 0) {
+          setLines(
+            sourceLineItems.map((line, index) => mapSourceLineToInvoiceLine(line as Record<string, unknown>, index)),
+          );
+        }
+
+        if (sourceDueDate) {
+          setDueDate((current) => current || sourceDueDate);
+        }
+
+        if (sourceNotes) {
+          setNotes((current) => current.trim().length > 0 ? current : sourceNotes);
+        }
+      } catch (error) {
+        if (!isMounted) return;
+        const message = error instanceof Error ? error.message : "Failed to load the source sales document.";
+        toast.error(message);
+      }
+    };
+
+    loadSourceOrder();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [companyId, isEditMode, orderId]);
 
   const addLine = () => {
     setLines([
@@ -140,14 +341,49 @@ export default function NewInvoice() {
         throw new Error("At least one invoice line item is required.");
       }
 
+      if (isEditMode) {
+        const result = await accountingService.updateInvoiceDraft({
+          companyId,
+          invoiceId: editingInvoiceId,
+          customerId: selectedCustomer || undefined,
+          customerName: selectedCustomerData?.name || undefined,
+          invoiceNumber,
+          invoiceDate,
+          dueDate: dueDate || invoiceDate,
+          notes: [notes, terms].filter(Boolean).join("\n\n") || undefined,
+          quotationId: sourceDocument?.quotationId || undefined,
+          salesOrderId: sourceDocument?.salesOrderId || undefined,
+          taxAmount: vatAmount,
+          totalAmount: total,
+          lineItems,
+        });
+
+        if (status === "sent") {
+          await accountingService.updateInvoiceStatus({
+            companyId,
+            invoiceId: editingInvoiceId,
+            status: "Unpaid",
+          });
+        }
+
+        return {
+          invoiceId: result.invoiceId,
+          journalEntryId: null,
+          invoiceNumber: result.invoiceNumber,
+        };
+      }
+
       return accountingService.createInvoice({
         companyId,
         customerId: selectedCustomer || undefined,
+        customerName: selectedCustomerData?.name || undefined,
         invoiceNumber,
         invoiceDate,
         dueDate: dueDate || invoiceDate,
         status: status === "sent" ? "Unpaid" : "Draft",
         notes: [notes, terms].filter(Boolean).join("\n\n") || undefined,
+        quotationId: sourceDocument?.quotationId || undefined,
+        salesOrderId: sourceDocument?.salesOrderId || undefined,
         taxAmount: vatAmount,
         totalAmount: total,
         lineItems,
@@ -167,8 +403,16 @@ export default function NewInvoice() {
       queryClient.invalidateQueries({ queryKey: ["invoices"] });
       queryClient.invalidateQueries({ queryKey: ["accounts-receivable"] });
       queryClient.invalidateQueries({ queryKey: ["customers"] });
+      queryClient.invalidateQueries({ queryKey: ["sales-orders"] });
+      queryClient.invalidateQueries({ queryKey: ["estimates"] });
+      queryClient.invalidateQueries({ queryKey: ["journal-entries"] });
+      queryClient.invalidateQueries({ queryKey: ["financial-reports"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
-      toast.success(status === "sent" ? "Invoice sent successfully" : "Invoice saved as draft");
+      toast.success(
+        status === "sent"
+          ? isEditMode ? "Invoice updated and sent" : "Invoice sent successfully"
+          : isEditMode ? "Draft invoice updated" : "Invoice saved as draft",
+      );
       navigate("/invoices");
     },
     onError: (error) => {
@@ -177,6 +421,14 @@ export default function NewInvoice() {
   });
 
   const handleSave = (send: boolean = false) => {
+    if (!selectedCustomer) {
+      toast.error("Please select a customer");
+      return;
+    }
+    if (!invoiceNumber.trim()) {
+      toast.error("Invoice number is required");
+      return;
+    }
     saveMutation.mutate(send ? "sent" : "draft");
   };
 
@@ -184,9 +436,11 @@ export default function NewInvoice() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight text-foreground">New Invoice</h1>
+          <h1 className="text-3xl font-bold tracking-tight text-foreground">
+            {isEditMode ? "Edit Invoice" : "New Invoice"}
+          </h1>
           <p className="text-muted-foreground">
-            Create a new invoice for a customer
+            {isEditMode ? "Update and issue a saved draft invoice" : "Create a new invoice for a customer"}
             {isVatRegistered && (
               <span className="ml-2 text-xs bg-primary/10 text-primary px-2 py-0.5 rounded">
                 VAT {vatRate}%
@@ -200,11 +454,11 @@ export default function NewInvoice() {
           </Button>
           <Button variant="outline" className="gap-2" onClick={() => handleSave(false)} disabled={saveMutation.isPending}>
             <Save className="h-4 w-4" />
-            Save Draft
+            {isEditMode ? "Update Draft" : "Save Draft"}
           </Button>
           <Button className="gap-2" onClick={() => handleSave(true)} disabled={saveMutation.isPending}>
             <Send className="h-4 w-4" />
-            Save & Send
+            {isEditMode ? "Update & Send" : "Save & Send"}
           </Button>
         </div>
       </div>
@@ -216,10 +470,47 @@ export default function NewInvoice() {
               <CardTitle>Invoice Details</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">Due Date</label>
+                  <Label htmlFor="customer">Customer *</Label>
+                  <Select value={selectedCustomer} onValueChange={setSelectedCustomer}>
+                    <SelectTrigger id="customer">
+                      <SelectValue placeholder="Select customer" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {customers?.map((customer) => (
+                        <SelectItem key={customer.id} value={customer.id}>
+                          {customer.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="invoice-number">Invoice Number *</Label>
                   <Input
+                    id="invoice-number"
+                    value={invoiceNumber}
+                    onChange={(e) => setInvoiceNumber(e.target.value)}
+                    placeholder="Enter invoice number"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="invoice-date">Invoice Date *</Label>
+                  <Input
+                    id="invoice-date"
+                    type="date"
+                    value={invoiceDate}
+                    onChange={(e) => setInvoiceDate(e.target.value)}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="due-date">Due Date</Label>
+                  <Input
+                    id="due-date"
                     type="date"
                     value={dueDate}
                     onChange={(e) => setDueDate(e.target.value)}
@@ -228,6 +519,41 @@ export default function NewInvoice() {
               </div>
             </CardContent>
           </Card>
+
+          {selectedCustomerData && (
+            <Card className="bg-muted/30">
+              <CardContent className="pt-4">
+                <div className="space-y-1 text-sm">
+                  <p className="font-medium">{selectedCustomerData.name}</p>
+                  {selectedCustomerData.email && (
+                    <p className="text-muted-foreground">{selectedCustomerData.email}</p>
+                  )}
+                  {selectedCustomerData.address && (
+                    <p className="text-muted-foreground">{selectedCustomerData.address}</p>
+                  )}
+                  {selectedCustomerData.tpin && (
+                    <p className="text-muted-foreground">TPIN: {selectedCustomerData.tpin}</p>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {sourceDocument && (
+            <Card className="border-dashed bg-primary/5">
+              <CardContent className="pt-4">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="space-y-1 text-sm">
+                    <p className="font-medium">Converted from {sourceDocument.orderType}</p>
+                    <p className="text-muted-foreground">
+                      Saving this invoice will update the linked sales document automatically.
+                    </p>
+                  </div>
+                  <Badge variant="outline">{sourceDocument.orderNumber}</Badge>
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           <Card>
             <CardHeader>

@@ -43,7 +43,7 @@ import { DashboardSkeleton } from "./DashboardSkeleton";
 import { useAuth } from "@/contexts/AuthContext";
 import { accountingService, dashboardService } from "@/services/firebase";
 import { COLLECTIONS } from "@/services/firebase/collectionNames";
-import { readNumber, readString } from "@/components/dashboard/dashboardDataUtils";
+import { isInvoicePendingStatus, readNumber, readString } from "@/components/dashboard/dashboardDataUtils";
 
 // Updated Fintech Palette
 const COLORS = ["#0f172a", "#3b82f6", "#22c55e", "#eab308", "#8b5cf6", "#ec4899"];
@@ -122,10 +122,7 @@ export function SuperAdminDashboard() {
 
       return {
         totalRevenue: liveMetrics.monthlyIncome,
-        pendingInvoices: invoices.filter((invoice) => {
-          const status = readString(invoice, ["status"]).toLowerCase();
-          return !["paid", "cancelled", "rejected"].includes(status);
-        }).length,
+        pendingInvoices: invoices.filter((invoice) => isInvoicePendingStatus(readString(invoice, ["status"]))).length,
         activeEmployees: employees.filter((employee) => readString(employee, ["employmentStatus", "employment_status"]) === "active").length,
         totalEmployees: employees.length,
         totalPayroll: payrollRuns

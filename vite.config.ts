@@ -26,6 +26,16 @@ export default defineConfig(({ mode }) => ({
 
           if (normalizedId.includes("/node_modules/firebase/")) return "firebase";
           if (normalizedId.includes("/node_modules/@tanstack/")) return "tanstack";
+          if (
+            normalizedId.includes("/node_modules/react-hook-form/")
+            || normalizedId.includes("/node_modules/@hookform/")
+            || normalizedId.includes("/node_modules/zod/")
+            || normalizedId.includes("/node_modules/react-day-picker/")
+          ) {
+            return "forms-vendor";
+          }
+          if (normalizedId.includes("/node_modules/framer-motion/")) return "motion";
+          if (normalizedId.includes("/node_modules/date-fns/")) return "date-vendor";
           if (normalizedId.includes("/node_modules/recharts/")) return "charts";
           if (
             normalizedId.includes("/node_modules/@radix-ui/")

@@ -793,6 +793,81 @@ const adjustInventoryForInvoiceLineItems = async ({
   }
 };
 
+const restoreInventoryForInvoiceLineItems = async ({
+  tx,
+  db,
+  companyId,
+  userId,
+  invoiceId,
+  invoiceDate,
+  lineItems,
+}) => {
+  for (const item of lineItems) {
+    const quantity = normalizeMoney(Number(item.quantity ?? 1));
+    if (quantity <= 0) continue;
+
+    const productId = await resolveProductIdForInvoiceLine({
+      tx,
+      db,
+      companyId,
+      lineItem: item,
+    });
+    if (!productId) continue;
+
+    const inventoryItem = await findInventoryItemByProductId({
+      tx,
+      db,
+      companyId,
+      productId,
+    });
+    if (!inventoryItem) {
+      throw new HttpsError(
+        "failed-precondition",
+        `Inventory item not found for product ${productId}.`,
+      );
+    }
+
+    const currentQty = Number(
+      inventoryItem.data.currentQuantity
+      ?? inventoryItem.data.current_quantity
+      ?? inventoryItem.data.quantityOnHand
+      ?? inventoryItem.data.quantity_on_hand
+      ?? inventoryItem.data.quantity
+      ?? inventoryItem.data.stockOnHand
+      ?? 0,
+    );
+    const newQty = normalizeMoney(currentQty + quantity);
+
+    tx.set(inventoryItem.ref, {
+      currentQuantity: newQty,
+      current_quantity: newQty,
+      quantityOnHand: newQty,
+      quantity_on_hand: newQty,
+      updatedAt: FieldValue.serverTimestamp(),
+      updatedBy: userId,
+      updated_by: userId,
+    }, { merge: true });
+
+    const movementRef = db.collection("stockMovements").doc();
+    tx.set(movementRef, {
+      companyId,
+      organizationId: companyId,
+      inventoryItemId: inventoryItem.ref.id,
+      productId,
+      quantity,
+      direction: "inflow",
+      movementType: "return",
+      movementDate: formatDateOnly(invoiceDate),
+      referenceType: "InvoiceReversal",
+      referenceId: invoiceId,
+      description: `Invoice reversal restock - ${item.description || productId}`,
+      createdBy: userId,
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+  }
+};
+
 const generateInvoiceNumber = () => {
   const now = new Date();
   const stamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`;
@@ -805,6 +880,149 @@ const generateQuotationNumber = () => {
   const stamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`;
   const nonce = String(now.getTime()).slice(-6);
   return `QTN-${stamp}-${nonce}`;
+};
+
+const isDraftInvoiceStatus = (status) => String(status || "").trim().toLowerCase() === "draft";
+
+const getInvoiceSettlementStatus = ({ totalAmount, amountPaid, dueDate }) => {
+  const normalizedTotal = normalizeMoney(totalAmount);
+  const normalizedPaid = normalizeMoney(amountPaid);
+
+  if (normalizedPaid >= normalizedTotal - 0.001) {
+    return "Paid";
+  }
+
+  if (normalizedPaid > 0.001) {
+    return "Partially Paid";
+  }
+
+  const normalizedDueDate = String(dueDate || "").trim();
+  const today = new Date().toISOString().slice(0, 10);
+  if (normalizedDueDate && normalizedDueDate < today) {
+    return "Overdue";
+  }
+
+  return "Unpaid";
+};
+
+const loadInvoiceLineItems = async ({ tx, db, invoiceId }) => {
+  const snapshot = await tx.get(
+    db.collection("invoiceItems")
+      .where("invoiceId", "==", invoiceId),
+  );
+
+  return snapshot.docs.map((docSnap) => {
+    const row = docSnap.data();
+    return {
+      description: String(row.description || ""),
+      quantity: Number(row.quantity ?? 1),
+      unitPrice: Number(row.unitPrice ?? row.unit_price ?? row.rate ?? 0),
+      productId: row.productId || row.product_id || null,
+      inventoryItemId: row.inventoryItemId || row.inventory_item_id || null,
+    };
+  });
+};
+
+const postInvoiceAccountingEffects = async ({
+  tx,
+  db,
+  companyId,
+  userId,
+  invoiceRef,
+  invoiceId,
+  invoiceNumber,
+  invoiceDate,
+  customerEntityId,
+  totalAmount,
+  revenueAccountIdInput,
+  customerName,
+  lineItems,
+}) => {
+  let revenueAccount;
+  if (revenueAccountIdInput) {
+    revenueAccount = await getAccountById(companyId, revenueAccountIdInput, tx, db);
+    if (revenueAccount.accountType !== "Income") {
+      throw new HttpsError("failed-precondition", "Revenue account must be an Income account.");
+    }
+  } else {
+    revenueAccount = await resolveSystemAccount({
+      companyId,
+      names: ["Sales Revenue", "Service Revenue"],
+      fallbackCode: 4000,
+      db,
+      requiredType: "Income",
+    });
+  }
+
+  const arAccount = await resolveSystemAccount({
+    companyId,
+    names: ["Accounts Receivable"],
+    fallbackCode: 1030,
+    db,
+    requiredType: "Asset",
+  });
+
+  const journalEntryId = await createJournalEntry({
+    companyId,
+    entryDate: invoiceDate,
+    description: `Invoice #${invoiceNumber} - ${customerName || "Customer"}`,
+    referenceType: "Invoice",
+    referenceId: invoiceId,
+    lines: [
+      {
+        accountId: arAccount.id,
+        debitAmount: totalAmount,
+        creditAmount: 0,
+        description: "Accounts receivable recognized",
+      },
+      {
+        accountId: revenueAccount.id,
+        debitAmount: 0,
+        creditAmount: totalAmount,
+        description: "Revenue recognized",
+      },
+    ],
+    createdBy: userId,
+    db,
+    tx,
+  });
+
+  tx.set(invoiceRef, {
+    journalEntryId,
+    journal_entry_id: journalEntryId,
+    updatedAt: FieldValue.serverTimestamp(),
+    updatedBy: userId,
+    updated_by: userId,
+  }, { merge: true });
+
+  if (customerEntityId) {
+    await updateCounterDocument({
+      tx,
+      db,
+      collectionName: "customers",
+      docId: customerEntityId,
+      companyId,
+      userId,
+      increments: {
+        totalInvoiced: totalAmount,
+        total_invoiced: totalAmount,
+        outstandingBalance: totalAmount,
+        outstanding_balance: totalAmount,
+      },
+    });
+  }
+
+  await adjustInventoryForInvoiceLineItems({
+    tx,
+    db,
+    companyId,
+    userId,
+    invoiceId,
+    invoiceDate,
+    lineItems,
+  });
+
+  return journalEntryId;
 };
 
 const upsertAccountDoc = (batch, db, companyId, row) => {
@@ -1349,8 +1567,6 @@ const createInvoice = async ({ data, userId, companyId, db: dbArg }) => {
   const status = String(data.status || "Unpaid");
 
   return db.runTransaction(async (tx) => {
-    await assertPeriodUnlocked(tx, companyId, invoiceDate, db);
-
     let revenueAccount;
     if (revenueAccountIdInput) {
       revenueAccount = await getAccountById(companyId, revenueAccountIdInput, tx, db);
@@ -1367,13 +1583,11 @@ const createInvoice = async ({ data, userId, companyId, db: dbArg }) => {
       });
     }
 
-    const arAccount = await resolveSystemAccount({
-      companyId,
-      names: ["Accounts Receivable"],
-      fallbackCode: 1030,
-      db,
-      requiredType: "Asset",
-    });
+    const shouldPostAccounting = !isDraftInvoiceStatus(status);
+    if (shouldPostAccounting) {
+      await assertPeriodUnlocked(tx, companyId, invoiceDate, db);
+    }
+
     const customerEntityId = String(data.customerId || data.customer_id || "").trim() || null;
 
     const invoiceNumber = String(data.invoiceNumber || data.invoice_number || "").trim() || generateInvoiceNumber();
@@ -1389,6 +1603,7 @@ const createInvoice = async ({ data, userId, companyId, db: dbArg }) => {
     }
 
     const invoiceRef = db.collection("invoices").doc();
+    const salesOrderId = String(data.salesOrderId || data.sales_order_id || "").trim() || null;
     tx.set(invoiceRef, {
       companyId,
       organizationId: companyId,
@@ -1413,6 +1628,8 @@ const createInvoice = async ({ data, userId, companyId, db: dbArg }) => {
       revenue_account_id: revenueAccount.id,
       quotationId: data.quotationId || data.quotation_id || null,
       quotation_id: data.quotationId || data.quotation_id || null,
+      salesOrderId,
+      sales_order_id: salesOrderId,
       journalEntryId: null,
       journal_entry_id: null,
       createdBy: userId,
@@ -1451,79 +1668,96 @@ const createInvoice = async ({ data, userId, companyId, db: dbArg }) => {
       });
     });
 
-    const journalEntryId = await createJournalEntry({
-      companyId,
-      entryDate: invoiceDate,
-      description: `Invoice #${invoiceNumber} - ${data.customerName || data.customer_name || "Customer"}`,
-      referenceType: "Invoice",
-      referenceId: invoiceRef.id,
-      lines: [
-        {
-          accountId: arAccount.id,
-          debitAmount: totalAmount,
-          creditAmount: 0,
-          description: "Accounts receivable recognized",
-        },
-        {
-          accountId: revenueAccount.id,
-          debitAmount: 0,
-          creditAmount: totalAmount,
-          description: "Revenue recognized",
-        },
-      ],
-      createdBy: userId,
-      db,
-      tx,
-    });
+    let journalEntryId = null;
+    if (shouldPostAccounting) {
+      journalEntryId = await postInvoiceAccountingEffects({
+        tx,
+        db,
+        companyId,
+        userId,
+        invoiceRef,
+        invoiceId: invoiceRef.id,
+        invoiceNumber,
+        invoiceDate,
+        customerEntityId,
+        totalAmount,
+        revenueAccountIdInput: revenueAccount.id,
+        customerName: data.customerName || data.customer_name || "Customer",
+        lineItems,
+      });
+    }
 
-    tx.update(invoiceRef, {
-      journalEntryId,
-      journal_entry_id: journalEntryId,
-      updatedAt: FieldValue.serverTimestamp(),
-      updatedBy: userId,
-      updated_by: userId,
-    });
+    let quotationId = String(data.quotationId || data.quotation_id || "").trim();
+    const invoiceSourceUpdates = {};
 
-    const quotationId = String(data.quotationId || data.quotation_id || "").trim();
+    if (salesOrderId) {
+      const salesOrderRef = db.collection("salesOrders").doc(salesOrderId);
+      const salesOrderSnap = await tx.get(salesOrderRef);
+      if (!salesOrderSnap.exists) {
+        throw new HttpsError("not-found", "Source sales order not found.");
+      }
+
+      const salesOrder = salesOrderSnap.data();
+      const salesOrderOwner = salesOrder.companyId || salesOrder.organizationId;
+      if (salesOrderOwner !== companyId) {
+        throw new HttpsError("permission-denied", "Source sales order does not belong to this organization.");
+      }
+
+      const salesOrderType = String(salesOrder.orderType || salesOrder.order_type || "sale").trim().toLowerCase();
+      const previousSalesOrderStatus = String(salesOrder.status || "").trim() || null;
+      const nextSalesOrderStatus = ["quote", "estimate"].includes(salesOrderType) ? "accepted" : "completed";
+
+      tx.set(salesOrderRef, {
+        status: nextSalesOrderStatus,
+        invoiceId: invoiceRef.id,
+        invoice_id: invoiceRef.id,
+        updatedAt: FieldValue.serverTimestamp(),
+        updatedBy: userId,
+        updated_by: userId,
+      }, { merge: true });
+
+      invoiceSourceUpdates.salesOrderStatusBeforeInvoice = previousSalesOrderStatus;
+      invoiceSourceUpdates.sales_order_status_before_invoice = previousSalesOrderStatus;
+
+      if (!quotationId) {
+        quotationId = String(salesOrder.quotationId || salesOrder.quotation_id || "").trim();
+      }
+    }
+
     if (quotationId) {
       const quotationRef = db.collection("quotations").doc(quotationId);
       const quotationSnap = await tx.get(quotationRef);
       if (quotationSnap.exists) {
+        const quotation = quotationSnap.data();
+        const quotationOwner = quotation.companyId || quotation.organizationId;
+        if (quotationOwner !== companyId) {
+          throw new HttpsError("permission-denied", "Quotation does not belong to this organization.");
+        }
+
+        const previousQuotationStatus = String(quotation.status || "").trim() || null;
         tx.update(quotationRef, {
           status: "Accepted",
+          invoiceId: invoiceRef.id,
+          invoice_id: invoiceRef.id,
           updatedAt: FieldValue.serverTimestamp(),
           updatedBy: userId,
           updated_by: userId,
         });
+
+        invoiceSourceUpdates.quotationStatusBeforeInvoice = previousQuotationStatus;
+        invoiceSourceUpdates.quotation_status_before_invoice = previousQuotationStatus;
+      } else {
+        throw new HttpsError("not-found", "Quotation not found.");
       }
     }
 
-    if (customerEntityId) {
-      await updateCounterDocument({
-        tx,
-        db,
-        collectionName: "customers",
-        docId: customerEntityId,
-        companyId,
-        userId,
-        increments: {
-          totalInvoiced: totalAmount,
-          total_invoiced: totalAmount,
-          outstandingBalance: totalAmount,
-          outstanding_balance: totalAmount,
-        },
-      });
+    if (Object.keys(invoiceSourceUpdates).length > 0 || quotationId) {
+      tx.set(invoiceRef, {
+        ...invoiceSourceUpdates,
+        quotationId: quotationId || null,
+        quotation_id: quotationId || null,
+      }, { merge: true });
     }
-
-    await adjustInventoryForInvoiceLineItems({
-      tx,
-      db,
-      companyId,
-      userId,
-      invoiceId: invoiceRef.id,
-      invoiceDate,
-      lineItems,
-    });
 
     return { invoiceId: invoiceRef.id, journalEntryId, invoiceNumber };
   });
@@ -1574,8 +1808,10 @@ const updateInvoiceStatus = async ({ data, userId, companyId, db: dbArg }) => {
 
     const invoiceTotal = normalizeMoney(invoice.totalAmount ?? invoice.total ?? invoice.total_amount ?? 0);
     const amountPaid = normalizeMoney(invoice.amountPaid ?? invoice.amount_paid ?? 0);
+    const invoiceDate = formatDateOnly(invoice.invoiceDate || invoice.invoice_date || new Date().toISOString());
     const dueDate = String(invoice.dueDate || invoice.due_date || "").trim();
     const hasPostedJournal = Boolean(invoice.journalEntryId || invoice.journal_entry_id);
+    const currentStatusKey = currentStatus.trim().toLowerCase();
     const today = new Date().toISOString().slice(0, 10);
 
     if (amountPaid > 0.001) {
@@ -1600,6 +1836,32 @@ const updateInvoiceStatus = async ({ data, userId, companyId, db: dbArg }) => {
       );
     }
 
+    if (!hasPostedJournal && currentStatusKey === "draft" && (nextStatus === "Unpaid" || nextStatus === "Overdue")) {
+      await assertPeriodUnlocked(tx, companyId, invoiceDate, db);
+
+      const lineItems = await loadInvoiceLineItems({
+        tx,
+        db,
+        invoiceId,
+      });
+
+      await postInvoiceAccountingEffects({
+        tx,
+        db,
+        companyId,
+        userId,
+        invoiceRef,
+        invoiceId,
+        invoiceNumber: String(invoice.invoiceNumber || invoice.invoice_number || invoiceId),
+        invoiceDate,
+        customerEntityId: String(invoice.customerId || invoice.customer_id || "").trim() || null,
+        totalAmount: invoiceTotal,
+        revenueAccountIdInput: String(invoice.revenueAccountId || invoice.revenue_account_id || "").trim(),
+        customerName: invoice.customerName || invoice.customer_name || "Customer",
+        lineItems,
+      });
+    }
+
     tx.set(
       invoiceRef,
       {
@@ -1612,6 +1874,268 @@ const updateInvoiceStatus = async ({ data, userId, companyId, db: dbArg }) => {
     );
 
     return { invoiceId, status: nextStatus };
+  });
+};
+
+const updateInvoiceDraft = async ({ data, userId, companyId, db: dbArg }) => {
+  const db = getDb(dbArg);
+  const invoiceId = String(data.invoiceId || data.invoice_id || "").trim();
+  if (!invoiceId) {
+    throw new HttpsError("invalid-argument", "invoiceId is required.");
+  }
+
+  const lineItems = Array.isArray(data.lineItems)
+    ? data.lineItems
+    : Array.isArray(data.line_items)
+      ? data.line_items
+      : [];
+  if (!lineItems.length) {
+    throw new HttpsError("invalid-argument", "Invoice requires at least one line item.");
+  }
+
+  const invoiceDate = formatDateOnly(data.invoiceDate || data.invoice_date || new Date().toISOString());
+  const dueDate = formatDateOnly(data.dueDate || data.due_date || invoiceDate);
+  const computedSubtotal = normalizeMoney(lineItems.reduce((sum, item) => {
+    const quantity = Number(item.quantity ?? 1);
+    const unitPrice = Number(item.unitPrice ?? item.unit_price ?? item.rate ?? 0);
+    return sum + normalizeMoney(quantity * unitPrice);
+  }, 0));
+  const taxAmount = normalizeMoney(data.taxAmount ?? data.tax_amount ?? 0);
+  const totalAmount = normalizeMoney(
+    data.totalAmount ?? data.total_amount ?? computedSubtotal + taxAmount,
+  );
+
+  return db.runTransaction(async (tx) => {
+    const invoiceRef = db.collection("invoices").doc(invoiceId);
+    const invoiceSnap = await tx.get(invoiceRef);
+    if (!invoiceSnap.exists) {
+      throw new HttpsError("not-found", "Invoice not found.");
+    }
+
+    const invoice = invoiceSnap.data();
+    const owner = invoice.companyId || invoice.organizationId;
+    if (owner !== companyId) {
+      throw new HttpsError("permission-denied", "Invoice does not belong to this organization.");
+    }
+
+    if (Boolean(invoice.journalEntryId || invoice.journal_entry_id)) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Only draft invoices without a posted journal can be edited.",
+      );
+    }
+
+    const amountPaid = normalizeMoney(invoice.amountPaid ?? invoice.amount_paid ?? 0);
+    if (amountPaid > 0.001) {
+      throw new HttpsError("failed-precondition", "Invoices with payments cannot be edited.");
+    }
+
+    const currentStatus = String(invoice.status || "");
+    if (!isDraftInvoiceStatus(currentStatus)) {
+      throw new HttpsError("failed-precondition", "Only draft invoices can be edited.");
+    }
+
+    const invoiceNumber = String(data.invoiceNumber || data.invoice_number || "").trim()
+      || String(invoice.invoiceNumber || invoice.invoice_number || "").trim()
+      || generateInvoiceNumber();
+
+    const existingInvoiceQuery = db
+      .collection("invoices")
+      .where("companyId", "==", companyId)
+      .where("invoiceNumber", "==", invoiceNumber)
+      .limit(10);
+    const existingInvoiceSnap = await tx.get(existingInvoiceQuery);
+    if (existingInvoiceSnap.docs.some((docSnap) => docSnap.id !== invoiceId)) {
+      throw new HttpsError("already-exists", `Invoice number ${invoiceNumber} already exists.`);
+    }
+
+    const customerEntityId = String(
+      data.customerId
+      || data.customer_id
+      || invoice.customerId
+      || invoice.customer_id
+      || "",
+    ).trim() || null;
+    const salesOrderId = String(
+      data.salesOrderId
+      || data.sales_order_id
+      || invoice.salesOrderId
+      || invoice.sales_order_id
+      || "",
+    ).trim() || null;
+    const quotationId = String(
+      data.quotationId
+      || data.quotation_id
+      || invoice.quotationId
+      || invoice.quotation_id
+      || "",
+    ).trim() || null;
+
+    tx.set(invoiceRef, {
+      invoiceNumber,
+      invoice_number: invoiceNumber,
+      customerId: customerEntityId,
+      invoiceDate,
+      invoice_date: invoiceDate,
+      dueDate,
+      due_date: dueDate,
+      subtotal: computedSubtotal,
+      taxAmount,
+      tax_amount: taxAmount,
+      totalAmount,
+      total: totalAmount,
+      total_amount: totalAmount,
+      notes: data.notes || null,
+      quotationId,
+      quotation_id: quotationId,
+      salesOrderId,
+      sales_order_id: salesOrderId,
+      updatedAt: FieldValue.serverTimestamp(),
+      updatedBy: userId,
+      updated_by: userId,
+    }, { merge: true });
+
+    const invoiceItemsSnap = await tx.get(
+      db.collection("invoiceItems")
+        .where("invoiceId", "==", invoiceId),
+    );
+    invoiceItemsSnap.docs.forEach((docSnap) => tx.delete(docSnap.ref));
+
+    lineItems.forEach((item) => {
+      const quantity = Number(item.quantity ?? 1);
+      const unitPrice = Number(item.unitPrice ?? item.unit_price ?? item.rate ?? 0);
+      const productId = String(
+        item.productId
+        || item.product_id
+        || item.inventoryItemId
+        || item.inventory_item_id
+        || "",
+      ).trim() || null;
+      const itemRef = db.collection("invoiceItems").doc();
+      tx.set(itemRef, {
+        companyId,
+        organizationId: companyId,
+        invoiceId,
+        invoice_id: invoiceId,
+        description: item.description || "",
+        productId,
+        product_id: productId,
+        quantity,
+        unitPrice,
+        unit_price: unitPrice,
+        lineTotal: normalizeMoney(quantity * unitPrice),
+        line_total: normalizeMoney(quantity * unitPrice),
+        createdAt: FieldValue.serverTimestamp(),
+      });
+    });
+
+    return { invoiceId, invoiceNumber };
+  });
+};
+
+const deleteInvoice = async ({ data, userId, companyId, db: dbArg }) => {
+  const db = getDb(dbArg);
+  const invoiceId = String(data.invoiceId || data.invoice_id || "").trim();
+  if (!invoiceId) {
+    throw new HttpsError("invalid-argument", "invoiceId is required.");
+  }
+
+  return db.runTransaction(async (tx) => {
+    const invoiceRef = db.collection("invoices").doc(invoiceId);
+    const invoiceSnap = await tx.get(invoiceRef);
+    if (!invoiceSnap.exists) {
+      throw new HttpsError("not-found", "Invoice not found.");
+    }
+
+    const invoice = invoiceSnap.data();
+    const owner = invoice.companyId || invoice.organizationId;
+    if (owner !== companyId) {
+      throw new HttpsError("permission-denied", "Invoice does not belong to this organization.");
+    }
+
+    if (Boolean(invoice.journalEntryId || invoice.journal_entry_id)) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Reverse the posted invoice entry before deleting this invoice.",
+      );
+    }
+
+    const amountPaid = normalizeMoney(invoice.amountPaid ?? invoice.amount_paid ?? 0);
+    if (amountPaid > 0.001) {
+      throw new HttpsError("failed-precondition", "Invoices with payments cannot be deleted.");
+    }
+
+    const invoicePaymentsSnap = await tx.get(
+      db.collection("invoicePayments")
+        .where("invoiceId", "==", invoiceId)
+        .limit(10),
+    );
+    if (!invoicePaymentsSnap.empty) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Delete or reverse related invoice payments before deleting this invoice.",
+      );
+    }
+
+    const invoiceItemsSnap = await tx.get(
+      db.collection("invoiceItems")
+        .where("invoiceId", "==", invoiceId),
+    );
+    invoiceItemsSnap.docs.forEach((docSnap) => tx.delete(docSnap.ref));
+
+    const quotationId = String(invoice.quotationId || invoice.quotation_id || "").trim();
+    if (quotationId) {
+      const quotationRef = db.collection("quotations").doc(quotationId);
+      const quotationSnap = await tx.get(quotationRef);
+      if (quotationSnap.exists) {
+        const quotation = quotationSnap.data();
+        const quotationOwner = quotation.companyId || quotation.organizationId;
+        if (quotationOwner === companyId) {
+          const quotationStatusBeforeInvoice = String(
+            invoice.quotationStatusBeforeInvoice
+            || invoice.quotation_status_before_invoice
+            || "",
+          ).trim() || "Sent";
+          tx.set(quotationRef, {
+            status: quotationStatusBeforeInvoice,
+            invoiceId: FieldValue.delete(),
+            invoice_id: FieldValue.delete(),
+            updatedAt: FieldValue.serverTimestamp(),
+            updatedBy: userId,
+            updated_by: userId,
+          }, { merge: true });
+        }
+      }
+    }
+
+    const salesOrderId = String(invoice.salesOrderId || invoice.sales_order_id || "").trim();
+    if (salesOrderId) {
+      const salesOrderRef = db.collection("salesOrders").doc(salesOrderId);
+      const salesOrderSnap = await tx.get(salesOrderRef);
+      if (salesOrderSnap.exists) {
+        const salesOrder = salesOrderSnap.data();
+        const salesOrderOwner = salesOrder.companyId || salesOrder.organizationId;
+        if (salesOrderOwner === companyId) {
+          const salesOrderStatusBeforeInvoice = String(
+            invoice.salesOrderStatusBeforeInvoice
+            || invoice.sales_order_status_before_invoice
+            || "",
+          ).trim() || "pending";
+          tx.set(salesOrderRef, {
+            status: salesOrderStatusBeforeInvoice,
+            invoiceId: FieldValue.delete(),
+            invoice_id: FieldValue.delete(),
+            updatedAt: FieldValue.serverTimestamp(),
+            updatedBy: userId,
+            updated_by: userId,
+          }, { merge: true });
+        }
+      }
+    }
+
+    tx.delete(invoiceRef);
+
+    return { invoiceId, deleted: true };
   });
 };
 
@@ -1714,10 +2238,11 @@ const recordInvoicePayment = async ({ data, userId, companyId, db: dbArg }) => {
     });
 
     const newAmountPaid = normalizeMoney(amountPaid + paymentAmount);
-    let newStatus = "Partially Paid";
-    if (newAmountPaid >= invoiceTotal - 0.001) {
-      newStatus = "Paid";
-    }
+    const newStatus = getInvoiceSettlementStatus({
+      totalAmount: invoiceTotal,
+      amountPaid: newAmountPaid,
+      dueDate: invoice.dueDate || invoice.due_date || null,
+    });
 
     tx.update(invoiceRef, {
       amountPaid: newAmountPaid,
@@ -2308,11 +2833,11 @@ const reverseJournalEntry = async ({
                 );
                 const currentPaid = normalizeMoney(invoice.amountPaid ?? invoice.amount_paid ?? 0);
                 const newAmountPaid = normalizeMoney(Math.max(0, currentPaid - paymentAmount));
-                const newStatus = newAmountPaid >= invoiceTotal - 0.001
-                  ? "Paid"
-                  : newAmountPaid > 0
-                    ? "Partially Paid"
-                    : "Unpaid";
+                const newStatus = getInvoiceSettlementStatus({
+                  totalAmount: invoiceTotal,
+                  amountPaid: newAmountPaid,
+                  dueDate: invoice.dueDate || invoice.due_date || null,
+                });
 
                 tx.set(invoiceRef, {
                   amountPaid: newAmountPaid,
@@ -2366,6 +2891,125 @@ const reverseJournalEntry = async ({
               referenceId: entryReferenceId,
               createdBy: userId,
             });
+          }
+        }
+      }
+    }
+
+    if (entryReferenceType === "Invoice" && entryReferenceId) {
+      const invoiceRef = db.collection("invoices").doc(entryReferenceId);
+      const invoiceSnap = await tx.get(invoiceRef);
+      if (invoiceSnap.exists) {
+        const invoice = invoiceSnap.data();
+        const invoiceOwner = invoice.companyId || invoice.organizationId;
+        if (invoiceOwner === companyId) {
+          const invoiceTotal = normalizeMoney(
+            invoice.totalAmount ?? invoice.total_amount ?? invoice.total ?? 0,
+          );
+          const amountPaid = normalizeMoney(invoice.amountPaid ?? invoice.amount_paid ?? 0);
+          if (amountPaid > 0.001) {
+            throw new HttpsError(
+              "failed-precondition",
+              "Reverse invoice payments before reversing the posted invoice.",
+            );
+          }
+
+          const invoiceDate = formatDateOnly(
+            invoice.invoiceDate || invoice.invoice_date || reversalDate,
+          );
+          const customerEntityId = String(invoice.customerId || invoice.customer_id || "").trim();
+          const lineItems = await loadInvoiceLineItems({
+            tx,
+            db,
+            invoiceId: entryReferenceId,
+          });
+
+          tx.set(invoiceRef, {
+            status: "Draft",
+            journalEntryId: null,
+            journal_entry_id: null,
+            reversalEntryId,
+            reversal_entry_id: reversalEntryId,
+            updatedAt: FieldValue.serverTimestamp(),
+            updatedBy: userId,
+            updated_by: userId,
+          }, { merge: true });
+
+          if (customerEntityId && invoiceTotal > 0) {
+            await updateCounterDocument({
+              tx,
+              db,
+              collectionName: "customers",
+              docId: customerEntityId,
+              companyId,
+              userId,
+              increments: {
+                totalInvoiced: -invoiceTotal,
+                total_invoiced: -invoiceTotal,
+                outstandingBalance: -invoiceTotal,
+                outstanding_balance: -invoiceTotal,
+              },
+            });
+          }
+
+          await restoreInventoryForInvoiceLineItems({
+            tx,
+            db,
+            companyId,
+            userId,
+            invoiceId: entryReferenceId,
+            invoiceDate,
+            lineItems,
+          });
+
+          const quotationId = String(invoice.quotationId || invoice.quotation_id || "").trim();
+          if (quotationId) {
+            const quotationRef = db.collection("quotations").doc(quotationId);
+            const quotationSnap = await tx.get(quotationRef);
+            if (quotationSnap.exists) {
+              const quotation = quotationSnap.data();
+              const quotationOwner = quotation.companyId || quotation.organizationId;
+              if (quotationOwner === companyId) {
+                const quotationStatusBeforeInvoice = String(
+                  invoice.quotationStatusBeforeInvoice
+                  || invoice.quotation_status_before_invoice
+                  || "",
+                ).trim() || "Sent";
+                tx.set(quotationRef, {
+                  status: quotationStatusBeforeInvoice,
+                  invoiceId: FieldValue.delete(),
+                  invoice_id: FieldValue.delete(),
+                  updatedAt: FieldValue.serverTimestamp(),
+                  updatedBy: userId,
+                  updated_by: userId,
+                }, { merge: true });
+              }
+            }
+          }
+
+          const salesOrderId = String(invoice.salesOrderId || invoice.sales_order_id || "").trim();
+          if (salesOrderId) {
+            const salesOrderRef = db.collection("salesOrders").doc(salesOrderId);
+            const salesOrderSnap = await tx.get(salesOrderRef);
+            if (salesOrderSnap.exists) {
+              const salesOrder = salesOrderSnap.data();
+              const salesOrderOwner = salesOrder.companyId || salesOrder.organizationId;
+              if (salesOrderOwner === companyId) {
+                const salesOrderStatusBeforeInvoice = String(
+                  invoice.salesOrderStatusBeforeInvoice
+                  || invoice.sales_order_status_before_invoice
+                  || "",
+                ).trim() || "pending";
+                tx.set(salesOrderRef, {
+                  status: salesOrderStatusBeforeInvoice,
+                  invoiceId: FieldValue.delete(),
+                  invoice_id: FieldValue.delete(),
+                  updatedAt: FieldValue.serverTimestamp(),
+                  updatedBy: userId,
+                  updated_by: userId,
+                }, { merge: true });
+              }
+            }
           }
         }
       }
@@ -3099,6 +3743,8 @@ module.exports = {
   payBill,
   updateOverdueBills,
   createInvoice,
+  updateInvoiceDraft,
+  deleteInvoice,
   updateInvoiceStatus,
   recordInvoicePayment,
   createQuotation,

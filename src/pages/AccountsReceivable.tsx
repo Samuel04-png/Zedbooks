@@ -1,9 +1,22 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Table,
   TableBody,
@@ -31,6 +44,8 @@ interface InvoiceRecord {
   invoice_date: string;
   due_date: string | null;
   total: number;
+  amount_paid: number;
+  outstanding_amount: number;
   status: string;
   customer_id: string | null;
   customers: { name: string } | null;
@@ -46,6 +61,13 @@ interface InvoicePaymentRecord {
   notes: string | null;
   journal_entry_id: string | null;
   is_reversed: boolean;
+}
+
+interface BankAccountOption {
+  id: string;
+  account_name: string;
+  currency: string;
+  is_active: boolean;
 }
 
 const chunk = <T,>(items: T[], size: number): T[][] => {
@@ -80,6 +102,14 @@ export default function AccountsReceivable() {
   });
   const [endDate, setEndDate] = useState(new Date().toISOString().split("T")[0]);
   const [showImportDialog, setShowImportDialog] = useState(false);
+  const [isReceivePaymentOpen, setIsReceivePaymentOpen] = useState(false);
+  const [selectedInvoiceForPayment, setSelectedInvoiceForPayment] = useState<InvoiceRecord | null>(null);
+  const [paymentForm, setPaymentForm] = useState({
+    amount: "",
+    payment_date: new Date().toISOString().split("T")[0],
+    payment_account_id: "",
+    notes: "",
+  });
   const canReversePostedEntries = [
     "super_admin",
     "admin",
@@ -88,7 +118,45 @@ export default function AccountsReceivable() {
     "assistant_accountant",
   ].includes(userRole || "");
 
-  const { data: invoices = [], isLoading, refetch } = useQuery({
+  const invalidateReceivableQueries = () => {
+    queryClient.invalidateQueries({ queryKey: ["accounts-receivable"] });
+    queryClient.invalidateQueries({ queryKey: ["accounts-receivable-payments"] });
+    queryClient.invalidateQueries({ queryKey: ["invoices"] });
+    queryClient.invalidateQueries({ queryKey: ["customers"] });
+    queryClient.invalidateQueries({ queryKey: ["bank-accounts"] });
+    queryClient.invalidateQueries({ queryKey: ["journal-entries"] });
+    queryClient.invalidateQueries({ queryKey: ["financial-reports"] });
+    queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+  };
+
+  const resetPaymentForm = () => {
+    setSelectedInvoiceForPayment(null);
+    setPaymentForm({
+      amount: "",
+      payment_date: new Date().toISOString().split("T")[0],
+      payment_account_id: "",
+      notes: "",
+    });
+  };
+
+  const closeReceivePaymentDialog = (open: boolean) => {
+    setIsReceivePaymentOpen(open);
+    if (!open) {
+      resetPaymentForm();
+    }
+  };
+
+  const { data: companyId } = useQuery({
+    queryKey: ["accounts-receivable-company-id", user?.id],
+    queryFn: async () => {
+      if (!user) return null;
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      return membership?.companyId ?? null;
+    },
+    enabled: Boolean(user),
+  });
+
+  const { data: invoices = [], isLoading } = useQuery({
     queryKey: ["accounts-receivable", startDate, endDate, user?.id],
     queryFn: async () => {
       if (!user) return [] as InvoiceRecord[];
@@ -109,7 +177,13 @@ export default function AccountsReceivable() {
             invoice_number: String(row.invoiceNumber ?? row.invoice_number ?? `INV-${docSnap.id.slice(0, 8).toUpperCase()}`),
             invoice_date: toDateString(row.invoiceDate ?? row.invoice_date),
             due_date: toDateString(row.dueDate ?? row.due_date) || null,
-            total: Number(row.total ?? 0),
+            total: Number(row.totalAmount ?? row.total_amount ?? row.total ?? 0),
+            amount_paid: Number(row.amountPaid ?? row.amount_paid ?? 0),
+            outstanding_amount: Math.max(
+              Number(row.totalAmount ?? row.total_amount ?? row.total ?? 0)
+              - Number(row.amountPaid ?? row.amount_paid ?? 0),
+              0,
+            ),
             status: String(row.status ?? "draft"),
             customer_id: (row.customerId ?? row.customer_id ?? null) as string | null,
             customers: null,
@@ -151,6 +225,39 @@ export default function AccountsReceivable() {
     },
     enabled: Boolean(user),
   });
+
+  const { data: bankAccounts = [] } = useQuery({
+    queryKey: ["invoice-payment-bank-accounts", companyId],
+    queryFn: async () => {
+      if (!companyId) return [] as BankAccountOption[];
+
+      const snapshot = await getDocs(
+        query(collection(firestore, COLLECTIONS.BANK_ACCOUNTS), where("companyId", "==", companyId)),
+      );
+
+      return snapshot.docs
+        .map((docSnap) => {
+          const row = docSnap.data() as Record<string, unknown>;
+          return {
+            id: docSnap.id,
+            account_name: String(row.accountName ?? row.account_name ?? ""),
+            currency: String(row.currency ?? "ZMW"),
+            is_active: Boolean(row.isActive ?? row.is_active ?? true),
+          } satisfies BankAccountOption;
+        })
+        .filter((account) => account.is_active)
+        .sort((a, b) => a.account_name.localeCompare(b.account_name));
+    },
+    enabled: Boolean(companyId),
+  });
+
+  useEffect(() => {
+    if (!isReceivePaymentOpen || paymentForm.payment_account_id || bankAccounts.length === 0) return;
+    setPaymentForm((current) => ({
+      ...current,
+      payment_account_id: bankAccounts[0].id,
+    }));
+  }, [bankAccounts, isReceivePaymentOpen, paymentForm.payment_account_id]);
 
   const { data: invoicePayments = [] } = useQuery({
     queryKey: ["accounts-receivable-payments", startDate, endDate, user?.id],
@@ -267,20 +374,59 @@ export default function AccountsReceivable() {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["accounts-receivable"] });
-      queryClient.invalidateQueries({ queryKey: ["accounts-receivable-payments"] });
-      queryClient.invalidateQueries({ queryKey: ["invoices"] });
-      queryClient.invalidateQueries({ queryKey: ["customers"] });
-      queryClient.invalidateQueries({ queryKey: ["bank-accounts"] });
-      queryClient.invalidateQueries({ queryKey: ["journal-entries"] });
-      queryClient.invalidateQueries({ queryKey: ["financial-reports"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      invalidateReceivableQueries();
       toast.success("Invoice payment journal entry reversed");
     },
     onError: (error) => {
       toast.error(`Failed to reverse payment: ${error.message}`);
     },
   });
+
+  const receivePaymentMutation = useMutation({
+    mutationFn: async () => {
+      if (!companyId) throw new Error("No company profile found for your account");
+      if (!selectedInvoiceForPayment) throw new Error("No invoice selected");
+
+      const amount = Number(paymentForm.amount);
+      if (!Number.isFinite(amount) || amount <= 0) {
+        throw new Error("Enter a valid payment amount.");
+      }
+      if (amount - selectedInvoiceForPayment.outstanding_amount > 0.001) {
+        throw new Error("Payment cannot exceed the outstanding balance.");
+      }
+      if (!paymentForm.payment_account_id) {
+        throw new Error("Select the bank or cash account receiving the payment.");
+      }
+
+      return accountingService.recordInvoicePayment({
+        companyId,
+        invoiceId: selectedInvoiceForPayment.id,
+        amount,
+        paymentDate: paymentForm.payment_date,
+        paymentAccountId: paymentForm.payment_account_id,
+        notes: paymentForm.notes || undefined,
+      });
+    },
+    onSuccess: () => {
+      invalidateReceivableQueries();
+      toast.success("Invoice payment recorded successfully");
+      closeReceivePaymentDialog(false);
+    },
+    onError: (error) => {
+      toast.error(`Failed to receive payment: ${error.message}`);
+    },
+  });
+
+  const openReceivePaymentDialog = (invoice: InvoiceRecord) => {
+    setSelectedInvoiceForPayment(invoice);
+    setPaymentForm({
+      amount: invoice.outstanding_amount.toFixed(2),
+      payment_date: new Date().toISOString().split("T")[0],
+      payment_account_id: bankAccounts[0]?.id || "",
+      notes: "",
+    });
+    setIsReceivePaymentOpen(true);
+  };
 
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat("en-ZM", {
@@ -289,18 +435,20 @@ export default function AccountsReceivable() {
     }).format(amount);
   };
 
-  const unpaidInvoices = invoices.filter((i) => i.status.toLowerCase() !== "paid");
-  const overdueInvoices = unpaidInvoices.filter((i) => i.due_date && isPast(new Date(i.due_date)));
-  const dueSoon = unpaidInvoices.filter((i) => {
+  const receivableInvoices = invoices.filter((invoice) => !["draft", "cancelled", "canceled"].includes(invoice.status.toLowerCase()));
+  const openInvoices = receivableInvoices.filter((invoice) => invoice.outstanding_amount > 0.001);
+  const overdueInvoices = openInvoices.filter((invoice) => invoice.due_date && isPast(new Date(invoice.due_date)));
+  const dueSoon = openInvoices.filter((i) => {
     if (!i.due_date) return false;
     const days = differenceInDays(new Date(i.due_date), new Date());
     return days >= 0 && days <= 7;
   });
-  const paidInvoices = invoices.filter((i) => i.status.toLowerCase() === "paid");
 
-  const totalReceivable = unpaidInvoices.reduce((sum, i) => sum + (i.total || 0), 0);
-  const totalOverdue = overdueInvoices.reduce((sum, i) => sum + (i.total || 0), 0);
-  const totalCollected = paidInvoices.reduce((sum, i) => sum + (i.total || 0), 0);
+  const totalReceivable = openInvoices.reduce((sum, invoice) => sum + invoice.outstanding_amount, 0);
+  const totalOverdue = overdueInvoices.reduce((sum, invoice) => sum + invoice.outstanding_amount, 0);
+  const totalCollected = invoicePayments
+    .filter((payment) => !payment.is_reversed)
+    .reduce((sum, payment) => sum + payment.amount, 0);
 
   const exportReport = () => {
     const columns = [
@@ -351,7 +499,7 @@ export default function AccountsReceivable() {
       });
     }
 
-    refetch();
+    invalidateReceivableQueries();
     toast.success("Invoices imported successfully");
   };
 
@@ -417,7 +565,7 @@ export default function AccountsReceivable() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-primary">{formatCurrency(totalReceivable)}</div>
-            <p className="text-xs text-muted-foreground">{unpaidInvoices.length} invoices</p>
+            <p className="text-xs text-muted-foreground">{openInvoices.length} open invoices</p>
           </CardContent>
         </Card>
         <Card>
@@ -441,7 +589,7 @@ export default function AccountsReceivable() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-success">{formatCurrency(totalCollected)}</div>
-            <p className="text-xs text-muted-foreground">{paidInvoices.length} invoices</p>
+            <p className="text-xs text-muted-foreground">{invoicePayments.filter((payment) => !payment.is_reversed).length} payments</p>
           </CardContent>
         </Card>
       </div>
@@ -463,13 +611,13 @@ export default function AccountsReceivable() {
               <TableRow>
                 <TableCell>Current (not due)</TableCell>
                 <TableCell className="text-right">
-                  {unpaidInvoices.filter((i) => !i.due_date || differenceInDays(new Date(i.due_date), new Date()) > 7).length}
+                  {openInvoices.filter((i) => !i.due_date || differenceInDays(new Date(i.due_date), new Date()) > 7).length}
                 </TableCell>
                 <TableCell className="text-right">
                   {formatCurrency(
-                    unpaidInvoices
+                    openInvoices
                       .filter((i) => !i.due_date || differenceInDays(new Date(i.due_date), new Date()) > 7)
-                      .reduce((sum, i) => sum + (i.total || 0), 0),
+                      .reduce((sum, i) => sum + i.outstanding_amount, 0),
                   )}
                 </TableCell>
               </TableRow>
@@ -477,7 +625,7 @@ export default function AccountsReceivable() {
                 <TableCell>Due within 7 days</TableCell>
                 <TableCell className="text-right">{dueSoon.length}</TableCell>
                 <TableCell className="text-right text-warning">
-                  {formatCurrency(dueSoon.reduce((sum, i) => sum + (i.total || 0), 0))}
+                  {formatCurrency(dueSoon.reduce((sum, i) => sum + i.outstanding_amount, 0))}
                 </TableCell>
               </TableRow>
               <TableRow>
@@ -489,7 +637,7 @@ export default function AccountsReceivable() {
                   {formatCurrency(
                     overdueInvoices
                       .filter((i) => differenceInDays(new Date(), new Date(i.due_date || "")) <= 30)
-                      .reduce((sum, i) => sum + (i.total || 0), 0),
+                      .reduce((sum, i) => sum + i.outstanding_amount, 0),
                   )}
                 </TableCell>
               </TableRow>
@@ -502,7 +650,7 @@ export default function AccountsReceivable() {
                   {formatCurrency(
                     overdueInvoices
                       .filter((i) => differenceInDays(new Date(), new Date(i.due_date || "")) > 30)
-                      .reduce((sum, i) => sum + (i.total || 0), 0),
+                      .reduce((sum, i) => sum + i.outstanding_amount, 0),
                   )}
                 </TableCell>
               </TableRow>
@@ -524,16 +672,21 @@ export default function AccountsReceivable() {
                 <TableHead>Invoice Date</TableHead>
                 <TableHead>Due Date</TableHead>
                 <TableHead className="text-right">Amount</TableHead>
+                <TableHead className="text-right">Paid</TableHead>
+                <TableHead className="text-right">Balance</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Days Overdue</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {invoices.map((invoice) => {
                 const daysOverdue =
-                  invoice.due_date && invoice.status.toLowerCase() !== "paid"
+                  invoice.due_date && invoice.outstanding_amount > 0.001
                     ? Math.max(0, differenceInDays(new Date(), new Date(invoice.due_date)))
                     : 0;
+                const canReceivePayment = invoice.outstanding_amount > 0.001
+                  && !["draft", "cancelled", "canceled"].includes(invoice.status.toLowerCase());
 
                 return (
                   <TableRow key={invoice.id}>
@@ -544,10 +697,12 @@ export default function AccountsReceivable() {
                       {invoice.due_date ? format(new Date(invoice.due_date), "dd MMM yyyy") : "-"}
                     </TableCell>
                     <TableCell className="text-right">{formatCurrency(invoice.total)}</TableCell>
+                    <TableCell className="text-right">{formatCurrency(invoice.amount_paid)}</TableCell>
+                    <TableCell className="text-right font-medium">{formatCurrency(invoice.outstanding_amount)}</TableCell>
                     <TableCell>
                       <Badge
                         variant={
-                          invoice.status.toLowerCase() === "paid"
+                          invoice.outstanding_amount <= 0.001
                             ? "default"
                             : daysOverdue > 0
                               ? "destructive"
@@ -558,7 +713,20 @@ export default function AccountsReceivable() {
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      {invoice.status.toLowerCase() === "paid" ? "-" : daysOverdue > 0 ? `${daysOverdue} days` : "Current"}
+                      {invoice.outstanding_amount <= 0.001 ? "-" : daysOverdue > 0 ? `${daysOverdue} days` : "Current"}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {canReceivePayment ? (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => openReceivePaymentDialog(invoice)}
+                        >
+                          Receive Payment
+                        </Button>
+                      ) : (
+                        <span className="text-sm text-muted-foreground">-</span>
+                      )}
                     </TableCell>
                   </TableRow>
                 );
@@ -639,6 +807,90 @@ export default function AccountsReceivable() {
         columns={importColumns}
         title="Import Invoices"
       />
+
+      <Dialog open={isReceivePaymentOpen} onOpenChange={closeReceivePaymentDialog}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Receive Invoice Payment</DialogTitle>
+          </DialogHeader>
+
+          {selectedInvoiceForPayment && (
+            <div className="space-y-4">
+              <div className="rounded-lg border bg-muted/30 p-4 text-sm">
+                <p className="font-medium">{selectedInvoiceForPayment.invoice_number}</p>
+                <p className="text-muted-foreground">{selectedInvoiceForPayment.customers?.name || "Customer"}</p>
+                <div className="mt-3 flex items-center justify-between">
+                  <span className="text-muted-foreground">Outstanding balance</span>
+                  <span className="font-semibold">{formatCurrency(selectedInvoiceForPayment.outstanding_amount)}</span>
+                </div>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="payment-amount">Amount Received</Label>
+                  <Input
+                    id="payment-amount"
+                    type="number"
+                    step="0.01"
+                    value={paymentForm.amount}
+                    onChange={(e) => setPaymentForm({ ...paymentForm, amount: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="payment-date">Payment Date</Label>
+                  <Input
+                    id="payment-date"
+                    type="date"
+                    value={paymentForm.payment_date}
+                    onChange={(e) => setPaymentForm({ ...paymentForm, payment_date: e.target.value })}
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="payment-account">Deposit To</Label>
+                <Select
+                  value={paymentForm.payment_account_id}
+                  onValueChange={(value) => setPaymentForm({ ...paymentForm, payment_account_id: value })}
+                >
+                  <SelectTrigger id="payment-account">
+                    <SelectValue placeholder="Select bank or cash account" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {bankAccounts.map((account) => (
+                      <SelectItem key={account.id} value={account.id}>
+                        {account.account_name} ({account.currency})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="payment-notes">Notes</Label>
+                <Input
+                  id="payment-notes"
+                  value={paymentForm.notes}
+                  onChange={(e) => setPaymentForm({ ...paymentForm, notes: e.target.value })}
+                  placeholder="Receipt number or payment reference"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => closeReceivePaymentDialog(false)}>
+                  Cancel
+                </Button>
+                <Button
+                  onClick={() => receivePaymentMutation.mutate()}
+                  disabled={receivePaymentMutation.isPending || bankAccounts.length === 0}
+                >
+                  {receivePaymentMutation.isPending ? "Recording..." : "Record Payment"}
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

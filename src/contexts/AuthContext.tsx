@@ -3,6 +3,7 @@ import type { User as FirebaseUser } from "firebase/auth";
 import { toast } from "sonner";
 import { isFirebaseConfigured } from "@/integrations/firebase/client";
 import { authService } from "@/services/firebase/authService";
+import { companyService } from "@/services/firebase/companyService";
 
 export interface AuthSession {
   userId: string;
@@ -98,6 +99,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     } catch (error) {
       console.error("Firebase sign out failed:", error);
     } finally {
+      companyService.clearCachedMembership();
       clearAuthState();
       toast.success("Signed out successfully");
     }

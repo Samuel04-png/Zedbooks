@@ -249,6 +249,17 @@ export default function Bills() {
   const isVatRegistered = settings?.isVatRegistered || false;
   const vatRate = settings?.vatRate || 16;
 
+  const invalidateBillQueries = () => {
+    queryClient.invalidateQueries({ queryKey: ["bills"] });
+    queryClient.invalidateQueries({ queryKey: ["accounts-payable"] });
+    queryClient.invalidateQueries({ queryKey: ["accounts-payable-payments"] });
+    queryClient.invalidateQueries({ queryKey: ["vendors"] });
+    queryClient.invalidateQueries({ queryKey: ["bank-accounts"] });
+    queryClient.invalidateQueries({ queryKey: ["journal-entries"] });
+    queryClient.invalidateQueries({ queryKey: ["financial-reports"] });
+    queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+  };
+
   const subtotal = parseFloat(formData.amount) || 0;
   const vatAmount = isVatRegistered ? subtotal * (vatRate / 100) : 0;
   const total = subtotal + vatAmount;
@@ -267,10 +278,7 @@ export default function Bills() {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["bills", companyId] });
-      queryClient.invalidateQueries({ queryKey: ["accounts-payable"] });
-      queryClient.invalidateQueries({ queryKey: ["vendors"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      invalidateBillQueries();
       toast.success("Bill created successfully");
       setIsDialogOpen(false);
       setFormData({
@@ -314,11 +322,7 @@ export default function Bills() {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["bills", companyId] });
-      queryClient.invalidateQueries({ queryKey: ["accounts-payable"] });
-      queryClient.invalidateQueries({ queryKey: ["vendors"] });
-      queryClient.invalidateQueries({ queryKey: ["bank-accounts"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      invalidateBillQueries();
       toast.success("Bill payment recorded");
     },
     onError: (error) => {
@@ -344,13 +348,7 @@ export default function Bills() {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["bills", companyId] });
-      queryClient.invalidateQueries({ queryKey: ["accounts-payable"] });
-      queryClient.invalidateQueries({ queryKey: ["vendors"] });
-      queryClient.invalidateQueries({ queryKey: ["bank-accounts"] });
-      queryClient.invalidateQueries({ queryKey: ["journal-entries"] });
-      queryClient.invalidateQueries({ queryKey: ["financial-reports"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      invalidateBillQueries();
       toast.success("Bill journal entry reversed");
     },
     onError: (error) => {

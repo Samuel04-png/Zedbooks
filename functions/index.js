@@ -1933,6 +1933,32 @@ exports.createInvoice = onCall(async (request) => {
   });
 });
 
+exports.updateInvoiceDraft = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = await resolveCompanyIdFromPayload(uid, payload);
+  await assertCompanyRole(uid, companyId, COMMERCIAL_ROLES);
+  return accountingEngine.updateInvoiceDraft({
+    data: payload,
+    userId: uid,
+    companyId,
+    db,
+  });
+});
+
+exports.deleteInvoice = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const companyId = await resolveCompanyIdFromPayload(uid, payload);
+  await assertCompanyRole(uid, companyId, COMMERCIAL_ROLES);
+  return accountingEngine.deleteInvoice({
+    data: payload,
+    userId: uid,
+    companyId,
+    db,
+  });
+});
+
 exports.updateInvoiceStatus = onCall(async (request) => {
   const uid = assertAuthenticated(request);
   const payload = request.data || {};

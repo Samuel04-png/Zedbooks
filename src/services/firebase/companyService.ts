@@ -45,8 +45,14 @@ export interface CompanyUserSummary {
   updatedAt: string | null;
 }
 
-const MEMBERSHIP_CACHE_TTL_MS = 60 * 1000;
+const MEMBERSHIP_CACHE_TTL_MS = 5 * 60 * 1000;
+const ENTITY_CACHE_TTL_MS = 5 * 60 * 1000;
 const membershipCache = new Map<string, { membership: CompanyUser; expiresAt: number }>();
+const membershipRequestCache = new Map<string, Promise<CompanyUser | null>>();
+const companyCache = new Map<string, { value: Company; expiresAt: number }>();
+const companyRequestCache = new Map<string, Promise<Company | null>>();
+const settingsCache = new Map<string, { value: CompanySettings; expiresAt: number }>();
+const settingsRequestCache = new Map<string, Promise<CompanySettings | null>>();
 
 const asStringOrNull = (value: unknown): string | null => {
   if (value === null || value === undefined) return null;
@@ -71,7 +77,10 @@ const normalizeCompany = (id: string, row: Record<string, unknown>): Company => 
   businessType: asStringOrNull(row.businessType ?? row.business_type) ?? undefined,
   taxType: asStringOrNull(row.taxType ?? row.tax_type) ?? undefined,
   taxClassification: asStringOrNull(row.taxClassification ?? row.tax_classification) ?? undefined,
+  address: asStringOrNull(row.address) ?? undefined,
   tpin: asStringOrNull(row.tpin) ?? undefined,
+  registrationNumber: asStringOrNull(row.registrationNumber ?? row.registration_number) ?? undefined,
+  industryType: asStringOrNull(row.industryType ?? row.industry_type) ?? undefined,
   phone: asStringOrNull(row.phone) ?? undefined,
   email: asStringOrNull(row.email) ?? undefined,
   logoUrl: asStringOrNull(row.logoUrl ?? row.logo_url) ?? null,
@@ -96,7 +105,13 @@ const normalizeLegacyProfileMembership = (
   userId: string,
   row: Record<string, unknown>,
 ): CompanyUser | null => {
-  const companyId = asStringOrNull(row.defaultCompanyId);
+  const companyId = asStringOrNull(
+    row.defaultCompanyId
+    ?? row.companyId
+    ?? row.company_id
+    ?? row.organizationId
+    ?? row.organization_id,
+  );
   if (!companyId) return null;
 
   return {
@@ -110,6 +125,128 @@ const normalizeLegacyProfileMembership = (
   };
 };
 
+const getCachedValue = <T>(
+  cache: Map<string, { value: T; expiresAt: number }>,
+  key: string,
+): T | null => {
+  const cached = cache.get(key);
+  if (!cached) return null;
+  if (cached.expiresAt <= Date.now()) {
+    cache.delete(key);
+    return null;
+  }
+  return cached.value;
+};
+
+const setCachedValue = <T>(
+  cache: Map<string, { value: T; expiresAt: number }>,
+  key: string,
+  value: T,
+  ttlMs = ENTITY_CACHE_TTL_MS,
+) => {
+  cache.set(key, {
+    value,
+    expiresAt: Date.now() + ttlMs,
+  });
+};
+
+const setMembershipCache = (userId: string, membership: CompanyUser) => {
+  membershipCache.set(userId, {
+    membership,
+    expiresAt: Date.now() + MEMBERSHIP_CACHE_TTL_MS,
+  });
+};
+
+const clearMembershipCache = (userId: string) => {
+  membershipCache.delete(userId);
+  membershipRequestCache.delete(userId);
+};
+
+const clearCompanyCaches = (companyId: string) => {
+  companyCache.delete(companyId);
+  companyRequestCache.delete(companyId);
+  settingsCache.delete(companyId);
+  settingsRequestCache.delete(companyId);
+};
+
+const fetchPrimaryMembershipByUser = async (userId: string): Promise<CompanyUser | null> => {
+  const membershipsRef = collection(firestore, COLLECTIONS.COMPANY_USERS);
+  const userRef = doc(firestore, COLLECTIONS.USERS, userId);
+  const userSnap = await getDoc(userRef);
+  const userProfile = userSnap.exists()
+    ? (userSnap.data() as Record<string, unknown>)
+    : null;
+  const profileCompanyCandidates = [
+    userProfile?.defaultCompanyId,
+    userProfile?.companyId,
+    userProfile?.company_id,
+    userProfile?.organizationId,
+    userProfile?.organization_id,
+  ]
+    .map((value) => asStringOrNull(value))
+    .filter((value): value is string => Boolean(value));
+
+  for (const profileCompanyId of new Set(profileCompanyCandidates)) {
+    const canonicalMembershipRef = doc(
+      firestore,
+      COLLECTIONS.COMPANY_USERS,
+      `${profileCompanyId}_${userId}`,
+    );
+    const canonicalMembershipSnap = await getDoc(canonicalMembershipRef);
+
+    if (canonicalMembershipSnap.exists()) {
+      const canonicalMembership = normalizeMembership(
+        canonicalMembershipSnap.id,
+        canonicalMembershipSnap.data() as Record<string, unknown>,
+      );
+
+      if (canonicalMembership.status === "active") {
+        setMembershipCache(userId, canonicalMembership);
+        return canonicalMembership;
+      }
+    }
+  }
+
+  const candidates = [
+    query(membershipsRef, where("userId", "==", userId), where("status", "==", "active"), limit(1)),
+    query(membershipsRef, where("user_id", "==", userId), where("status", "==", "active"), limit(1)),
+    query(membershipsRef, where("userId", "==", userId), limit(1)),
+    query(membershipsRef, where("user_id", "==", userId), limit(1)),
+  ];
+
+  for (const candidate of candidates) {
+    let snapshot;
+    try {
+      snapshot = await getDocs(candidate);
+    } catch {
+      continue;
+    }
+
+    if (snapshot.empty) continue;
+
+    const membership = snapshot.docs[0];
+    const normalizedMembership = normalizeMembership(
+      membership.id,
+      membership.data() as Record<string, unknown>,
+    );
+
+    if (normalizedMembership.status === "active") {
+      setMembershipCache(userId, normalizedMembership);
+    }
+
+    return normalizedMembership;
+  }
+
+  if (!userProfile) return null;
+
+  const legacyMembership = normalizeLegacyProfileMembership(userId, userProfile);
+  if (legacyMembership?.status === "active") {
+    setMembershipCache(userId, legacyMembership);
+  }
+
+  return legacyMembership;
+};
+
 export const companyService = {
   async getPrimaryMembershipByUser(userId: string): Promise<CompanyUser | null> {
     assertFirebaseConfigured();
@@ -117,104 +254,82 @@ export const companyService = {
     if (cachedMembership && cachedMembership.expiresAt > Date.now()) {
       return cachedMembership.membership;
     }
-
-    const membershipsRef = collection(firestore, COLLECTIONS.COMPANY_USERS);
-    const userRef = doc(firestore, COLLECTIONS.USERS, userId);
-    const userSnap = await getDoc(userRef);
-    const userProfile = userSnap.exists()
-      ? (userSnap.data() as Record<string, unknown>)
-      : null;
-    const defaultCompanyId = asStringOrNull(userProfile?.defaultCompanyId);
-
-    if (defaultCompanyId) {
-      const canonicalMembershipRef = doc(
-        firestore,
-        COLLECTIONS.COMPANY_USERS,
-        `${defaultCompanyId}_${userId}`,
-      );
-      const canonicalMembershipSnap = await getDoc(canonicalMembershipRef);
-
-      if (canonicalMembershipSnap.exists()) {
-        const canonicalMembership = normalizeMembership(
-          canonicalMembershipSnap.id,
-          canonicalMembershipSnap.data() as Record<string, unknown>,
-        );
-
-        if (canonicalMembership.status === "active") {
-          membershipCache.set(userId, {
-            membership: canonicalMembership,
-            expiresAt: Date.now() + MEMBERSHIP_CACHE_TTL_MS,
-          });
-          return canonicalMembership;
-        }
-      }
+    const pendingRequest = membershipRequestCache.get(userId);
+    if (pendingRequest) {
+      return pendingRequest;
     }
 
-    const candidates = [
-      query(membershipsRef, where("userId", "==", userId), where("status", "==", "active"), limit(1)),
-      query(membershipsRef, where("user_id", "==", userId), where("status", "==", "active"), limit(1)),
-      query(membershipsRef, where("userId", "==", userId), limit(1)),
-      query(membershipsRef, where("user_id", "==", userId), limit(1)),
-    ];
-
-    for (const candidate of candidates) {
-      let snapshot;
-      try {
-        snapshot = await getDocs(candidate);
-      } catch {
-        continue;
-      }
-
-      if (snapshot.empty) continue;
-
-      const membership = snapshot.docs[0];
-      const normalizedMembership = normalizeMembership(
-        membership.id,
-        membership.data() as Record<string, unknown>,
-      );
-
-      if (normalizedMembership.status === "active") {
-        membershipCache.set(userId, {
-          membership: normalizedMembership,
-          expiresAt: Date.now() + MEMBERSHIP_CACHE_TTL_MS,
-        });
-      }
-
-      return normalizedMembership;
-    }
-
-    if (!userProfile) return null;
-
-    const legacyMembership = normalizeLegacyProfileMembership(userId, userProfile);
-    if (legacyMembership?.status === "active") {
-      membershipCache.set(userId, {
-        membership: legacyMembership,
-        expiresAt: Date.now() + MEMBERSHIP_CACHE_TTL_MS,
+    const request = fetchPrimaryMembershipByUser(userId)
+      .finally(() => {
+        membershipRequestCache.delete(userId);
       });
-    }
 
-    return legacyMembership;
+    membershipRequestCache.set(userId, request);
+    return request;
   },
 
   async getCompanyById(companyId: string): Promise<Company | null> {
     assertFirebaseConfigured();
-    const companyRef = doc(firestore, COLLECTIONS.COMPANIES, companyId);
-    const companySnap = await getDoc(companyRef);
-    if (!companySnap.exists()) return null;
-    return normalizeCompany(companySnap.id, companySnap.data() as Record<string, unknown>);
+    const cachedCompany = getCachedValue(companyCache, companyId);
+    if (cachedCompany) {
+      return cachedCompany;
+    }
+
+    const pendingRequest = companyRequestCache.get(companyId);
+    if (pendingRequest) {
+      return pendingRequest;
+    }
+
+    const request = (async () => {
+      const companyRef = doc(firestore, COLLECTIONS.COMPANIES, companyId);
+      const companySnap = await getDoc(companyRef);
+      if (!companySnap.exists()) return null;
+
+      const company = normalizeCompany(companySnap.id, companySnap.data() as Record<string, unknown>);
+      setCachedValue(companyCache, companyId, company);
+      return company;
+    })().finally(() => {
+      companyRequestCache.delete(companyId);
+    });
+
+    companyRequestCache.set(companyId, request);
+    return request;
   },
 
   async getCompanySettings(companyId: string): Promise<CompanySettings | null> {
     assertFirebaseConfigured();
-    const settingsRef = doc(firestore, COLLECTIONS.COMPANY_SETTINGS, companyId);
-    const settingsSnap = await getDoc(settingsRef);
-    if (!settingsSnap.exists()) return null;
-    return normalizeSettings(settingsSnap.id, settingsSnap.data() as Record<string, unknown>);
+    const cachedSettings = getCachedValue(settingsCache, companyId);
+    if (cachedSettings) {
+      return cachedSettings;
+    }
+
+    const pendingRequest = settingsRequestCache.get(companyId);
+    if (pendingRequest) {
+      return pendingRequest;
+    }
+
+    const request = (async () => {
+      const settingsRef = doc(firestore, COLLECTIONS.COMPANY_SETTINGS, companyId);
+      const settingsSnap = await getDoc(settingsRef);
+      if (!settingsSnap.exists()) return null;
+
+      const settings = normalizeSettings(settingsSnap.id, settingsSnap.data() as Record<string, unknown>);
+      setCachedValue(settingsCache, companyId, settings);
+      return settings;
+    })().finally(() => {
+      settingsRequestCache.delete(companyId);
+    });
+
+    settingsRequestCache.set(companyId, request);
+    return request;
   },
 
   async completeCompanySetup(input: CompanySetupInput): Promise<void> {
     assertFirebaseConfigured();
-    await callFunction<CompanySetupInput, { success: boolean; companyId: string }>("completeCompanySetup", input);
+    const response = await callFunction<CompanySetupInput, { success: boolean; companyId: string }>("completeCompanySetup", input);
+    if (response.companyId) {
+      clearCompanyCaches(response.companyId);
+    }
   },
 
   async updateCompanyLogo(companyId: string, logoUrl: string): Promise<void> {
@@ -235,17 +350,46 @@ export const companyService = {
       },
       { merge: true },
     );
+
+    const cachedCompany = getCachedValue(companyCache, companyId);
+    if (cachedCompany) {
+      setCachedValue(companyCache, companyId, {
+        ...cachedCompany,
+        logoUrl,
+      });
+    }
+
+    const cachedSettings = getCachedValue(settingsCache, companyId);
+    if (cachedSettings) {
+      setCachedValue(settingsCache, companyId, {
+        ...cachedSettings,
+        logoUrl,
+      });
+    }
   },
 
   async updateCompanyBasics(input: {
     companyId: string;
     name?: string;
     logoUrl?: string | null;
+    organizationType?: Company["organizationType"];
+    businessType?: string | null;
+    taxType?: string | null;
+    taxClassification?: string | null;
+    address?: string | null;
+    phone?: string | null;
+    email?: string | null;
+    tpin?: string | null;
+    registrationNumber?: string | null;
+    industryType?: string | null;
+    isVatRegistered?: boolean;
+    vatRate?: number | null;
   }): Promise<void> {
     assertFirebaseConfigured();
 
     const companyRef = doc(firestore, COLLECTIONS.COMPANIES, input.companyId);
     const settingsRef = doc(firestore, COLLECTIONS.COMPANY_SETTINGS, input.companyId);
+    const hasField = (field: string) => Object.prototype.hasOwnProperty.call(input, field);
 
     const companyPayload: Record<string, unknown> = {
       updatedAt: serverTimestamp(),
@@ -255,18 +399,131 @@ export const companyService = {
       updatedAt: serverTimestamp(),
     };
 
-    if (typeof input.name === "string") {
-      companyPayload.name = input.name;
-      settingsPayload.companyName = input.name;
+    if (hasField("name")) {
+      const normalizedName = typeof input.name === "string" ? input.name.trim() : "";
+      companyPayload.name = normalizedName;
+      settingsPayload.companyName = normalizedName;
     }
 
-    if (input.logoUrl !== undefined) {
+    if (hasField("logoUrl")) {
       companyPayload.logoUrl = input.logoUrl;
       settingsPayload.logoUrl = input.logoUrl;
     }
 
+    if (hasField("organizationType")) {
+      companyPayload.organizationType = input.organizationType ?? "business";
+    }
+
+    if (hasField("businessType")) {
+      companyPayload.businessType = asStringOrNull(input.businessType);
+    }
+
+    if (hasField("taxType")) {
+      companyPayload.taxType = asStringOrNull(input.taxType);
+    }
+
+    if (hasField("taxClassification")) {
+      companyPayload.taxClassification = asStringOrNull(input.taxClassification);
+    }
+
+    if (hasField("address")) {
+      companyPayload.address = asStringOrNull(input.address);
+    }
+
+    if (hasField("phone")) {
+      companyPayload.phone = asStringOrNull(input.phone);
+    }
+
+    if (hasField("email")) {
+      companyPayload.email = asStringOrNull(input.email);
+    }
+
+    if (hasField("tpin")) {
+      companyPayload.tpin = asStringOrNull(input.tpin);
+    }
+
+    if (hasField("registrationNumber")) {
+      companyPayload.registrationNumber = asStringOrNull(input.registrationNumber);
+    }
+
+    if (hasField("industryType")) {
+      companyPayload.industryType = asStringOrNull(input.industryType);
+    }
+
+    if (hasField("isVatRegistered")) {
+      settingsPayload.isVatRegistered = Boolean(input.isVatRegistered);
+    }
+
+    if (hasField("vatRate")) {
+      settingsPayload.vatRate = input.vatRate ?? null;
+    }
+
     await setDoc(companyRef, companyPayload, { merge: true });
     await setDoc(settingsRef, settingsPayload, { merge: true });
+
+    const cachedCompany = getCachedValue(companyCache, input.companyId);
+    if (cachedCompany) {
+      const nextCompany: Company = { ...cachedCompany };
+
+      if (hasField("name")) {
+        nextCompany.name = typeof input.name === "string" ? input.name.trim() : "";
+      }
+      if (hasField("logoUrl")) {
+        nextCompany.logoUrl = input.logoUrl;
+      }
+      if (hasField("organizationType")) {
+        nextCompany.organizationType = input.organizationType ?? "business";
+      }
+      if (hasField("businessType")) {
+        nextCompany.businessType = asStringOrNull(input.businessType) ?? undefined;
+      }
+      if (hasField("taxType")) {
+        nextCompany.taxType = asStringOrNull(input.taxType) ?? undefined;
+      }
+      if (hasField("taxClassification")) {
+        nextCompany.taxClassification = asStringOrNull(input.taxClassification) ?? undefined;
+      }
+      if (hasField("address")) {
+        nextCompany.address = asStringOrNull(input.address) ?? undefined;
+      }
+      if (hasField("phone")) {
+        nextCompany.phone = asStringOrNull(input.phone) ?? undefined;
+      }
+      if (hasField("email")) {
+        nextCompany.email = asStringOrNull(input.email) ?? undefined;
+      }
+      if (hasField("tpin")) {
+        nextCompany.tpin = asStringOrNull(input.tpin) ?? undefined;
+      }
+      if (hasField("registrationNumber")) {
+        nextCompany.registrationNumber = asStringOrNull(input.registrationNumber) ?? undefined;
+      }
+      if (hasField("industryType")) {
+        nextCompany.industryType = asStringOrNull(input.industryType) ?? undefined;
+      }
+
+      setCachedValue(companyCache, input.companyId, nextCompany);
+    }
+
+    const cachedSettings = getCachedValue(settingsCache, input.companyId);
+    if (cachedSettings) {
+      const nextSettings: CompanySettings = { ...cachedSettings };
+
+      if (hasField("name")) {
+        nextSettings.companyName = typeof input.name === "string" ? input.name.trim() : "";
+      }
+      if (hasField("logoUrl")) {
+        nextSettings.logoUrl = input.logoUrl;
+      }
+      if (hasField("isVatRegistered")) {
+        nextSettings.isVatRegistered = Boolean(input.isVatRegistered);
+      }
+      if (hasField("vatRate")) {
+        nextSettings.vatRate = input.vatRate ?? null;
+      }
+
+      setCachedValue(settingsCache, input.companyId, nextSettings);
+    }
   },
 
   async listCompanyUsers(companyId: string): Promise<CompanyUserSummary[]> {
@@ -304,5 +561,18 @@ export const companyService = {
   async revokeInvitation(input: { companyId: string; invitationId: string }): Promise<{ success: boolean }> {
     assertFirebaseConfigured();
     return callFunction<typeof input, { success: boolean }>("revokeInvitation", input);
+  },
+
+  clearCachedMembership(userId?: string) {
+    if (!userId) {
+      membershipCache.clear();
+      membershipRequestCache.clear();
+      companyCache.clear();
+      companyRequestCache.clear();
+      settingsCache.clear();
+      settingsRequestCache.clear();
+      return;
+    }
+    clearMembershipCache(userId);
   },
 };

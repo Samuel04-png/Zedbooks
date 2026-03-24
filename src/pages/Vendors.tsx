@@ -88,6 +88,14 @@ export default function Vendors() {
     payment_terms: "",
   });
 
+  const invalidateVendorQueries = () => {
+    queryClient.invalidateQueries({ queryKey: ["vendors"] });
+    queryClient.invalidateQueries({ queryKey: ["bills"] });
+    queryClient.invalidateQueries({ queryKey: ["purchase-orders"] });
+    queryClient.invalidateQueries({ queryKey: ["accounts-payable"] });
+    queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+  };
+
   const { data: vendors, isLoading } = useQuery({
     queryKey: ["vendors", user?.id],
     queryFn: async () => {
@@ -146,7 +154,7 @@ export default function Vendors() {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["vendors", user?.id] });
+      invalidateVendorQueries();
       toast.success("Vendor created successfully");
       resetForm();
     },
@@ -176,7 +184,7 @@ export default function Vendors() {
       );
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["vendors", user?.id] });
+      invalidateVendorQueries();
       toast.success("Vendor updated successfully");
       resetForm();
     },
@@ -193,7 +201,7 @@ export default function Vendors() {
       await deleteDoc(doc(firestore, COLLECTIONS.VENDORS, id));
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["vendors", user?.id] });
+      invalidateVendorQueries();
       toast.success("Vendor deleted successfully");
     },
     onError: (error) => {
@@ -296,7 +304,7 @@ export default function Vendors() {
       await batch.commit();
     }
 
-    queryClient.invalidateQueries({ queryKey: ["vendors", user?.id] });
+    invalidateVendorQueries();
   };
 
   const exportVendors = () => {

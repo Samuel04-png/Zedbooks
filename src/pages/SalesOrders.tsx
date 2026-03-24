@@ -100,6 +100,12 @@ export default function SalesOrders() {
     notes: "",
   });
 
+  const invalidateSalesOrderQueries = () => {
+    queryClient.invalidateQueries({ queryKey: ["sales-orders"] });
+    queryClient.invalidateQueries({ queryKey: ["customers"] });
+    queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+  };
+
   const { data: orders, isLoading } = useQuery({
     queryKey: ["sales-orders", user?.id],
     queryFn: async () => {
@@ -215,7 +221,7 @@ export default function SalesOrders() {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["sales-orders", user?.id] });
+      invalidateSalesOrderQueries();
       toast.success("Sales order created successfully");
       setIsDialogOpen(false);
       setFormData({ customer_id: "", order_type: "sale", notes: "" });

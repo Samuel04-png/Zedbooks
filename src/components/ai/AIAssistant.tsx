@@ -25,6 +25,16 @@ export function AIAssistant() {
     }, [messages, isOpen]);
 
     useEffect(() => {
+        if (!user) {
+            setCompanyId(undefined);
+        }
+    }, [user]);
+
+    useEffect(() => {
+        if (!isOpen) {
+            return;
+        }
+
         async function loadCompany() {
             if (!user) {
                 setCompanyId(undefined);
@@ -33,14 +43,14 @@ export function AIAssistant() {
 
             try {
                 const membership = await companyService.getPrimaryMembershipByUser(user.id);
-                if (membership) setCompanyId(membership.companyId);
+                setCompanyId(membership?.companyId);
             } catch (error) {
                 console.error("Unable to resolve AI company context:", error);
                 setCompanyId(undefined);
             }
         }
         loadCompany();
-    }, [user]);
+    }, [isOpen, user]);
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();

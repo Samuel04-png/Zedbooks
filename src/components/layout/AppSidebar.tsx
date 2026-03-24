@@ -41,6 +41,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Logo } from "@/components/common/Logo";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { preloadRoute } from "@/lib/pagePreloaders";
 
 interface NavItem {
   title: string;
@@ -181,9 +182,13 @@ export function AppSidebar() {
     }
   };
 
+  const handleLinkIntent = (href: string) => {
+    preloadRoute(href);
+  };
+
   return (
-    <Sidebar className="border-r border-sidebar-border">
-      <SidebarHeader className="border-b border-sidebar-border p-4">
+    <Sidebar className="border-r border-sidebar-border/80 bg-sidebar/95 backdrop-blur">
+      <SidebarHeader className="border-b border-sidebar-border/70 p-4">
         <Link to="/dashboard" className="flex items-center gap-3" onClick={handleLinkClick}>
           <Logo variant="full" size="lg" />
         </Link>
@@ -204,7 +209,7 @@ export function AppSidebar() {
                   className="group/collapsible"
                 >
                   <SidebarGroup className="p-0">
-                    <CollapsibleTrigger className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm font-medium text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors">
+                    <CollapsibleTrigger className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-sm font-medium text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent/80 hover:text-sidebar-foreground">
                       <span>{section.title}</span>
                       <ChevronDown className="h-4 w-4 transition-transform group-data-[state=open]/collapsible:rotate-180" />
                     </CollapsibleTrigger>
@@ -225,7 +230,14 @@ export function AppSidebar() {
                                       : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
                                   )}
                                 >
-                                  <Link to={item.href} onClick={handleLinkClick} className="flex items-center gap-2">
+                                  <Link
+                                    to={item.href}
+                                    onClick={handleLinkClick}
+                                    onMouseEnter={() => handleLinkIntent(item.href)}
+                                    onFocus={() => handleLinkIntent(item.href)}
+                                    onTouchStart={() => handleLinkIntent(item.href)}
+                                    className="flex items-center gap-2"
+                                  >
                                     <item.icon className={cn("h-4 w-4", isActive ? "text-primary-foreground" : "")} />
                                     <span>{item.title}</span>
                                   </Link>

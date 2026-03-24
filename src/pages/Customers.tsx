@@ -109,6 +109,15 @@ export default function Customers() {
     grant_reference: "",
   });
 
+  const invalidateCustomerQueries = () => {
+    queryClient.invalidateQueries({ queryKey: ["customers"] });
+    queryClient.invalidateQueries({ queryKey: ["invoices"] });
+    queryClient.invalidateQueries({ queryKey: ["sales-orders"] });
+    queryClient.invalidateQueries({ queryKey: ["estimates"] });
+    queryClient.invalidateQueries({ queryKey: ["accounts-receivable"] });
+    queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+  };
+
   const { data: customers, isLoading } = useQuery({
     queryKey: ["customers", user?.id],
     queryFn: async () => {
@@ -167,7 +176,7 @@ export default function Customers() {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["customers", user?.id] });
+      invalidateCustomerQueries();
       toast.success("Customer created successfully");
       resetForm();
     },
@@ -196,7 +205,7 @@ export default function Customers() {
       );
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["customers", user?.id] });
+      invalidateCustomerQueries();
       toast.success("Customer updated successfully");
       resetForm();
     },
@@ -213,7 +222,7 @@ export default function Customers() {
       await deleteDoc(doc(firestore, COLLECTIONS.CUSTOMERS, id));
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["customers", user?.id] });
+      invalidateCustomerQueries();
       toast.success("Customer deleted successfully");
     },
     onError: (error) => {
@@ -302,7 +311,7 @@ export default function Customers() {
       await batch.commit();
     }
 
-    queryClient.invalidateQueries({ queryKey: ["customers", user?.id] });
+    invalidateCustomerQueries();
     toast.success(`Imported ${data.length} customers`);
   };
 

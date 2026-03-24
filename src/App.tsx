@@ -10,11 +10,11 @@ import { LoadingState } from "@/components/ui/LoadingState";
 import { AppLayout } from "./components/layout/AppLayout";
 import { ProtectedRoute } from "./components/layout/ProtectedRoute";
 import { RoleProtectedRoute } from "./components/layout/RoleProtectedRoute";
-import Auth from "./pages/Auth";
-import AcceptInvitation from "./pages/AcceptInvitation";
-import NotFound from "./pages/NotFound";
-import CompanySetup from "./pages/CompanySetup";
-import Landing from "./pages/Landing";
+const Auth = lazy(() => import("./pages/Auth"));
+const AcceptInvitation = lazy(() => import("./pages/AcceptInvitation"));
+const NotFound = lazy(() => import("./pages/NotFound"));
+const CompanySetup = lazy(() => import("./pages/CompanySetup"));
+const Landing = lazy(() => import("./pages/Landing"));
 
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Invoices = lazy(() => import("./pages/Invoices"));
@@ -68,9 +68,11 @@ const ChartOfAccounts = lazy(() => import("./pages/ChartOfAccounts"));
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      staleTime: 1000 * 60 * 5, // 5 minutes
-      retry: 2,
+      staleTime: 1000 * 60 * 10,
+      gcTime: 1000 * 60 * 30,
+      retry: 1,
       refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
     },
     mutations: {
       retry: 1,
@@ -79,8 +81,19 @@ const queryClient = new QueryClient({
 });
 
 const lazyPageFallback = (
-  <div className="py-10">
-    <LoadingState message="Loading page..." />
+  <div className="space-y-6 py-2 animate-pulse">
+    <div className="space-y-3">
+      <div className="h-9 w-56 rounded-xl bg-muted/70" />
+      <div className="h-4 w-80 max-w-full rounded bg-muted/50" />
+    </div>
+    <div className="grid gap-4 md:grid-cols-3">
+      <div className="h-28 rounded-2xl border bg-card/70" />
+      <div className="h-28 rounded-2xl border bg-card/70" />
+      <div className="h-28 rounded-2xl border bg-card/70" />
+    </div>
+    <div className="rounded-2xl border bg-card/80 p-4">
+      <LoadingState message="Loading page..." />
+    </div>
   </div>
 );
 
@@ -97,14 +110,15 @@ const App = () => (
         <BrowserRouter basename={import.meta.env.BASE_URL}>
           <AuthProvider>
             <Routes>
-              <Route path="/" element={<Landing />} />
-              <Route path="/auth" element={<Auth />} />
-              <Route path="/accept-invitation" element={<AcceptInvitation />} />
-              <Route path="/setup" element={<ProtectedRoute><CompanySetup /></ProtectedRoute>} />
+              <Route path="/" element={withPageFallback(<Landing />)} />
+              <Route path="/auth" element={withPageFallback(<Auth />)} />
+              <Route path="/accept-invitation" element={withPageFallback(<AcceptInvitation />)} />
+              <Route path="/setup" element={<ProtectedRoute>{withPageFallback(<CompanySetup />)}</ProtectedRoute>} />
 
               <Route path="/dashboard" element={<ProtectedRoute><AppLayout>{withPageFallback(<Dashboard />)}</AppLayout></ProtectedRoute>} />
               <Route path="/invoices" element={<ProtectedRoute><AppLayout><RoleProtectedRoute>{withPageFallback(<Invoices />)}</RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/invoices/new" element={<ProtectedRoute><AppLayout><RoleProtectedRoute>{withPageFallback(<NewInvoice />)}</RoleProtectedRoute></AppLayout></ProtectedRoute>} />
+              <Route path="/invoices/:id/edit" element={<ProtectedRoute><AppLayout><RoleProtectedRoute>{withPageFallback(<NewInvoice />)}</RoleProtectedRoute></AppLayout></ProtectedRoute>} />
 
               <Route path="/customers" element={<ProtectedRoute><AppLayout><RoleProtectedRoute>{withPageFallback(<Customers />)}</RoleProtectedRoute></AppLayout></ProtectedRoute>} />
               <Route path="/estimates" element={<ProtectedRoute><AppLayout><RoleProtectedRoute>{withPageFallback(<Estimates />)}</RoleProtectedRoute></AppLayout></ProtectedRoute>} />
@@ -154,7 +168,7 @@ const App = () => (
               <Route path="/opening-balances" element={<ProtectedRoute><AppLayout><RoleProtectedRoute allowedRoles={["super_admin", "admin", "financial_manager", "accountant"]}>{withPageFallback(<OpeningBalances />)}</RoleProtectedRoute></AppLayout></ProtectedRoute>} />
 
               {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
-              <Route path="*" element={<NotFound />} />
+              <Route path="*" element={withPageFallback(<NotFound />)} />
             </Routes>
           </AuthProvider>
         </BrowserRouter>

@@ -88,7 +88,18 @@ export default function AccountsPayable() {
     "assistant_accountant",
   ].includes(userRole || "");
 
-  const { data: bills = [], isLoading, refetch } = useQuery({
+  const invalidatePayableQueries = () => {
+    queryClient.invalidateQueries({ queryKey: ["accounts-payable"] });
+    queryClient.invalidateQueries({ queryKey: ["accounts-payable-payments"] });
+    queryClient.invalidateQueries({ queryKey: ["bills"] });
+    queryClient.invalidateQueries({ queryKey: ["vendors"] });
+    queryClient.invalidateQueries({ queryKey: ["bank-accounts"] });
+    queryClient.invalidateQueries({ queryKey: ["journal-entries"] });
+    queryClient.invalidateQueries({ queryKey: ["financial-reports"] });
+    queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+  };
+
+  const { data: bills = [], isLoading } = useQuery({
     queryKey: ["accounts-payable", startDate, endDate, user?.id],
     queryFn: async () => {
       if (!user) return [] as BillRecord[];
@@ -259,14 +270,7 @@ export default function AccountsPayable() {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["accounts-payable"] });
-      queryClient.invalidateQueries({ queryKey: ["accounts-payable-payments"] });
-      queryClient.invalidateQueries({ queryKey: ["bills"] });
-      queryClient.invalidateQueries({ queryKey: ["vendors"] });
-      queryClient.invalidateQueries({ queryKey: ["bank-accounts"] });
-      queryClient.invalidateQueries({ queryKey: ["journal-entries"] });
-      queryClient.invalidateQueries({ queryKey: ["financial-reports"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      invalidatePayableQueries();
       toast.success("Bill payment journal entry reversed");
     },
     onError: (error) => {
@@ -335,7 +339,7 @@ export default function AccountsPayable() {
       });
     }
 
-    refetch();
+    invalidatePayableQueries();
     toast.success("Bills imported successfully");
   };
 

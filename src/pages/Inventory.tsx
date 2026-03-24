@@ -55,6 +55,12 @@ const Inventory = () => {
     reference_number: "",
     notes: "",
   });
+  const invalidateInventoryQueries = () => {
+    queryClient.invalidateQueries({ queryKey: ["inventory-items"] });
+    queryClient.invalidateQueries({ queryKey: ["products"] });
+    queryClient.invalidateQueries({ queryKey: ["financial-reports"] });
+    queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+  };
 
   const { data: companyId } = useQuery({
     queryKey: ["inventory-company-id", user?.id],
@@ -158,7 +164,7 @@ const Inventory = () => {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["inventory-items", companyId] });
+      invalidateInventoryQueries();
       toast.success("Item added successfully");
       setIsAddDialogOpen(false);
       setNewItem({
@@ -232,8 +238,7 @@ const Inventory = () => {
       await batch.commit();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["inventory-items", companyId] });
-      queryClient.invalidateQueries({ queryKey: ["products"] });
+      invalidateInventoryQueries();
       toast.success("Stock movement recorded");
       setIsMovementDialogOpen(false);
       setSelectedItem(null);

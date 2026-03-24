@@ -295,6 +295,14 @@ export default function Expenses() {
     return matchByNames(["bank"]) || paymentAccounts[0].id;
   };
 
+  const invalidateExpenseQueries = () => {
+    queryClient.invalidateQueries({ queryKey: ["expenses"] });
+    queryClient.invalidateQueries({ queryKey: ["bank-accounts"] });
+    queryClient.invalidateQueries({ queryKey: ["journal-entries"] });
+    queryClient.invalidateQueries({ queryKey: ["financial-reports"] });
+    queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+  };
+
   const createMutation = useMutation({
     mutationFn: async (data: ExpenseFormData) => {
       if (!companyId || !user) throw new Error("Not authenticated");
@@ -324,9 +332,7 @@ export default function Expenses() {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["expenses", companyId] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
-      queryClient.invalidateQueries({ queryKey: ["bank-accounts"] });
+      invalidateExpenseQueries();
       toast.success("Expense recorded successfully");
       resetForm();
     },
@@ -361,7 +367,7 @@ export default function Expenses() {
       return id;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["expenses", companyId] });
+      invalidateExpenseQueries();
       toast.success("Expense updated successfully");
       resetForm();
     },
@@ -383,11 +389,7 @@ export default function Expenses() {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["expenses", companyId] });
-      queryClient.invalidateQueries({ queryKey: ["bank-accounts"] });
-      queryClient.invalidateQueries({ queryKey: ["journal-entries"] });
-      queryClient.invalidateQueries({ queryKey: ["financial-reports"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      invalidateExpenseQueries();
       toast.success("Expense journal entry reversed");
     },
     onError: (error) => {
@@ -422,8 +424,7 @@ export default function Expenses() {
       );
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["expenses", companyId] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      invalidateExpenseQueries();
       toast.success("Expense removed from active list");
     },
     onError: (error) => {
@@ -634,9 +635,7 @@ export default function Expenses() {
       });
     }
 
-    queryClient.invalidateQueries({ queryKey: ["expenses", companyId] });
-    queryClient.invalidateQueries({ queryKey: ["dashboard"] });
-    queryClient.invalidateQueries({ queryKey: ["bank-accounts"] });
+    invalidateExpenseQueries();
     toast.success(`Imported ${validRows.length} expenses`);
   };
 

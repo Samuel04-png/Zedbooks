@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { format } from "date-fns";
-import { MoreHorizontal, Plus, Search } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Download, FilePenLine, MoreHorizontal, Plus, Search, Send, Trash2 } from "lucide-react";
+import { Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { collection, documentId, getDocs, query, where } from "firebase/firestore";
 import { Badge } from "@/components/ui/badge";
@@ -41,8 +41,16 @@ interface InvoiceRecord {
   customerName: string;
   total: number;
   amountPaid: number;
+  balanceDue: number;
   status: string;
   journal_entry_id: string | null;
+}
+
+interface InvoiceLineItemRecord {
+  description: string;
+  quantity: number;
+  unitPrice: number;
+  lineTotal: number;
 }
 
 const MANUAL_STATUS_OPTIONS = [
@@ -75,9 +83,17 @@ const toDateString = (value: unknown): string => {
 
 const normalizeStatus = (status: string) => status.trim().toLowerCase();
 
+const escapeHtml = (value: string) => value
+  .replace(/&/g, "&amp;")
+  .replace(/</g, "&lt;")
+  .replace(/>/g, "&gt;")
+  .replace(/\"/g, "&quot;")
+  .replace(/'/g, "&#39;");
+
 export default function Invoices() {
   const [searchQuery, setSearchQuery] = useState("");
   const { user } = useAuth();
+  const navigate = useNavigate();
   const { data: userRole } = useUserRole();
   const queryClient = useQueryClient();
   const isMobile = useIsMobile();
@@ -98,6 +114,28 @@ export default function Invoices() {
     "bookkeeper",
     "cashier",
   ].includes(userRole || "");
+
+  const invalidateInvoiceQueries = () => {
+    queryClient.invalidateQueries({ queryKey: ["invoices"] });
+    queryClient.invalidateQueries({ queryKey: ["accounts-receivable"] });
+    queryClient.invalidateQueries({ queryKey: ["customers"] });
+    queryClient.invalidateQueries({ queryKey: ["sales-orders"] });
+    queryClient.invalidateQueries({ queryKey: ["estimates"] });
+    queryClient.invalidateQueries({ queryKey: ["bank-accounts"] });
+    queryClient.invalidateQueries({ queryKey: ["journal-entries"] });
+    queryClient.invalidateQueries({ queryKey: ["financial-reports"] });
+    queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+  };
+
+  const { data: companyId } = useQuery({
+    queryKey: ["invoice-actions-company-id", user?.id],
+    queryFn: async () => {
+      if (!user) return null;
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      return membership?.companyId ?? null;
+    },
+    enabled: Boolean(user),
+  });
 
   const { data: invoices, isLoading } = useQuery({
     queryKey: ["invoices", user?.id],
@@ -124,6 +162,11 @@ export default function Invoices() {
           customerName: "-",
           total: Number(row.totalAmount ?? row.total_amount ?? row.total ?? 0),
           amountPaid: Number(row.amountPaid ?? row.amount_paid ?? 0),
+          balanceDue: Math.max(
+            Number(row.totalAmount ?? row.total_amount ?? row.total ?? 0)
+            - Number(row.amountPaid ?? row.amount_paid ?? 0),
+            0,
+          ),
           status: String(row.status ?? "draft"),
           journal_entry_id: (row.journalEntryId ?? row.journal_entry_id ?? null) as string | null,
         } satisfies InvoiceRecord;
@@ -180,13 +223,7 @@ export default function Invoices() {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["invoices", user?.id] });
-      queryClient.invalidateQueries({ queryKey: ["accounts-receivable"] });
-      queryClient.invalidateQueries({ queryKey: ["customers"] });
-      queryClient.invalidateQueries({ queryKey: ["bank-accounts"] });
-      queryClient.invalidateQueries({ queryKey: ["journal-entries"] });
-      queryClient.invalidateQueries({ queryKey: ["financial-reports"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      invalidateInvoiceQueries();
       toast.success("Invoice journal entry reversed");
     },
     onError: (error) => {
@@ -208,15 +245,191 @@ export default function Invoices() {
       });
     },
     onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ["invoices", user?.id] });
-      queryClient.invalidateQueries({ queryKey: ["accounts-receivable"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      invalidateInvoiceQueries();
       toast.success(`Invoice ${variables.invoice.invoiceNumber} updated to ${variables.status}`);
     },
     onError: (error) => {
       toast.error(`Failed to update invoice status: ${error.message}`);
     },
   });
+
+  const deleteInvoiceMutation = useMutation({
+    mutationFn: async (invoice: InvoiceRecord) => {
+      if (!user) throw new Error("Not authenticated");
+
+      const membership = await companyService.getPrimaryMembershipByUser(user.id);
+      if (!membership?.companyId) throw new Error("Company context not found");
+
+      return accountingService.deleteInvoice({
+        companyId: membership.companyId,
+        invoiceId: invoice.id,
+      });
+    },
+    onSuccess: (_, invoice) => {
+      invalidateInvoiceQueries();
+      toast.success(`Invoice ${invoice.invoiceNumber} deleted`);
+    },
+    onError: (error) => {
+      toast.error(`Failed to delete invoice: ${error.message}`);
+    },
+  });
+
+  const formatCurrency = (amount: number) => new Intl.NumberFormat("en-ZM", {
+    style: "currency",
+    currency: "ZMW",
+  }).format(amount);
+
+  const buildInvoiceDownloadMarkup = (
+    invoice: InvoiceRecord,
+    lineItems: InvoiceLineItemRecord[],
+    company: Awaited<ReturnType<typeof companyService.getCompanyById>>,
+  ) => {
+    const subtotal = lineItems.reduce((sum, line) => sum + line.lineTotal, 0);
+    const taxAmount = Math.max(invoice.total - subtotal, 0);
+    const notesHtml = "";
+
+    return `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>${escapeHtml(invoice.invoiceNumber)}</title>
+    <style>
+      body { font-family: Arial, sans-serif; color: #0f172a; margin: 0; padding: 32px; background: #f8fafc; }
+      .page { max-width: 960px; margin: 0 auto; background: white; padding: 40px; border-radius: 24px; box-shadow: 0 20px 50px rgba(15, 23, 42, 0.08); }
+      .header { display: flex; justify-content: space-between; gap: 24px; align-items: flex-start; margin-bottom: 32px; }
+      .title { font-size: 34px; font-weight: 700; margin: 0 0 8px; }
+      .muted { color: #475569; font-size: 14px; line-height: 1.6; }
+      .pill { display: inline-block; padding: 6px 12px; border-radius: 999px; background: #e2e8f0; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; }
+      .section-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; margin-bottom: 28px; }
+      .card { border: 1px solid #e2e8f0; border-radius: 18px; padding: 18px; }
+      .card h3 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: #64748b; }
+      table { width: 100%; border-collapse: collapse; margin-top: 24px; }
+      th, td { padding: 14px 10px; border-bottom: 1px solid #e2e8f0; text-align: left; vertical-align: top; }
+      th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: #64748b; }
+      .right { text-align: right; }
+      .summary { margin-top: 24px; margin-left: auto; width: 320px; }
+      .summary-row { display: flex; justify-content: space-between; padding: 8px 0; }
+      .summary-total { font-size: 18px; font-weight: 700; border-top: 2px solid #cbd5e1; margin-top: 8px; padding-top: 14px; }
+      .footer { margin-top: 36px; font-size: 13px; color: #64748b; }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <div class="header">
+        <div>
+          <p class="title">Invoice</p>
+          <div class="muted">
+            <div><strong>${escapeHtml(company?.name || "Your Company")}</strong></div>
+            <div>${escapeHtml(company?.email || "-")}</div>
+            <div>${escapeHtml(company?.phone || "-")}</div>
+            <div>${escapeHtml(company?.address || "-")}</div>
+            <div>TPIN: ${escapeHtml(company?.tpin || "-")}</div>
+          </div>
+        </div>
+        <div style="text-align:right;">
+          <span class="pill">${escapeHtml(invoice.status)}</span>
+          <div class="muted" style="margin-top:12px;">
+            <div><strong>Invoice #</strong> ${escapeHtml(invoice.invoiceNumber)}</div>
+            <div><strong>Invoice Date</strong> ${escapeHtml(invoice.invoiceDate ? format(new Date(invoice.invoiceDate), "dd MMM yyyy") : "-")}</div>
+            <div><strong>Due Date</strong> ${escapeHtml(invoice.dueDate ? format(new Date(invoice.dueDate), "dd MMM yyyy") : "-")}</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-grid">
+        <div class="card">
+          <h3>Bill To</h3>
+          <div><strong>${escapeHtml(invoice.customerName || "Customer")}</strong></div>
+        </div>
+        <div class="card">
+          <h3>Account Summary</h3>
+          <div class="summary-row"><span>Total</span><strong>${escapeHtml(formatCurrency(invoice.total))}</strong></div>
+          <div class="summary-row"><span>Paid</span><strong>${escapeHtml(formatCurrency(invoice.amountPaid))}</strong></div>
+          <div class="summary-row"><span>Balance Due</span><strong>${escapeHtml(formatCurrency(invoice.balanceDue))}</strong></div>
+        </div>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Description</th>
+            <th class="right">Qty</th>
+            <th class="right">Rate</th>
+            <th class="right">Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${lineItems.map((line) => `
+            <tr>
+              <td>${escapeHtml(line.description || "-")}</td>
+              <td class="right">${escapeHtml(line.quantity.toFixed(2))}</td>
+              <td class="right">${escapeHtml(formatCurrency(line.unitPrice))}</td>
+              <td class="right">${escapeHtml(formatCurrency(line.lineTotal))}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+
+      <div class="summary">
+        <div class="summary-row"><span>Subtotal</span><span>${escapeHtml(formatCurrency(subtotal))}</span></div>
+        <div class="summary-row"><span>Tax</span><span>${escapeHtml(formatCurrency(taxAmount))}</span></div>
+        <div class="summary-row summary-total"><span>Total</span><span>${escapeHtml(formatCurrency(invoice.total))}</span></div>
+      </div>
+
+      ${notesHtml}
+
+      <div class="footer">
+        Generated from ZedBooks on ${escapeHtml(format(new Date(), "dd MMM yyyy HH:mm"))}
+      </div>
+    </div>
+  </body>
+</html>`;
+  };
+
+  const downloadInvoiceDocument = async (invoice: InvoiceRecord) => {
+    if (!user || !companyId) {
+      throw new Error("Company context not found");
+    }
+
+    const downloadWindow = window.open("", "_blank", "noopener,noreferrer,width=1024,height=900");
+    if (!downloadWindow) {
+      throw new Error("Allow pop-ups to download invoices.");
+    }
+
+    downloadWindow.document.write("<p style=\"font-family: Arial, sans-serif; padding: 24px;\">Preparing invoice...</p>");
+    downloadWindow.document.close();
+
+    try {
+      const [company, invoiceItemsSnapshot] = await Promise.all([
+        companyService.getCompanyById(companyId),
+        getDocs(query(collection(firestore, COLLECTIONS.INVOICE_ITEMS), where("invoiceId", "==", invoice.id))),
+      ]);
+
+      const lineItems = invoiceItemsSnapshot.docs.map((docSnap) => {
+        const row = docSnap.data() as Record<string, unknown>;
+        const quantity = Number(row.quantity ?? 1);
+        const unitPrice = Number(row.unitPrice ?? row.unit_price ?? 0);
+        return {
+          description: String(row.description ?? ""),
+          quantity,
+          unitPrice,
+          lineTotal: Number(row.lineTotal ?? row.line_total ?? quantity * unitPrice),
+        } satisfies InvoiceLineItemRecord;
+      });
+
+      const markup = buildInvoiceDownloadMarkup(invoice, lineItems, company);
+      downloadWindow.document.open();
+      downloadWindow.document.write(markup);
+      downloadWindow.document.close();
+      window.setTimeout(() => {
+        downloadWindow.focus();
+        downloadWindow.print();
+      }, 350);
+    } catch (error) {
+      downloadWindow.close();
+      throw error;
+    }
+  };
 
   const getStatusVariant = (status: string) => {
     switch (normalizeStatus(status)) {
@@ -259,13 +472,44 @@ export default function Invoices() {
     reverseInvoiceMutation.mutate(invoice);
   };
 
+  const canEditInvoice = (invoice: InvoiceRecord) => (
+    canManageInvoices
+    && normalizeStatus(invoice.status || "draft") === "draft"
+    && !invoice.journal_entry_id
+    && Number(invoice.amountPaid || 0) <= 0.001
+  );
+
+  const canDeleteInvoice = (invoice: InvoiceRecord) => canEditInvoice(invoice);
+
+  const canSendInvoice = (invoice: InvoiceRecord) => (
+    canManageInvoices
+    && normalizeStatus(invoice.status || "draft") === "draft"
+    && Number(invoice.amountPaid || 0) <= 0.001
+  );
+
+  const handleDeleteInvoice = (invoice: InvoiceRecord) => {
+    if (!canDeleteInvoice(invoice)) {
+      toast.error("Only unpaid draft invoices can be deleted.");
+      return;
+    }
+    if (!confirm(`Delete invoice ${invoice.invoiceNumber}? This cannot be undone.`)) {
+      return;
+    }
+    deleteInvoiceMutation.mutate(invoice);
+  };
+
+  const handleDownloadInvoice = async (invoice: InvoiceRecord) => {
+    try {
+      await downloadInvoiceDocument(invoice);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to download invoice.";
+      toast.error(message);
+    }
+  };
+
   const renderActions = (invoice: InvoiceRecord, fullWidth = false) => {
     const statusOptions = getStatusOptions(invoice);
     const showReverseAction = Boolean(invoice.journal_entry_id) && canReversePostedEntries;
-
-    if (!statusOptions.length && !showReverseAction) {
-      return <span className="text-sm text-muted-foreground">No actions</span>;
-    }
 
     return (
       <DropdownMenu>
@@ -280,8 +524,37 @@ export default function Invoices() {
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-52">
+          <DropdownMenuLabel>Invoice actions</DropdownMenuLabel>
+          <DropdownMenuItem
+            disabled={!canEditInvoice(invoice)}
+            onSelect={() => navigate(`/invoices/${invoice.id}/edit`)}
+          >
+            <FilePenLine className="mr-2 h-4 w-4" />
+            Edit
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            disabled={!canSendInvoice(invoice) || updateInvoiceStatusMutation.isPending}
+            onSelect={() => updateInvoiceStatusMutation.mutate({ invoice, status: "Unpaid" })}
+          >
+            <Send className="mr-2 h-4 w-4" />
+            Send
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => handleDownloadInvoice(invoice)}>
+            <Download className="mr-2 h-4 w-4" />
+            Save & Download
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            disabled={!canDeleteInvoice(invoice) || deleteInvoiceMutation.isPending}
+            onSelect={() => handleDeleteInvoice(invoice)}
+            className="text-destructive focus:text-destructive"
+          >
+            <Trash2 className="mr-2 h-4 w-4" />
+            Delete
+          </DropdownMenuItem>
+
           {statusOptions.length > 0 && (
             <>
+              <DropdownMenuSeparator />
               <DropdownMenuLabel>Change status</DropdownMenuLabel>
               {statusOptions.map((option) => (
                 <DropdownMenuItem
@@ -390,6 +663,16 @@ export default function Invoices() {
                     <span className="text-sm font-medium text-muted-foreground">Total Amount</span>
                     <span className="text-lg font-bold text-primary">ZMW {invoice.total.toFixed(2)}</span>
                   </div>
+                  <div className="grid grid-cols-2 gap-2 text-sm">
+                    <div>
+                      <p className="text-xs text-muted-foreground">Paid</p>
+                      <p>ZMW {invoice.amountPaid.toFixed(2)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">Balance</p>
+                      <p className="font-medium">ZMW {invoice.balanceDue.toFixed(2)}</p>
+                    </div>
+                  </div>
                   <div className="pt-2">
                     {renderActions(invoice, true)}
                   </div>
@@ -410,6 +693,8 @@ export default function Invoices() {
                   <TableHead>Customer</TableHead>
                   <TableHead>Due Date</TableHead>
                   <TableHead className="text-right">Amount</TableHead>
+                  <TableHead className="text-right">Paid</TableHead>
+                  <TableHead className="text-right">Balance</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
@@ -426,6 +711,8 @@ export default function Invoices() {
                       {invoice.dueDate ? format(new Date(invoice.dueDate), "dd MMM yyyy") : "-"}
                     </TableCell>
                     <TableCell className="text-right font-medium">ZMW {invoice.total.toFixed(2)}</TableCell>
+                    <TableCell className="text-right">ZMW {invoice.amountPaid.toFixed(2)}</TableCell>
+                    <TableCell className="text-right font-medium">ZMW {invoice.balanceDue.toFixed(2)}</TableCell>
                     <TableCell>
                       <Badge variant={getStatusVariant(invoice.status || "draft")}>{invoice.status}</Badge>
                     </TableCell>
@@ -438,7 +725,7 @@ export default function Invoices() {
                 ))}
                 {filteredInvoices?.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-center text-muted-foreground">
+                    <TableCell colSpan={9} className="text-center text-muted-foreground">
                       No invoices found
                     </TableCell>
                   </TableRow>

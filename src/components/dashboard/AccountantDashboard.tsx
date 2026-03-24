@@ -5,7 +5,7 @@ import { formatZMW } from "@/utils/zambianTaxCalculations";
 import { useAuth } from "@/contexts/AuthContext";
 import { accountingService, dashboardService } from "@/services/firebase";
 import { COLLECTIONS } from "@/services/firebase/collectionNames";
-import { readNumber, readString } from "@/components/dashboard/dashboardDataUtils";
+import { isInvoicePendingStatus, readString } from "@/components/dashboard/dashboardDataUtils";
 
 export function AccountantDashboard() {
   const { user } = useAuth();
@@ -41,10 +41,7 @@ export function AccountantDashboard() {
         totalExpenses: liveMetrics.monthlyExpenses,
         outstandingPayables: liveMetrics.outstandingAccountsPayable,
         cashBalance: liveMetrics.bankDefaultBalance,
-        pendingInvoices: invoices.filter((i) => {
-          const status = readString(i, ["status"]).toLowerCase();
-          return !["paid", "cancelled", "rejected"].includes(status);
-        }).length,
+        pendingInvoices: invoices.filter((i) => isInvoicePendingStatus(readString(i, ["status"]))).length,
         bankAccounts,
       };
     },

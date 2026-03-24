@@ -46,3 +46,17 @@ export const readBoolean = (row: Row, keys: string[], fallback = false): boolean
 export const readArray = <T = unknown>(value: unknown): T[] => {
   return Array.isArray(value) ? (value as T[]) : [];
 };
+
+const normalizeStatusValue = (value: string) => value.trim().toLowerCase();
+
+export const isInvoiceDraftStatus = (status: string) => normalizeStatusValue(status) === "draft";
+
+export const isInvoicePendingStatus = (status: string) => {
+  const normalized = normalizeStatusValue(status);
+  return ["sent", "unpaid", "partially paid", "overdue", "pending"].includes(normalized);
+};
+
+export const isInvoiceClosedStatus = (status: string) => {
+  const normalized = normalizeStatusValue(status);
+  return ["paid", "cancelled", "canceled", "rejected", "void", "voided"].includes(normalized);
+};

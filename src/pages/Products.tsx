@@ -132,6 +132,11 @@ export default function Products() {
   const [editingProduct, setEditingProduct] = useState<Partial<Product> | null>(null);
   const [editingPriceList, setEditingPriceList] = useState<Partial<PriceList> | null>(null);
   const queryClient = useQueryClient();
+  const invalidateProductQueries = () => {
+    queryClient.invalidateQueries({ queryKey: ["products"] });
+    queryClient.invalidateQueries({ queryKey: ["inventory-items"] });
+    queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+  };
   const { data: companyId } = useQuery({
     queryKey: ["products-company", user?.id],
     queryFn: async () => {
@@ -290,8 +295,7 @@ export default function Products() {
       await batch.commit();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["products"] });
-      queryClient.invalidateQueries({ queryKey: ["inventory-items"] });
+      invalidateProductQueries();
       setIsProductDialogOpen(false);
       setEditingProduct(null);
       toast.success(editingProduct?.id ? "Product updated" : "Product created");
@@ -312,8 +316,7 @@ export default function Products() {
       await batch.commit();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["products"] });
-      queryClient.invalidateQueries({ queryKey: ["inventory-items"] });
+      invalidateProductQueries();
       toast.success("Product deleted");
     },
     onError: (error: Error) => {

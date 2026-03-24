@@ -5,7 +5,7 @@ import { formatZMW } from "@/utils/zambianTaxCalculations";
 import { useAuth } from "@/contexts/AuthContext";
 import { accountingService, dashboardService } from "@/services/firebase";
 import { COLLECTIONS } from "@/services/firebase/collectionNames";
-import { readNumber, readString } from "@/components/dashboard/dashboardDataUtils";
+import { isInvoicePendingStatus, readString } from "@/components/dashboard/dashboardDataUtils";
 
 export function FinanceOfficerDashboard() {
   const { user } = useAuth();
@@ -41,13 +41,10 @@ export function FinanceOfficerDashboard() {
 
       return {
         paidInvoices: liveMetrics.monthlyIncome,
-        pendingInvoices: invoices.filter((i) => {
-          const status = readString(i, ["status"]).toLowerCase();
-          return !["paid", "cancelled", "rejected"].includes(status);
-        }).length,
+        pendingInvoices: invoices.filter((i) => isInvoicePendingStatus(readString(i, ["status"]))).length,
         overdueInvoices: invoices.filter((i) => {
           const dueDate = readString(i, ["dueDate", "due_date"]);
-          return readString(i, ["status"]).toLowerCase() !== "paid" && Boolean(dueDate) && dueDate < today;
+          return isInvoicePendingStatus(readString(i, ["status"])) && Boolean(dueDate) && dueDate < today;
         }).length,
         totalExpenses: liveMetrics.monthlyExpenses,
         pendingExpenses: expenses.filter((e) => readString(e, ["approvalStatus", "approval_status"]) === "pending").length,

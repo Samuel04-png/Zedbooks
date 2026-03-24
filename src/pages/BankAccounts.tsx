@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
 import { companyService } from "@/services/firebase";
 import { firestore } from "@/integrations/firebase/client";
 import { COLLECTIONS } from "@/services/firebase/collectionNames";
-import { addDoc, collection, doc, getDocs, query, serverTimestamp, updateDoc, where, writeBatch } from "firebase/firestore";
+import { addDoc, collection, doc, getDocs, query, runTransaction, serverTimestamp, where } from "firebase/firestore";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -62,6 +62,14 @@ const BankAccounts = () => {
     reference_number: "",
     transaction_date: new Date().toISOString().split("T")[0],
   });
+
+  const invalidateBankAccountQueries = () => {
+    queryClient.invalidateQueries({ queryKey: ["bank-accounts"] });
+    queryClient.invalidateQueries({ queryKey: ["bank-transactions"] });
+    queryClient.invalidateQueries({ queryKey: ["reconciliation"] });
+    queryClient.invalidateQueries({ queryKey: ["financial-reports"] });
+    queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+  };
 
   const { data: companyId } = useQuery({
     queryKey: ["bank-accounts-company-id", user?.id],
@@ -140,6 +148,20 @@ const BankAccounts = () => {
     enabled: Boolean(selectedAccount && companyId),
   });
 
+  useEffect(() => {
+    if (!selectedAccount) return;
+
+    const refreshedSelection = bankAccounts.find((account) => account.id === selectedAccount.id);
+    if (!refreshedSelection) {
+      setSelectedAccount(null);
+      return;
+    }
+
+    if (refreshedSelection !== selectedAccount) {
+      setSelectedAccount(refreshedSelection);
+    }
+  }, [bankAccounts, selectedAccount]);
+
   const addAccountMutation = useMutation({
     mutationFn: async (account: typeof newAccount) => {
       if (!companyId || !user) throw new Error("No active company context");
@@ -161,7 +183,7 @@ const BankAccounts = () => {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["bank-accounts", companyId] });
+      invalidateBankAccountQueries();
       toast.success("Bank account added successfully");
       setIsAccountDialogOpen(false);
       setNewAccount({
@@ -183,38 +205,44 @@ const BankAccounts = () => {
     mutationFn: async (transaction: typeof newTransaction) => {
       if (!selectedAccount || !companyId || !user) throw new Error("No account selected");
 
-      const newBalance = transaction.transaction_type === "deposit"
-        ? selectedAccount.current_balance + transaction.amount
-        : selectedAccount.current_balance - transaction.amount;
-
-      const batch = writeBatch(firestore);
       const transRef = doc(collection(firestore, COLLECTIONS.BANK_TRANSACTIONS));
       const accountRef = doc(firestore, COLLECTIONS.BANK_ACCOUNTS, selectedAccount.id);
+      const signedAmount = transaction.transaction_type === "deposit"
+        ? transaction.amount
+        : -transaction.amount;
 
-      batch.set(transRef, {
-        companyId,
-        bankAccountId: selectedAccount.id,
-        transactionType: transaction.transaction_type,
-        amount: transaction.amount,
-        description: transaction.description || null,
-        referenceNumber: transaction.reference_number || null,
-        transactionDate: transaction.transaction_date,
-        isReconciled: false,
-        createdBy: user.id,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
+      await runTransaction(firestore, async (dbTransaction) => {
+        const accountSnapshot = await dbTransaction.get(accountRef);
+        if (!accountSnapshot.exists()) {
+          throw new Error("Selected account no longer exists");
+        }
+
+        const accountData = accountSnapshot.data() as Record<string, unknown>;
+        const currentBalance = Number(accountData.currentBalance ?? accountData.current_balance ?? 0);
+        const newBalance = currentBalance + signedAmount;
+
+        dbTransaction.set(transRef, {
+          companyId,
+          bankAccountId: selectedAccount.id,
+          transactionType: transaction.transaction_type,
+          amount: transaction.amount,
+          description: transaction.description || null,
+          referenceNumber: transaction.reference_number || null,
+          transactionDate: transaction.transaction_date,
+          isReconciled: false,
+          createdBy: user.id,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+
+        dbTransaction.set(accountRef, {
+          currentBalance: newBalance,
+          updatedAt: serverTimestamp(),
+        }, { merge: true });
       });
-
-      batch.update(accountRef, {
-        currentBalance: newBalance,
-        updatedAt: serverTimestamp(),
-      });
-
-      await batch.commit();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["bank-accounts", companyId] });
-      queryClient.invalidateQueries({ queryKey: ["bank-transactions", companyId, selectedAccount?.id] });
+      invalidateBankAccountQueries();
       toast.success("Transaction recorded");
       setIsTransactionDialogOpen(false);
       setNewTransaction({
