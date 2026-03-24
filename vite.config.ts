@@ -22,17 +22,22 @@ export default defineConfig(({ mode }) => ({
         manualChunks(id) {
           if (!id.includes("node_modules")) return;
 
-          if (id.includes("firebase")) return "firebase";
-          if (id.includes("@tanstack")) return "tanstack";
-          if (id.includes("recharts")) return "charts";
-          if (id.includes("@radix-ui") || id.includes("lucide-react") || id.includes("vaul")) {
+          const normalizedId = id.replace(/\\/g, "/");
+
+          if (normalizedId.includes("/node_modules/firebase/")) return "firebase";
+          if (normalizedId.includes("/node_modules/@tanstack/")) return "tanstack";
+          if (normalizedId.includes("/node_modules/recharts/")) return "charts";
+          if (
+            normalizedId.includes("/node_modules/@radix-ui/")
+            || normalizedId.includes("/node_modules/lucide-react/")
+            || normalizedId.includes("/node_modules/vaul/")
+          ) {
             return "ui-vendor";
           }
           if (
-            id.includes("react") ||
-            id.includes("scheduler") ||
-            id.includes("react-router") ||
-            id.includes("react-dom")
+            normalizedId.includes("/node_modules/react/")
+            || normalizedId.includes("/node_modules/react-dom/")
+            || normalizedId.includes("/node_modules/scheduler/")
           ) {
             return "react-vendor";
           }
