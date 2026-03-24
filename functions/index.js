@@ -213,47 +213,193 @@ const assertAuthenticated = (request) => {
 
 const membershipDocId = (companyId, uid) => `${companyId}_${uid}`;
 
-const pickPrimaryMembership = async (uid) => {
-  const snap = await db
-    .collection("companyUsers")
-    .where("userId", "==", uid)
-    .where("status", "==", "active")
-    .limit(1)
-    .get();
+const normalizeMembershipRecord = (docSnap) => {
+  const row = docSnap.data() || {};
+  return {
+    id: docSnap.id,
+    ...row,
+    companyId: row.companyId || row.company_id || null,
+    userId: row.userId || row.user_id || null,
+    role: row.role || "read_only",
+    status: row.status || "active",
+  };
+};
 
-  if (snap.empty) {
-    throw new HttpsError("failed-precondition", "No active company membership found.");
+const listMembershipCandidates = async (uid) => {
+  const companyUsersRef = db.collection("companyUsers");
+  const candidates = [];
+  const seen = new Set();
+  const queries = [
+    companyUsersRef.where("userId", "==", uid).limit(20),
+    companyUsersRef.where("user_id", "==", uid).limit(20),
+  ];
+
+  for (const membershipQuery of queries) {
+    const snapshot = await membershipQuery.get();
+    snapshot.docs.forEach((docSnap) => {
+      if (seen.has(docSnap.id)) return;
+      seen.add(docSnap.id);
+      candidates.push(normalizeMembershipRecord(docSnap));
+    });
   }
 
-  return {
-    id: snap.docs[0].id,
-    ...snap.docs[0].data(),
+  return candidates;
+};
+
+const findMembershipCandidate = async (uid, options = {}) => {
+  const { companyId = null, activeOnly = true } = options;
+  const candidates = await listMembershipCandidates(uid);
+
+  const matchedCandidate = candidates.find((membership) => {
+    if (!membership.companyId) return false;
+    if (companyId && membership.companyId !== companyId) return false;
+    if (activeOnly && membership.status !== "active") return false;
+    return true;
+  });
+
+  return matchedCandidate || null;
+};
+
+const upsertCanonicalMembership = async ({ uid, companyId, role = "super_admin", status = "active", sourceMembership = null }) => {
+  const canonicalRef = db.collection("companyUsers").doc(membershipDocId(companyId, uid));
+  const payload = {
+    companyId,
+    userId: uid,
+    role,
+    status,
+    updatedAt: FieldValue.serverTimestamp(),
   };
+
+  if (sourceMembership && sourceMembership.id !== canonicalRef.id) {
+    payload.normalizedFromMembershipId = sourceMembership.id;
+  }
+
+  if (sourceMembership && sourceMembership.createdAt) {
+    payload.createdAt = sourceMembership.createdAt;
+  }
+
+  await canonicalRef.set(payload, { merge: true });
+
+  await db.collection("users").doc(uid).set(
+    {
+      defaultCompanyId: companyId,
+      role,
+      updatedAt: FieldValue.serverTimestamp(),
+      createdAt: FieldValue.serverTimestamp(),
+    },
+    { merge: true },
+  );
+
+  return {
+    companyId,
+    role,
+    status,
+  };
+};
+
+const resolveCompanyContextForUser = async (uid, preferredCompanyId = null) => {
+  const requestedCompanyId = typeof preferredCompanyId === "string" && preferredCompanyId.trim()
+    ? preferredCompanyId.trim()
+    : null;
+
+  if (requestedCompanyId) {
+    const directMembership = await findMembershipCandidate(uid, { companyId: requestedCompanyId, activeOnly: false });
+    if (directMembership) {
+      return upsertCanonicalMembership({
+        uid,
+        companyId: requestedCompanyId,
+        role: directMembership.role || "read_only",
+        status: directMembership.status || "active",
+        sourceMembership: directMembership,
+      });
+    }
+  }
+
+  const primaryMembership = await findMembershipCandidate(uid, { activeOnly: true })
+    || await findMembershipCandidate(uid, { activeOnly: false });
+
+  if (primaryMembership?.companyId) {
+    return upsertCanonicalMembership({
+      uid,
+      companyId: primaryMembership.companyId,
+      role: primaryMembership.role || "read_only",
+      status: primaryMembership.status || "active",
+      sourceMembership: primaryMembership,
+    });
+  }
+
+  const userRef = db.collection("users").doc(uid);
+  const userSnap = await userRef.get();
+  if (userSnap.exists) {
+    const userData = userSnap.data() || {};
+    const profileCompanyId = typeof userData.defaultCompanyId === "string" && userData.defaultCompanyId.trim()
+      ? userData.defaultCompanyId.trim()
+      : null;
+
+    if (profileCompanyId && (!requestedCompanyId || requestedCompanyId === profileCompanyId)) {
+      const companySnap = await db.collection("companies").doc(profileCompanyId).get();
+      if (companySnap.exists) {
+        return upsertCanonicalMembership({
+          uid,
+          companyId: profileCompanyId,
+          role: userData.role || "super_admin",
+          status: "active",
+        });
+      }
+    }
+  }
+
+  const ownerQueries = [
+    db.collection("companies").where("createdByUid", "==", uid).limit(2),
+    db.collection("companies").where("ownerUid", "==", uid).limit(2),
+  ];
+
+  for (const ownerQuery of ownerQueries) {
+    const ownerSnapshot = await ownerQuery.get();
+    if (ownerSnapshot.empty) continue;
+
+    const matchingDocs = ownerSnapshot.docs.filter((docSnap) => {
+      if (!requestedCompanyId) return true;
+      return docSnap.id === requestedCompanyId;
+    });
+
+    if (matchingDocs.length !== 1) continue;
+
+    return upsertCanonicalMembership({
+      uid,
+      companyId: matchingDocs[0].id,
+      role: "super_admin",
+      status: "active",
+    });
+  }
+
+  throw new HttpsError("failed-precondition", "No company associated with user.");
+};
+
+const pickPrimaryMembership = async (uid) => {
+  const membership = await findMembershipCandidate(uid, { activeOnly: true });
+  if (!membership) {
+    throw new HttpsError("failed-precondition", "No active company membership found.");
+  }
+  return membership;
 };
 
 const getMembership = async (uid, companyId) => {
   const directRef = db.collection("companyUsers").doc(membershipDocId(companyId, uid));
   const directSnap = await directRef.get();
-  if (directSnap.exists && directSnap.data().status === "active") {
-    return { id: directSnap.id, ...directSnap.data() };
+  if (directSnap.exists) {
+    const directMembership = normalizeMembershipRecord(directSnap);
+    if (directMembership.status === "active") {
+      return directMembership;
+    }
   }
 
-  const fallbackSnap = await db
-    .collection("companyUsers")
-    .where("companyId", "==", companyId)
-    .where("userId", "==", uid)
-    .where("status", "==", "active")
-    .limit(1)
-    .get();
-
-  if (fallbackSnap.empty) {
+  const fallbackMembership = await findMembershipCandidate(uid, { companyId, activeOnly: true });
+  if (!fallbackMembership) {
     throw new HttpsError("permission-denied", "No active membership for this company.");
   }
 
-  return {
-    id: fallbackSnap.docs[0].id,
-    ...fallbackSnap.docs[0].data(),
-  };
+  return fallbackMembership;
 };
 
 const assertCompanyRole = async (uid, companyId, allowedRoles) => {
@@ -411,6 +557,8 @@ exports.bootstrapUserAccount = onCall({ cors: true }, async (request) => {
       phone: phone || null,
       email: email || null,
       logoUrl: null,
+      createdByUid: uid,
+      ownerUid: uid,
       isSetupComplete: false,
       createdAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
@@ -470,67 +618,117 @@ exports.bootstrapUserAccount = onCall({ cors: true }, async (request) => {
 
 exports.ensureCurrentMembership = onCall({ cors: true }, async (request) => {
   const uid = assertAuthenticated(request);
-  const companyUsersRef = db.collection("companyUsers");
+  const payload = request.data || {};
+  const preferredCompanyId = typeof payload.companyId === "string" ? payload.companyId : null;
+  const membership = await resolveCompanyContextForUser(uid, preferredCompanyId);
 
-  const membershipQueries = [
-    companyUsersRef.where("userId", "==", uid).where("status", "==", "active").limit(1),
-    companyUsersRef.where("user_id", "==", uid).where("status", "==", "active").limit(1),
-    companyUsersRef.where("userId", "==", uid).limit(1),
-    companyUsersRef.where("user_id", "==", uid).limit(1),
-  ];
+  return {
+    success: true,
+    companyId: membership.companyId,
+    role: membership.role,
+    status: membership.status,
+  };
+});
 
-  let sourceMembership = null;
-  for (const membershipQuery of membershipQueries) {
-    const snapshot = await membershipQuery.get();
-    if (!snapshot.empty) {
-      sourceMembership = snapshot.docs[0];
-      break;
-    }
+exports.completeCompanySetup = onCall({ cors: true }, async (request) => {
+  const uid = assertAuthenticated(request);
+  const payload = request.data || {};
+  const requestedCompanyId = typeof payload.companyId === "string" ? payload.companyId : null;
+  const membership = await resolveCompanyContextForUser(uid, requestedCompanyId);
+
+  if (!["super_admin", "admin"].includes(membership.role)) {
+    throw new HttpsError("permission-denied", "Only company administrators can complete setup.");
   }
 
-  if (!sourceMembership) {
-    throw new HttpsError("failed-precondition", "No company membership found for this user.");
+  const name = String(payload.name || "").trim();
+  const organizationType = payload.organizationType === "non_profit" ? "non_profit" : "business";
+  const businessType = typeof payload.businessType === "string" && payload.businessType.trim()
+    ? payload.businessType.trim()
+    : null;
+  const taxType = typeof payload.taxType === "string" && payload.taxType.trim()
+    ? payload.taxType.trim()
+    : null;
+  const taxClassification = typeof payload.taxClassification === "string" && payload.taxClassification.trim()
+    ? payload.taxClassification.trim()
+    : null;
+  const address = typeof payload.address === "string" && payload.address.trim() ? payload.address.trim() : null;
+  const phone = typeof payload.phone === "string" && payload.phone.trim() ? payload.phone.trim() : null;
+  const email = toEmail(payload.email);
+  const tpin = typeof payload.tpin === "string" && payload.tpin.trim() ? payload.tpin.trim() : null;
+  const registrationNumber = typeof payload.registrationNumber === "string" && payload.registrationNumber.trim()
+    ? payload.registrationNumber.trim()
+    : null;
+  const industryType = typeof payload.industryType === "string" && payload.industryType.trim()
+    ? payload.industryType.trim()
+    : null;
+  const logoUrl = typeof payload.logoUrl === "string" && payload.logoUrl.trim() ? payload.logoUrl.trim() : null;
+  const isVatRegistered = Boolean(payload.isVatRegistered);
+  const vatRate = payload.vatRate === null || payload.vatRate === undefined || payload.vatRate === ""
+    ? null
+    : Number(payload.vatRate);
+
+  if (!name) {
+    throw new HttpsError("invalid-argument", "Company name is required.");
   }
 
-  const membership = sourceMembership.data();
-  const companyId = membership.companyId || membership.company_id;
-  if (!companyId) {
-    throw new HttpsError("failed-precondition", "Membership record is missing companyId.");
+  if (tpin && !/^\d{10}$/.test(tpin)) {
+    throw new HttpsError("invalid-argument", "TPIN must be exactly 10 digits.");
   }
 
-  const role = membership.role || "read_only";
-  const status = membership.status || "active";
-  const canonicalRef = companyUsersRef.doc(membershipDocId(companyId, uid));
+  if (vatRate !== null && Number.isNaN(vatRate)) {
+    throw new HttpsError("invalid-argument", "VAT rate must be a valid number.");
+  }
 
-  await canonicalRef.set(
-    {
-      companyId,
-      userId: uid,
-      role,
-      status,
-      createdAt: membership.createdAt || FieldValue.serverTimestamp(),
-      updatedAt: FieldValue.serverTimestamp(),
-      normalizedFromMembershipId: sourceMembership.id,
-    },
-    { merge: true },
-  );
+  const companyId = membership.companyId;
+  const companyRef = db.collection("companies").doc(companyId);
+  const settingsRef = db.collection("companySettings").doc(companyId);
 
-  const userRef = db.collection("users").doc(uid);
-  await userRef.set(
-    {
-      defaultCompanyId: companyId,
-      role,
-      updatedAt: FieldValue.serverTimestamp(),
-      createdAt: FieldValue.serverTimestamp(),
-    },
-    { merge: true },
-  );
+  await db.runTransaction(async (tx) => {
+    tx.set(
+      companyRef,
+      {
+        name,
+        organizationType,
+        businessType,
+        taxType,
+        taxClassification,
+        address,
+        phone,
+        email,
+        tpin,
+        registrationNumber,
+        industryType,
+        logoUrl,
+        isSetupComplete: true,
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+
+    tx.set(
+      settingsRef,
+      {
+        companyId,
+        companyName: name,
+        logoUrl,
+        isVatRegistered,
+        vatRate,
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+  });
+
+  await createAuditLog(companyId, uid, "company_setup_completed", {
+    organizationType,
+    businessType,
+    taxType,
+  });
 
   return {
     success: true,
     companyId,
-    role,
-    status,
+    role: membership.role,
   };
 });
 

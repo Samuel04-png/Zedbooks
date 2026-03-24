@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { applyActionCode, verifyPasswordResetCode } from "firebase/auth";
 import { firebaseAuth, isFirebaseConfigured } from "@/integrations/firebase/client";
 import { authService, companyService } from "@/services/firebase";
+import { getPendingCompanyId } from "@/services/firebase/pendingCompanyContext";
 
 // Import new Auth Components
 import { LoginForm } from "@/components/auth/LoginForm";
@@ -29,8 +30,9 @@ export default function Auth() {
 
   const checkCompanySetupAndRedirect = useCallback(async (userId: string) => {
     try {
+      const pendingCompanyId = getPendingCompanyId(userId);
       try {
-        await authService.ensureCurrentMembership();
+        await authService.ensureCurrentMembership(pendingCompanyId ?? undefined);
       } catch {
         // Continue with best-effort lookup
       }

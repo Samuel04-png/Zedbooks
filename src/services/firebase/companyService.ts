@@ -16,7 +16,7 @@ import { callFunction } from "@/services/firebase/functionsService";
 import type { AppRole, Company, CompanySettings, CompanyUser } from "@/services/firebase/types";
 
 export interface CompanySetupInput {
-  companyId: string;
+  companyId?: string;
   name: string;
   organizationType: "business" | "non_profit";
   businessType?: string;
@@ -214,41 +214,7 @@ export const companyService = {
 
   async completeCompanySetup(input: CompanySetupInput): Promise<void> {
     assertFirebaseConfigured();
-
-    const companyRef = doc(firestore, COLLECTIONS.COMPANIES, input.companyId);
-    await setDoc(
-      companyRef,
-      {
-        name: input.name,
-        organizationType: input.organizationType,
-        businessType: input.businessType ?? null,
-        taxType: input.taxType ?? null,
-        taxClassification: input.taxClassification ?? null,
-        address: input.address ?? null,
-        phone: input.phone ?? null,
-        email: input.email ?? null,
-        tpin: input.tpin ?? null,
-        registrationNumber: input.registrationNumber ?? null,
-        industryType: input.industryType ?? null,
-        logoUrl: input.logoUrl ?? null,
-        updatedAt: serverTimestamp(),
-      },
-      { merge: true },
-    );
-
-    const settingsRef = doc(firestore, COLLECTIONS.COMPANY_SETTINGS, input.companyId);
-    await setDoc(
-      settingsRef,
-      {
-        companyId: input.companyId,
-        companyName: input.name,
-        logoUrl: input.logoUrl ?? null,
-        isVatRegistered: Boolean(input.isVatRegistered),
-        vatRate: input.vatRate ?? null,
-        updatedAt: serverTimestamp(),
-      },
-      { merge: true },
-    );
+    await callFunction<CompanySetupInput, { success: boolean; companyId: string }>("completeCompanySetup", input);
   },
 
   async updateCompanyLogo(companyId: string, logoUrl: string): Promise<void> {

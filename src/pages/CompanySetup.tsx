@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/select";
 import { CompanyLogoUpload } from "@/components/payroll/CompanyLogoUpload";
 import { useAuth } from "@/contexts/AuthContext";
+import { getPendingCompanyId, clearPendingCompanyContext } from "@/services/firebase/pendingCompanyContext";
 import { companyService } from "@/services/firebase";
 import { AuthLayout } from "@/components/auth/AuthLayout";
 
@@ -148,8 +149,7 @@ export default function CompanySetup() {
   const setupMutation = useMutation({
     mutationFn: async () => {
       if (!user) throw new Error("Not authenticated");
-      const membership = await companyService.getPrimaryMembershipByUser(user.id);
-      if (!membership?.companyId) throw new Error("No company associated with user");
+      const pendingCompanyId = getPendingCompanyId(user.id);
 
       const isVatRegistered = companyData.organizationType === "business" && companyData.taxType === "vat_registered";
       const taxClassification = companyData.organizationType === "business"
@@ -157,7 +157,7 @@ export default function CompanySetup() {
         : companyData.taxClassification;
 
       await companyService.completeCompanySetup({
-        companyId: membership.companyId,
+        companyId: pendingCompanyId ?? undefined,
         name: companyData.name,
         organizationType: companyData.organizationType,
         businessType: companyData.businessType,
@@ -175,6 +175,9 @@ export default function CompanySetup() {
       });
     },
     onSuccess: () => {
+      if (user) {
+        clearPendingCompanyContext(user.id);
+      }
       queryClient.invalidateQueries({ queryKey: ["company-settings"] });
       queryClient.invalidateQueries({ queryKey: ["company"] });
       toast.success("Setup complete!");

@@ -13,6 +13,7 @@ import {
 } from "firebase/auth";
 import { assertFirebaseConfigured, firebaseAuth, isFirebaseConfigured } from "@/integrations/firebase/client";
 import { callFunction } from "@/services/firebase/functionsService";
+import { setPendingCompanyContext } from "@/services/firebase/pendingCompanyContext";
 import type { InvitationPayload } from "@/services/firebase/types";
 
 interface SignUpInput {
@@ -29,6 +30,7 @@ interface SignUpInput {
 interface BootstrapUserResponse {
   success: boolean;
   message?: string;
+  companyId?: string;
 }
 
 interface AcceptInvitationResponse {
@@ -68,10 +70,14 @@ export const authService = {
 
     await sendEmailVerification(credential.user);
 
-    await callFunction<SignUpInput & { uid: string }, BootstrapUserResponse>("bootstrapUserAccount", {
+    const bootstrapResponse = await callFunction<SignUpInput & { uid: string }, BootstrapUserResponse>("bootstrapUserAccount", {
       ...input,
       uid: credential.user.uid,
     });
+
+    if (bootstrapResponse.companyId) {
+      setPendingCompanyContext(credential.user.uid, bootstrapResponse.companyId);
+    }
 
     return credential;
   },
@@ -134,8 +140,15 @@ export const authService = {
     return callFunction<{ token: string }, AcceptInvitationResponse>("acceptInvitation", { token });
   },
 
-  async ensureCurrentMembership(): Promise<EnsureCurrentMembershipResponse> {
+  async ensureCurrentMembership(companyId?: string): Promise<EnsureCurrentMembershipResponse> {
     assertFirebaseConfigured();
-    return callFunction<Record<string, never>, EnsureCurrentMembershipResponse>("ensureCurrentMembership", {});
+    const response = await callFunction<{ companyId?: string }, EnsureCurrentMembershipResponse>("ensureCurrentMembership", {
+      companyId,
+    });
+    const currentUser = this.getCurrentUser();
+    if (currentUser?.uid && response.companyId) {
+      setPendingCompanyContext(currentUser.uid, response.companyId);
+    }
+    return response;
   },
 };
