@@ -1,0 +1,3 @@
+function w(t,r,i){if(t.length===0){console.warn("No data to export");return}const u=r.map(e=>e.header),f=t.map(e=>r.map(c=>{const s=e[c.key],n=(c.formatter?c.formatter(s):String(s??"")).replace(/"/g,'""');return n.includes(",")||n.includes('"')||n.includes(`
+`)?`"${n}"`:n})),l=[u.join(","),...f.map(e=>e.join(","))].join(`
+`),p="\uFEFF",d=new Blob([p+l],{type:"text/csv;charset=utf-8;"}),a=window.URL.createObjectURL(d),o=document.createElement("a");o.href=a,o.download=`${i}.csv`,o.click(),window.URL.revokeObjectURL(a)}function g(t){return(typeof t=="number"?t:parseFloat(String(t))||0).toFixed(2)}function x(t){if(!t)return"";try{return new Date(String(t)).toISOString().split("T")[0]}catch{return String(t)}}export{g as a,w as e,x as f};
