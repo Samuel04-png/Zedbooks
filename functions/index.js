@@ -283,6 +283,8 @@ const upsertCanonicalMembership = async ({ uid, companyId, role = "super_admin",
   await db.collection("users").doc(uid).set(
     {
       defaultCompanyId: companyId,
+      companyId,
+      organizationId: companyId,
       role,
       updatedAt: FieldValue.serverTimestamp(),
       createdAt: FieldValue.serverTimestamp(),
@@ -332,26 +334,40 @@ const resolveCompanyContextForUser = async (uid, preferredCompanyId = null) => {
   const userSnap = await userRef.get();
   if (userSnap.exists) {
     const userData = userSnap.data() || {};
-    const profileCompanyId = typeof userData.defaultCompanyId === "string" && userData.defaultCompanyId.trim()
-      ? userData.defaultCompanyId.trim()
-      : null;
+    const profileCompanyCandidates = [
+      userData.defaultCompanyId,
+      userData.companyId,
+      userData.company_id,
+      userData.organizationId,
+      userData.organization_id,
+    ]
+      .filter((value) => typeof value === "string" && value.trim())
+      .map((value) => value.trim());
 
-    if (profileCompanyId && (!requestedCompanyId || requestedCompanyId === profileCompanyId)) {
+    for (const profileCompanyId of new Set(profileCompanyCandidates)) {
+      if (requestedCompanyId && requestedCompanyId !== profileCompanyId) continue;
+
       const companySnap = await db.collection("companies").doc(profileCompanyId).get();
-      if (companySnap.exists) {
-        return upsertCanonicalMembership({
-          uid,
-          companyId: profileCompanyId,
-          role: userData.role || "super_admin",
-          status: "active",
-        });
-      }
+      if (!companySnap.exists) continue;
+
+      return upsertCanonicalMembership({
+        uid,
+        companyId: profileCompanyId,
+        role: userData.role || userData.userRole || "super_admin",
+        status: "active",
+      });
     }
   }
 
   const ownerQueries = [
     db.collection("companies").where("createdByUid", "==", uid).limit(2),
     db.collection("companies").where("ownerUid", "==", uid).limit(2),
+    db.collection("companies").where("createdBy", "==", uid).limit(2),
+    db.collection("companies").where("created_by", "==", uid).limit(2),
+    db.collection("companies").where("ownerId", "==", uid).limit(2),
+    db.collection("companies").where("owner_id", "==", uid).limit(2),
+    db.collection("companies").where("userId", "==", uid).limit(2),
+    db.collection("companies").where("user_id", "==", uid).limit(2),
   ];
 
   for (const ownerQuery of ownerQueries) {
@@ -477,6 +493,109 @@ const createAuditLog = async (companyId, actorUid, action, details = {}) => {
   });
 };
 
+const hasMissingCompanyAssociation = (error) => {
+  if (!error) return false;
+  return error.code === "failed-precondition"
+    && typeof error.message === "string"
+    && error.message.includes("No company associated with user");
+};
+
+const provisionFallbackCompanyForSetup = async ({
+  uid,
+  fullName = null,
+  email = null,
+  name,
+  organizationType,
+  businessType,
+  taxType,
+  taxClassification,
+  address,
+  phone,
+  tpin,
+  registrationNumber,
+  industryType,
+  logoUrl,
+  isVatRegistered,
+  vatRate,
+}) => {
+  const companyRef = db.collection("companies").doc();
+  const companyId = companyRef.id;
+  const settingsRef = db.collection("companySettings").doc(companyId);
+  const membershipRef = db.collection("companyUsers").doc(membershipDocId(companyId, uid));
+  const userRef = db.collection("users").doc(uid);
+  const templateKey = resolveTemplateKey(organizationType, businessType);
+
+  await db.runTransaction(async (tx) => {
+    tx.set(companyRef, {
+      name,
+      organizationType,
+      businessType,
+      taxType,
+      taxClassification,
+      address,
+      phone,
+      email,
+      tpin,
+      registrationNumber,
+      industryType,
+      logoUrl,
+      createdByUid: uid,
+      ownerUid: uid,
+      createdBy: uid,
+      created_by: uid,
+      ownerId: uid,
+      owner_id: uid,
+      isSetupComplete: true,
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+
+    tx.set(settingsRef, {
+      companyId,
+      companyName: name,
+      logoUrl,
+      isVatRegistered,
+      vatRate,
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    tx.set(membershipRef, {
+      companyId,
+      userId: uid,
+      role: "super_admin",
+      status: "active",
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    tx.set(userRef, {
+      email,
+      fullName,
+      phone,
+      defaultCompanyId: companyId,
+      companyId,
+      organizationId: companyId,
+      role: "super_admin",
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+  });
+
+  await ensureTemplateAccounts(companyId, templateKey);
+  await createAuditLog(companyId, uid, "company_setup_recovered", {
+    templateKey,
+    organizationType,
+    businessType,
+  });
+
+  return {
+    companyId,
+    role: "super_admin",
+    status: "active",
+  };
+};
+
 
 
 exports.bootstrapUserAccount = onCall({ cors: true }, async (request) => {
@@ -559,6 +678,10 @@ exports.bootstrapUserAccount = onCall({ cors: true }, async (request) => {
       logoUrl: null,
       createdByUid: uid,
       ownerUid: uid,
+      createdBy: uid,
+      created_by: uid,
+      ownerId: uid,
+      owner_id: uid,
       isSetupComplete: false,
       createdAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
@@ -594,6 +717,8 @@ exports.bootstrapUserAccount = onCall({ cors: true }, async (request) => {
         fullName: fullName || null,
         phone: phone || null,
         defaultCompanyId: companyId,
+        companyId,
+        organizationId: companyId,
         role: "super_admin",
         createdAt: FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp(),
@@ -634,11 +759,6 @@ exports.completeCompanySetup = onCall({ cors: true }, async (request) => {
   const uid = assertAuthenticated(request);
   const payload = request.data || {};
   const requestedCompanyId = typeof payload.companyId === "string" ? payload.companyId : null;
-  const membership = await resolveCompanyContextForUser(uid, requestedCompanyId);
-
-  if (!["super_admin", "admin"].includes(membership.role)) {
-    throw new HttpsError("permission-denied", "Only company administrators can complete setup.");
-  }
 
   const name = String(payload.name || "").trim();
   const organizationType = payload.organizationType === "non_profit" ? "non_profit" : "business";
@@ -666,6 +786,11 @@ exports.completeCompanySetup = onCall({ cors: true }, async (request) => {
   const vatRate = payload.vatRate === null || payload.vatRate === undefined || payload.vatRate === ""
     ? null
     : Number(payload.vatRate);
+  const resolvedVatRate = isVatRegistered ? vatRate : null;
+  const resolvedEmail = toEmail(payload.email || request.auth.token.email);
+  const resolvedFullName = typeof request.auth.token.name === "string" && request.auth.token.name.trim()
+    ? request.auth.token.name.trim()
+    : null;
 
   if (!name) {
     throw new HttpsError("invalid-argument", "Company name is required.");
@@ -677,6 +802,38 @@ exports.completeCompanySetup = onCall({ cors: true }, async (request) => {
 
   if (vatRate !== null && Number.isNaN(vatRate)) {
     throw new HttpsError("invalid-argument", "VAT rate must be a valid number.");
+  }
+
+  let membership;
+  try {
+    membership = await resolveCompanyContextForUser(uid, requestedCompanyId);
+  } catch (error) {
+    if (!hasMissingCompanyAssociation(error)) {
+      throw error;
+    }
+
+    membership = await provisionFallbackCompanyForSetup({
+      uid,
+      fullName: resolvedFullName,
+      email: resolvedEmail,
+      name,
+      organizationType,
+      businessType,
+      taxType,
+      taxClassification,
+      address,
+      phone,
+      tpin,
+      registrationNumber,
+      industryType,
+      logoUrl,
+      isVatRegistered,
+      vatRate: resolvedVatRate,
+    });
+  }
+
+  if (!["super_admin", "admin"].includes(membership.role)) {
+    throw new HttpsError("permission-denied", "Only company administrators can complete setup.");
   }
 
   const companyId = membership.companyId;
@@ -694,11 +851,15 @@ exports.completeCompanySetup = onCall({ cors: true }, async (request) => {
         taxClassification,
         address,
         phone,
-        email,
+        email: resolvedEmail,
         tpin,
         registrationNumber,
         industryType,
         logoUrl,
+        createdBy: uid,
+        created_by: uid,
+        ownerId: uid,
+        owner_id: uid,
         isSetupComplete: true,
         updatedAt: FieldValue.serverTimestamp(),
       },
@@ -712,7 +873,7 @@ exports.completeCompanySetup = onCall({ cors: true }, async (request) => {
         companyName: name,
         logoUrl,
         isVatRegistered,
-        vatRate,
+        vatRate: resolvedVatRate,
         updatedAt: FieldValue.serverTimestamp(),
       },
       { merge: true },
