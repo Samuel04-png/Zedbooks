@@ -10,10 +10,7 @@ import {
   Check,
   ArrowRight,
   Play,
-  Star,
-  Download,
-  Smartphone,
-  Laptop
+  Download
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ByteBerryWatermark } from "@/components/common/ByteBerryWatermark";
@@ -52,6 +49,15 @@ const features = [
     description: "Live financial dashboards and customizable reports for better decision making.",
     className: "border-l-4 border-sky-500",
   },
+];
+
+const demoHref =
+  "https://wa.me/260760580949?text=Hi%20Byte%20%26%20Berry%2C%20I%20want%20to%20book%20a%20ZedBooks%20demo%20for%20our%20NGO%20finance%20team.";
+
+const trustPoints = [
+  "Payroll, statutory deductions, and audit trails in one workspace",
+  "Built around ZRA, NAPSA, NHIMA, PACRA, and NGO reporting needs",
+  "Designed for finance managers who need clean monthly records",
 ];
 
 export default function Landing() {
@@ -96,6 +102,7 @@ export default function Landing() {
             <a href="#features" className="hover:text-blue-700 transition-colors">Features</a>
             <a href="#pricing" className="hover:text-blue-700 transition-colors">Pricing</a>
             <a href="#compliance" className="hover:text-blue-700 transition-colors">Compliance</a>
+            <a href={demoHref} className="hover:text-blue-700 transition-colors">Book Demo</a>
           </nav>
 
           <div className="flex items-center gap-4">
@@ -132,38 +139,37 @@ export default function Landing() {
             The Financial Operating System for <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-700 to-indigo-600">Zambian NGOs</span>
           </h1>
 
-          <p className="text-xl text-slate-600 mb-12 max-w-2xl mx-auto leading-relaxed">
-            Manage your finances, payroll, and compliance in one unified secure platform.
-            Designed for purpose-driven organizations.
+          <p className="text-xl text-slate-600 mb-8 max-w-2xl mx-auto leading-relaxed">
+            Manage NGO finances, payroll, grants, supplier payments, and Zambia-specific compliance in one secure workspace built for clean month-end reporting.
           </p>
 
+          <div className="mb-12 grid gap-3 max-w-3xl mx-auto text-left sm:grid-cols-3">
+            {trustPoints.map((point) => (
+              <div key={point} className="rounded-2xl border border-blue-100 bg-white/70 px-4 py-3 text-sm font-medium leading-6 text-slate-700 shadow-sm backdrop-blur">
+                <Check className="mb-2 h-4 w-4 text-blue-600" />
+                {point}
+              </div>
+            ))}
+          </div>
+
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-20">
-            <Link to="/auth">
+            <a href={demoHref} target="_blank" rel="noreferrer">
               <Button size="lg" className="h-14 px-10 rounded-full bg-blue-600 hover:bg-blue-700 text-white shadow-xl shadow-blue-600/20 text-lg transition-all hover:scale-105">
+                Book a Demo
+                <ArrowRight className="ml-2 h-5 w-5" />
+              </Button>
+            </a>
+            <Link to="/auth">
+              <Button size="lg" variant="outline" className="h-14 px-10 rounded-full border-slate-200 hover:bg-white hover:text-blue-700 hover:border-blue-200 text-lg shadow-sm transition-all">
                 Start Free Trial
               </Button>
             </Link>
-            {deferredPrompt && (
-              <Button
-                size="lg"
-                variant="outline"
-                onClick={handleInstallClick}
-                className="h-14 px-10 rounded-full border-slate-200 hover:bg-white hover:text-blue-700 hover:border-blue-200 text-lg shadow-sm transition-all"
-              >
-                <Download className="mr-2 h-5 w-5" />
-                Install App
+            <a href="#compliance">
+              <Button size="lg" variant="ghost" className="h-14 px-6 rounded-full text-slate-700 hover:bg-blue-50 hover:text-blue-700 text-lg transition-all">
+                <Play className="mr-2 h-5 w-5" />
+                See Compliance Flow
               </Button>
-            )}
-            {!deferredPrompt && (
-              <Button
-                size="lg"
-                variant="outline"
-                className="h-14 px-10 rounded-full border-slate-200 hover:bg-white hover:text-slate-900 text-lg shadow-sm transition-all opacity-50 cursor-not-allowed"
-              >
-                <Laptop className="mr-2 h-5 w-5" />
-                Web Version
-              </Button>
-            )}
+            </a>
           </div>
 
           {/* Floated UI Mockup */}
@@ -182,37 +188,56 @@ export default function Landing() {
               </div>
               <div className="p-1 bg-slate-50/50">
                 <div className="grid grid-cols-12 gap-1 p-4 h-[400px] lg:h-[600px] bg-white rounded-xl overflow-hidden relative">
-                  {/* Simulated Content */}
+                  {/* Realistic dashboard preview */}
                   <div className="col-span-2 hidden lg:flex flex-col gap-3 border-r border-slate-50 pr-4">
-                    <div className="h-8 w-full bg-slate-100 rounded-lg" />
-                    <div className="h-8 w-3/4 bg-slate-50 rounded-lg" />
-                    <div className="h-8 w-full bg-slate-50 rounded-lg" />
-                    <div className="h-8 w-5/6 bg-slate-50 rounded-lg" />
+                    {['Dashboard', 'Payroll', 'Grants', 'Compliance', 'Reports'].map((item, index) => (
+                      <div key={item} className={`rounded-lg px-3 py-2 text-left text-xs font-semibold ${index === 0 ? 'bg-blue-50 text-blue-700' : 'bg-slate-50 text-slate-500'}`}>
+                        {item}
+                      </div>
+                    ))}
                   </div>
                   <div className="col-span-12 lg:col-span-10 flex flex-col gap-6 pl-0 lg:pl-6 pt-2">
                     <div className="flex justify-between items-end">
                       <div className="space-y-2">
-                        <div className="h-4 w-32 bg-slate-100 rounded" />
-                        <div className="h-8 w-64 bg-slate-900 rounded-lg" />
+                        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">April finance close</p>
+                        <h3 className="text-left text-2xl font-bold text-slate-900">NGO Finance Dashboard</h3>
                       </div>
-                      <div className="h-10 w-32 bg-blue-600 rounded-lg" />
+                      <div className="rounded-full bg-green-50 px-3 py-1 text-xs font-bold text-green-700">Compliant</div>
                     </div>
                     <div className="grid grid-cols-3 gap-4">
-                      <div className="h-32 bg-blue-50 rounded-2xl border border-blue-100 p-4 space-y-3">
-                        <div className="h-8 w-8 bg-blue-200 rounded-lg" />
-                        <div className="h-6 w-24 bg-blue-200/50 rounded" />
+                      <div className="h-32 bg-blue-50 rounded-2xl border border-blue-100 p-4 space-y-2 text-left">
+                        <p className="text-xs font-semibold text-blue-700">Grant balance</p>
+                        <p className="text-2xl font-bold text-slate-900">K842k</p>
+                        <p className="text-xs text-slate-500">6 active grants</p>
                       </div>
-                      <div className="h-32 bg-slate-50 rounded-2xl border border-slate-100 p-4 space-y-3">
-                        <div className="h-8 w-8 bg-slate-200 rounded-lg" />
-                        <div className="h-6 w-24 bg-slate-200/50 rounded" />
+                      <div className="h-32 bg-slate-50 rounded-2xl border border-slate-100 p-4 space-y-2 text-left">
+                        <p className="text-xs font-semibold text-slate-500">Payroll due</p>
+                        <p className="text-2xl font-bold text-slate-900">K156k</p>
+                        <p className="text-xs text-slate-500">PAYE/NAPSA ready</p>
                       </div>
-                      <div className="h-32 bg-slate-50 rounded-2xl border border-slate-100 p-4 space-y-3">
-                        <div className="h-8 w-8 bg-slate-200 rounded-lg" />
-                        <div className="h-6 w-24 bg-slate-200/50 rounded" />
+                      <div className="h-32 bg-slate-50 rounded-2xl border border-slate-100 p-4 space-y-2 text-left">
+                        <p className="text-xs font-semibold text-slate-500">Pending approvals</p>
+                        <p className="text-2xl font-bold text-slate-900">12</p>
+                        <p className="text-xs text-slate-500">Bills & expenses</p>
                       </div>
                     </div>
-                    <div className="flex-1 bg-slate-50 rounded-2xl border border-slate-100 p-6 flex items-center justify-center">
-                      <div className="text-slate-300 font-medium">Interactive Financial Ledger Mockup</div>
+                    <div className="flex-1 bg-slate-50 rounded-2xl border border-slate-100 p-5">
+                      <div className="mb-4 flex items-center justify-between">
+                        <p className="text-sm font-bold text-slate-800">Compliance timeline</p>
+                        <p className="text-xs font-medium text-slate-400">Next 30 days</p>
+                      </div>
+                      <div className="space-y-3 text-left">
+                        {[
+                          ['ZRA Smart Invoice sync', 'Ready to submit', 'bg-green-50 text-green-700'],
+                          ['NAPSA monthly return', 'Draft generated', 'bg-blue-50 text-blue-700'],
+                          ['Board donor report', 'Needs approval', 'bg-amber-50 text-amber-700'],
+                        ].map(([title, status, klass]) => (
+                          <div key={title} className="flex items-center justify-between rounded-xl bg-white p-3 shadow-sm">
+                            <span className="text-sm font-medium text-slate-700">{title}</span>
+                            <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${klass}`}>{status}</span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -310,6 +335,11 @@ export default function Landing() {
                   Get Compliant Today
                 </Button>
               </Link>
+              <a href={demoHref} target="_blank" rel="noreferrer" className="ml-3 inline-flex">
+                <Button variant="outline" className="rounded-full border-slate-600 bg-transparent text-white hover:bg-white hover:text-slate-900 px-8 h-12 shadow-md">
+                  Book Compliance Demo
+                </Button>
+              </a>
             </div>
             <div className="relative">
               <div className="bg-gradient-to-br from-slate-800 to-slate-900 p-8 rounded-3xl border border-slate-700 shadow-2xl">
@@ -343,6 +373,25 @@ export default function Landing() {
       </section>
 
       {/* Footer */}
+      <section className="py-20 bg-blue-600 text-white">
+        <div className="container mx-auto px-4 text-center max-w-3xl">
+          <p className="text-sm font-semibold uppercase tracking-[0.18em] text-blue-100 mb-4">Demo-ready for finance teams</p>
+          <h2 className="text-4xl font-bold mb-5">See how ZedBooks can clean up your NGO finance workflow.</h2>
+          <p className="text-blue-50 text-lg mb-8">We will walk through payroll, compliance, approvals, grants, and reporting using a Zambia-specific workflow.</p>
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+            <a href={demoHref} target="_blank" rel="noreferrer">
+              <Button className="rounded-full bg-white text-blue-700 hover:bg-blue-50 px-8 h-12 shadow-md">Book ZedBooks Demo</Button>
+            </a>
+            {deferredPrompt && (
+              <Button onClick={handleInstallClick} variant="outline" className="rounded-full border-blue-200 bg-transparent text-white hover:bg-white hover:text-blue-700 px-8 h-12">
+                <Download className="mr-2 h-5 w-5" />
+                Install Web App
+              </Button>
+            )}
+          </div>
+        </div>
+      </section>
+
       <footer className="py-12 bg-white border-t border-slate-200">
         <div className="container mx-auto px-4 text-center">
           <div className="flex items-center justify-center gap-2 mb-4">
