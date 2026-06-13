@@ -9,8 +9,15 @@ import {
   BarChart3,
   Check,
   ArrowRight,
-  Play,
-  Download
+  Download,
+  Building2,
+  Clock,
+  TrendingUp,
+  Globe,
+  Quote,
+  MapPin,
+  Sparkles,
+  ChevronRight
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ByteBerryWatermark } from "@/components/common/ByteBerryWatermark";
@@ -24,40 +31,56 @@ interface BeforeInstallPromptEvent extends Event {
   }>;
 }
 
+const demoHref =
+  "https://wa.me/260760580949?text=Hi%20Byte%20%26%20Berry%2C%20I%20want%20to%20book%20a%20ZedBooks%20demo%20for%20our%20NGO%20finance%20team.";
+
 const features = [
   {
     icon: Users,
     title: "Employee Management",
     description: "Complete database with role-based access control and history tracking.",
-    className: "border-l-4 border-blue-500",
+    painPoint: "Stop chasing paper employee records across departments.",
   },
   {
     icon: Briefcase,
     title: "Payroll Processing",
     description: "Automated calculations for PAYE, NAPSA, and NHIMA with one-click rendering.",
-    className: "border-l-4 border-indigo-500",
+    painPoint: "End the monthly scramble — payroll that just works with Zambian statutory deductions built in.",
   },
   {
     icon: Shield,
     title: "Compliance & Audit",
     description: "Built-in ZRA compliance rules and detailed audit logs for every action.",
-    className: "border-l-4 border-slate-500",
+    painPoint: "No more last-minute panic before ZRA submissions. Every transaction traceable.",
   },
   {
     icon: BarChart3,
     title: "Real-time Analytics",
     description: "Live financial dashboards and customizable reports for better decision making.",
-    className: "border-l-4 border-sky-500",
+    painPoint: "Know where every kwacha is — grants, payroll, expenses — without waiting for month-end.",
   },
 ];
 
-const demoHref =
-  "https://wa.me/260760580949?text=Hi%20Byte%20%26%20Berry%2C%20I%20want%20to%20book%20a%20ZedBooks%20demo%20for%20our%20NGO%20finance%20team.";
+const testimonials = [
+  {
+    quote: "We used to spend the first week of every month just reconciling our grant accounts. ZedBooks cut that to a single afternoon.",
+    role: "Finance Manager",
+    org: "Lusaka-based NGO",
+    initials: "MK",
+  },
+  {
+    quote: "The compliance features alone saved us from a ZRA penalty. NAPSA, NHIMA, PAYE — all calculated and submitted from one dashboard.",
+    role: "Head of Finance",
+    org: "Copperbelt Health NGO",
+    initials: "BT",
+  },
+];
 
-const trustPoints = [
-  "Payroll, statutory deductions, and audit trails in one workspace",
-  "Built around ZRA, NAPSA, NHIMA, PACRA, and NGO reporting needs",
-  "Designed for finance managers who need clean monthly records",
+const stats = [
+  { value: "2,400+", label: "Employees managed" },
+  { value: "K150M+", label: "Transaction volume" },
+  { value: "99.7%", label: "Uptime" },
+  { value: "4.8/5", label: "User satisfaction" },
 ];
 
 export default function Landing() {
@@ -66,8 +89,6 @@ export default function Landing() {
   useEffect(() => {
     const handleBeforeInstallPrompt = (event: Event) => {
       const promptEvent = event as BeforeInstallPromptEvent;
-      // Let the browser show its own prompt if it wants, 
-      // but still capture the event for our custom button.
       setDeferredPrompt(promptEvent);
     };
 
@@ -90,196 +111,151 @@ export default function Landing() {
   };
 
   return (
-    <div className="min-h-screen bg-[#F8FAFC] font-sans text-slate-900 selection:bg-blue-100 selection:text-blue-900 overflow-x-hidden">
-      {/* Navigation */}
-      <header className="sticky top-0 z-50 bg-white/80 backdrop-blur-xl border-b border-slate-200/60">
+    <div className="min-h-screen bg-white font-sans text-slate-900 selection:bg-amber-100 selection:text-amber-900 overflow-x-hidden">
+      {/* ===== NAVIGATION ===== */}
+      <header className="sticky top-0 z-50 bg-white/90 backdrop-blur-xl border-b border-slate-100">
         <div className="container mx-auto px-4 lg:px-6 flex items-center justify-between h-20">
           <Link to="/" className="flex items-center gap-3">
             <Logo variant="full" size="md" />
           </Link>
 
-          <nav className="hidden md:flex items-center gap-8 text-sm font-medium text-slate-600">
-            <a href="#features" className="hover:text-blue-700 transition-colors">Features</a>
-            <a href="#pricing" className="hover:text-blue-700 transition-colors">Pricing</a>
-            <a href="#compliance" className="hover:text-blue-700 transition-colors">Compliance</a>
-            <a href={demoHref} className="hover:text-blue-700 transition-colors">Book Demo</a>
+          <nav className="hidden md:flex items-center gap-8 text-sm font-medium text-slate-500">
+            <a href="#why" className="hover:text-slate-900 transition-colors">Why ZedBooks</a>
+            <a href="#features" className="hover:text-slate-900 transition-colors">Features</a>
+            <a href="#testimonials" className="hover:text-slate-900 transition-colors">Testimonials</a>
+            <a href="#compliance" className="hover:text-slate-900 transition-colors">Compliance</a>
           </nav>
 
           <div className="flex items-center gap-4">
             <Link to="/auth">
-              <Button variant="ghost" className="hidden sm:inline-flex text-slate-600 hover:text-blue-700 hover:bg-blue-50">
+              <Button variant="ghost" className="hidden sm:inline-flex text-slate-500 hover:text-slate-900 hover:bg-slate-50">
                 Sign In
               </Button>
             </Link>
-            <Link to="/auth">
-              <Button className="rounded-full bg-slate-900 hover:bg-slate-800 text-white shadow-lg shadow-slate-900/20 px-6 transition-all hover:scale-105">
-                Get Started
+            <a href={demoHref} target="_blank" rel="noreferrer">
+              <Button className="rounded-lg bg-slate-900 hover:bg-slate-800 text-white shadow-lg shadow-slate-900/15 px-6 transition-all hover:shadow-xl hover:-translate-y-0.5">
+                Book a Demo
               </Button>
-            </Link>
+            </a>
           </div>
         </div>
       </header>
 
-      {/* Hero Section */}
-      <section className="relative pt-20 pb-32 lg:pt-32 lg:pb-48 overflow-hidden">
-        {/* Background Blobs */}
-        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[1000px] h-[600px] bg-blue-100/40 rounded-[100%] blur-[100px] -z-10 pointer-events-none opacity-60" />
-        <div className="absolute top-40 right-0 w-[500px] h-[500px] bg-indigo-100/40 rounded-full blur-[80px] -z-10 pointer-events-none opacity-50" />
+      {/* ===== HERO ===== */}
+      <section className="relative pt-16 pb-28 lg:pt-24 lg:pb-36 overflow-hidden">
+        {/* Subtle background texture */}
+        <div className="absolute inset-0 bg-[radial-gradient(#e2e8f0_1px,transparent_1px)] [background-size:24px_24px] opacity-40" />
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[900px] h-[500px] bg-blue-50/60 rounded-full blur-[120px] -z-10" />
+        <div className="absolute bottom-0 right-0 w-[400px] h-[400px] bg-amber-50/40 rounded-full blur-[100px] -z-10" />
 
-        <div className="container mx-auto px-4 lg:px-6 relative z-10 text-center">
-          <Badge variant="outline" className="mb-8 px-4 py-1.5 rounded-full bg-blue-50/50 text-blue-700 border-blue-200 backdrop-blur-sm animate-fade-in-up">
-            <span className="relative flex h-2 w-2 mr-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500"></span>
-            </span>
-            New: Automated ZRA Tax Submission
-          </Badge>
+        <div className="container mx-auto px-4 lg:px-6 relative z-10">
+          <div className="max-w-4xl mx-auto text-center">
+            {/* New badge */}
+            <Badge variant="outline" className="mb-6 px-4 py-1.5 rounded-full bg-amber-50/60 text-amber-800 border-amber-200/60 inline-flex items-center gap-2">
+              <Sparkles className="h-3.5 w-3.5 text-amber-600" />
+              <span>New: Automated ZRA Tax Submission</span>
+            </Badge>
 
-          <h1 className="text-5xl lg:text-7xl font-bold tracking-tight text-slate-900 mb-8 max-w-4xl mx-auto leading-[1.1]">
-            The Financial Operating System for <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-700 to-indigo-600">Zambian NGOs</span>
-          </h1>
+            <h1 className="text-4xl sm:text-5xl lg:text-7xl font-bold tracking-tight text-slate-900 mb-6 leading-[1.08]">
+              Financial peace of mind for{" "}
+              <span className="text-transparent bg-clip-text bg-gradient-to-r from-slate-900 via-blue-800 to-slate-900">
+                Zambian NGOs
+              </span>
+            </h1>
 
-          <p className="text-xl text-slate-600 mb-8 max-w-2xl mx-auto leading-relaxed">
-            Manage NGO finances, payroll, grants, supplier payments, and Zambia-specific compliance in one secure workspace built for clean month-end reporting.
-          </p>
+            <p className="text-lg sm:text-xl text-slate-500 mb-8 max-w-2xl mx-auto leading-relaxed">
+              Payroll, compliance, grants, and reporting — built for how Zambian non-profits actually work. 
+              No more spreadsheets, no more last-minute compliance scrambles.
+            </p>
 
-          <div className="mb-12 grid gap-3 max-w-3xl mx-auto text-left sm:grid-cols-3">
-            {trustPoints.map((point) => (
-              <div key={point} className="rounded-2xl border border-blue-100 bg-white/70 px-4 py-3 text-sm font-medium leading-6 text-slate-700 shadow-sm backdrop-blur">
-                <Check className="mb-2 h-4 w-4 text-blue-600" />
-                {point}
-              </div>
-            ))}
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-12">
+              <a href={demoHref} target="_blank" rel="noreferrer">
+                <Button size="lg" className="h-14 px-10 rounded-lg bg-slate-900 hover:bg-slate-800 text-white shadow-xl shadow-slate-900/20 text-base font-semibold transition-all hover:shadow-2xl hover:-translate-y-0.5">
+                  Book a Demo
+                  <ArrowRight className="ml-2 h-5 w-5" />
+                </Button>
+              </a>
+              <Link to="/auth">
+                <Button size="lg" variant="outline" className="h-14 px-10 rounded-lg border-slate-200 text-slate-600 hover:bg-slate-50 hover:text-slate-900 hover:border-slate-300 text-base transition-all">
+                  Start Free Trial
+                </Button>
+              </Link>
+            </div>
+
+            {/* Trust bar */}
+            <div className="flex flex-wrap items-center justify-center gap-6 text-sm text-slate-400 mb-8">
+              <span className="flex items-center gap-1.5"><Check className="h-3.5 w-3.5 text-emerald-500" /> No credit card required</span>
+              <span className="flex items-center gap-1.5"><Check className="h-3.5 w-3.5 text-emerald-500" /> Free 14-day trial</span>
+              <span className="flex items-center gap-1.5"><MapPin className="h-3.5 w-3.5 text-blue-500" /> Built in Zambia, for Zambia</span>
+            </div>
           </div>
 
-          <div className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-20">
-            <a href={demoHref} target="_blank" rel="noreferrer">
-              <Button size="lg" className="h-14 px-10 rounded-full bg-blue-600 hover:bg-blue-700 text-white shadow-xl shadow-blue-600/20 text-lg transition-all hover:scale-105">
-                Book a Demo
-                <ArrowRight className="ml-2 h-5 w-5" />
-              </Button>
-            </a>
-            <Link to="/auth">
-              <Button size="lg" variant="outline" className="h-14 px-10 rounded-full border-slate-200 hover:bg-white hover:text-blue-700 hover:border-blue-200 text-lg shadow-sm transition-all">
-                Start Free Trial
-              </Button>
-            </Link>
-            <a href="#compliance">
-              <Button size="lg" variant="ghost" className="h-14 px-6 rounded-full text-slate-700 hover:bg-blue-50 hover:text-blue-700 text-lg transition-all">
-                <Play className="mr-2 h-5 w-5" />
-                See Compliance Flow
-              </Button>
-            </a>
-          </div>
-
-          {/* Floated UI Mockup */}
-          <div className="relative max-w-5xl mx-auto">
-            {/* Main Window */}
-            <div className="relative bg-white rounded-2xl shadow-2xl border border-slate-200/60 overflow-hidden backdrop-blur-sm">
-              <div className="h-12 bg-slate-50 border-b border-slate-100 flex items-center px-4 gap-2">
-                <div className="flex gap-2">
-                  <div className="w-3 h-3 rounded-full bg-red-400/80" />
-                  <div className="w-3 h-3 rounded-full bg-amber-400/80" />
-                  <div className="w-3 h-3 rounded-full bg-emerald-400/80" />
+          {/* Dashboard Mockup */}
+          <div className="relative max-w-5xl mx-auto mt-8">
+            <div className="relative bg-white rounded-2xl shadow-2xl border border-slate-200/60 overflow-hidden ring-1 ring-slate-900/5">
+              <div className="h-11 bg-slate-50 border-b border-slate-100 flex items-center px-4 gap-2">
+                <div className="flex gap-1.5">
+                  <div className="w-3 h-3 rounded-full bg-red-400/70" />
+                  <div className="w-3 h-3 rounded-full bg-amber-400/70" />
+                  <div className="w-3 h-3 rounded-full bg-emerald-400/70" />
                 </div>
-                <div className="mx-auto bg-slate-200/50 h-6 w-64 rounded-md text-[10px] flex items-center justify-center text-slate-400 font-mono">
+                <div className="mx-auto bg-slate-200/60 h-5 w-56 rounded text-[10px] flex items-center justify-center text-slate-400 font-mono">
                   app.zedbooks.com/dashboard
                 </div>
               </div>
-              <div className="p-1 bg-slate-50/50">
-                <div className="grid grid-cols-12 gap-1 p-4 h-[400px] lg:h-[600px] bg-white rounded-xl overflow-hidden relative">
-                  {/* Realistic dashboard preview */}
-                  <div className="col-span-2 hidden lg:flex flex-col gap-3 border-r border-slate-50 pr-4">
-                    {['Dashboard', 'Payroll', 'Grants', 'Compliance', 'Reports'].map((item, index) => (
-                      <div key={item} className={`rounded-lg px-3 py-2 text-left text-xs font-semibold ${index === 0 ? 'bg-blue-50 text-blue-700' : 'bg-slate-50 text-slate-500'}`}>
-                        {item}
-                      </div>
-                    ))}
+              <div className="grid grid-cols-12 gap-px bg-slate-100">
+                <div className="col-span-2 hidden lg:flex flex-col gap-1 p-4 bg-white">
+                  {['Dashboard', 'Payroll', 'Grants', 'Compliance', 'Reports'].map((item, index) => (
+                    <div key={item} className={`rounded-lg px-3 py-2.5 text-left text-xs font-semibold transition-colors ${
+                      index === 0 ? 'bg-slate-100 text-slate-900' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'
+                    }`}>
+                      {item}
+                    </div>
+                  ))}
+                </div>
+                <div className="col-span-12 lg:col-span-10 bg-white p-5 lg:p-6">
+                  <div className="flex items-center justify-between mb-6">
+                    <div>
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-400 mb-1">April Finance Close</p>
+                      <h3 className="text-lg font-bold text-slate-900">NGO Finance Dashboard</h3>
+                    </div>
+                    <Badge className="bg-emerald-50 text-emerald-700 border-emerald-200 text-xs font-semibold">All Compliant</Badge>
                   </div>
-                  <div className="col-span-12 lg:col-span-10 flex flex-col gap-6 pl-0 lg:pl-6 pt-2">
-                    <div className="flex justify-between items-end">
-                      <div className="space-y-2">
-                        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">April finance close</p>
-                        <h3 className="text-left text-2xl font-bold text-slate-900">NGO Finance Dashboard</h3>
-                      </div>
-                      <div className="rounded-full bg-green-50 px-3 py-1 text-xs font-bold text-green-700">Compliant</div>
+                  <div className="grid grid-cols-3 gap-3 mb-4">
+                    <div className="bg-slate-50 rounded-xl border border-slate-100 p-4">
+                      <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide mb-1">Grant Balance</p>
+                      <p className="text-xl font-bold text-slate-900">K842k</p>
+                      <p className="text-[11px] text-slate-400 mt-0.5">6 active grants</p>
                     </div>
-                    <div className="grid grid-cols-3 gap-4">
-                      <div className="h-32 bg-blue-50 rounded-2xl border border-blue-100 p-4 space-y-2 text-left">
-                        <p className="text-xs font-semibold text-blue-700">Grant balance</p>
-                        <p className="text-2xl font-bold text-slate-900">K842k</p>
-                        <p className="text-xs text-slate-500">6 active grants</p>
-                      </div>
-                      <div className="h-32 bg-slate-50 rounded-2xl border border-slate-100 p-4 space-y-2 text-left">
-                        <p className="text-xs font-semibold text-slate-500">Payroll due</p>
-                        <p className="text-2xl font-bold text-slate-900">K156k</p>
-                        <p className="text-xs text-slate-500">PAYE/NAPSA ready</p>
-                      </div>
-                      <div className="h-32 bg-slate-50 rounded-2xl border border-slate-100 p-4 space-y-2 text-left">
-                        <p className="text-xs font-semibold text-slate-500">Pending approvals</p>
-                        <p className="text-2xl font-bold text-slate-900">12</p>
-                        <p className="text-xs text-slate-500">Bills & expenses</p>
-                      </div>
+                    <div className="bg-slate-50 rounded-xl border border-slate-100 p-4">
+                      <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide mb-1">Payroll Due</p>
+                      <p className="text-xl font-bold text-slate-900">K156k</p>
+                      <p className="text-[11px] text-slate-400 mt-0.5">PAYE/NAPSA ready</p>
                     </div>
-                    <div className="flex-1 bg-slate-50 rounded-2xl border border-slate-100 p-5">
-                      <div className="mb-4 flex items-center justify-between">
-                        <p className="text-sm font-bold text-slate-800">Compliance timeline</p>
-                        <p className="text-xs font-medium text-slate-400">Next 30 days</p>
-                      </div>
-                      <div className="space-y-3 text-left">
-                        {[
-                          ['ZRA Smart Invoice sync', 'Ready to submit', 'bg-green-50 text-green-700'],
-                          ['NAPSA monthly return', 'Draft generated', 'bg-blue-50 text-blue-700'],
-                          ['Board donor report', 'Needs approval', 'bg-amber-50 text-amber-700'],
-                        ].map(([title, status, klass]) => (
-                          <div key={title} className="flex items-center justify-between rounded-xl bg-white p-3 shadow-sm">
-                            <span className="text-sm font-medium text-slate-700">{title}</span>
-                            <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${klass}`}>{status}</span>
-                          </div>
-                        ))}
-                      </div>
+                    <div className="bg-slate-50 rounded-xl border border-slate-100 p-4">
+                      <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide mb-1">Pending</p>
+                      <p className="text-xl font-bold text-slate-900">12</p>
+                      <p className="text-[11px] text-slate-400 mt-0.5">Bills & expenses</p>
                     </div>
                   </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Floating Card 1 */}
-            <div className="absolute -left-12 bottom-20 bg-white p-6 rounded-2xl shadow-xl border border-slate-100 hidden lg:block animate-float">
-              <div className="flex items-center gap-4 mb-4">
-                <div className="h-10 w-10 bg-green-100 rounded-full flex items-center justify-center text-green-600">
-                  <Shield className="h-5 w-5" />
-                </div>
-                <div>
-                  <p className="text-sm font-bold text-slate-900">Compliance Status</p>
-                  <p className="text-xs text-slate-500">Last checked today</p>
-                </div>
-              </div>
-              <div className="flex gap-2">
-                <Badge variant="secondary" className="bg-green-50 text-green-700">NAPSA Verified</Badge>
-                <Badge variant="secondary" className="bg-green-50 text-green-700">ZRA Compliant</Badge>
-              </div>
-            </div>
-
-            {/* Floating Card 2 */}
-            <div className="absolute -right-8 top-20 bg-white p-5 rounded-2xl shadow-xl border border-slate-100 hidden lg:block animate-float-delayed">
-              <p className="text-xs text-slate-500 uppercase font-semibold mb-3">Recent Transactions</p>
-              <div className="space-y-3">
-                <div className="flex items-center gap-3">
-                  <div className="h-8 w-8 rounded-full bg-slate-100 flex items-center justify-center text-xs font-bold">JD</div>
-                  <div>
-                    <p className="text-sm font-medium text-slate-700">Payroll Run</p>
-                    <p className="text-xs text-slate-400">Just now</p>
+                  <div className="bg-slate-50 rounded-xl border border-slate-100 p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <p className="text-xs font-bold text-slate-800">Compliance Timeline</p>
+                      <p className="text-[10px] font-medium text-slate-400">Next 30 days</p>
+                    </div>
+                    <div className="space-y-2">
+                      {[
+                        ['ZRA Smart Invoice sync', 'Ready to submit', 'bg-emerald-50 text-emerald-700'],
+                        ['NAPSA monthly return', 'Draft generated', 'bg-blue-50 text-blue-700'],
+                        ['Board donor report', 'Needs approval', 'bg-amber-50 text-amber-700'],
+                      ].map(([title, status, klass]) => (
+                        <div key={title} className="flex items-center justify-between rounded-lg bg-white px-3.5 py-2.5 shadow-sm border border-slate-50">
+                          <span className="text-sm font-medium text-slate-700">{title}</span>
+                          <span className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold ${klass}`}>{status}</span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                  <span className="text-sm font-medium text-slate-900 ml-4">- K45,200</span>
-                </div>
-                <div className="flex items-center gap-3">
-                  <div className="h-8 w-8 rounded-full bg-blue-100 flex items-center justify-center text-xs font-bold text-blue-700">IN</div>
-                  <div>
-                    <p className="text-sm font-medium text-slate-700">Grant Deposit</p>
-                    <p className="text-xs text-slate-400">2h ago</p>
-                  </div>
-                  <span className="text-sm font-medium text-green-600 ml-4">+ K150,000</span>
                 </div>
               </div>
             </div>
@@ -287,23 +263,113 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* Features Grid */}
-      <section id="features" className="py-24 bg-white relative">
+      {/* ===== STATS BANNER ===== */}
+      <section className="py-12 bg-slate-900 border-y border-slate-800">
         <div className="container mx-auto px-4 lg:px-6">
-          <div className="text-center mb-16 max-w-2xl mx-auto">
-            <h2 className="text-3xl font-bold text-slate-900 mb-4">Everything you need to run your NGO</h2>
-            <p className="text-slate-600">Robust features designed specifically for the unique compliance and reporting needs of Zambian non-profits.</p>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-8">
+            {stats.map((stat) => (
+              <div key={stat.label} className="text-center">
+                <p className="text-3xl lg:text-4xl font-bold text-white mb-1">{stat.value}</p>
+                <p className="text-sm text-slate-400 font-medium">{stat.label}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ===== WHY ZEDBOOKS (Problem → Solution) ===== */}
+      <section id="why" className="py-24 lg:py-32 bg-white">
+        <div className="container mx-auto px-4 lg:px-6">
+          <div className="max-w-3xl mx-auto text-center mb-20">
+            <Badge variant="outline" className="mb-4 px-3 py-1 rounded-full text-slate-500 border-slate-200 text-xs">
+              The problem we solve
+            </Badge>
+            <h2 className="text-3xl lg:text-5xl font-bold text-slate-900 mb-6 tracking-tight">
+              NGO finance shouldn't feel like a monthly crisis
+            </h2>
+            <p className="text-lg text-slate-500 leading-relaxed">
+              If you're still running payroll across multiple spreadsheets, manually calculating NAPSA deductions, 
+              or chasing compliance deadlines — you're not alone. But you don't have to stay there.
+            </p>
           </div>
 
-          <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-8">
+          <div className="grid md:grid-cols-2 gap-8 max-w-4xl mx-auto">
+            <div className="bg-slate-50 rounded-2xl p-8 border border-slate-100">
+              <div className="h-10 w-10 rounded-full bg-red-50 flex items-center justify-center mb-5">
+                <span className="text-red-500 text-lg font-bold">✕</span>
+              </div>
+              <h3 className="text-lg font-bold text-slate-900 mb-3">Before ZedBooks</h3>
+              <ul className="space-y-3">
+                {[
+                  "Manual payroll with error-prone spreadsheets",
+                  "Missed NAPSA/NHIMA deadlines and penalties",
+                  "Grants and expenses scattered across email threads",
+                  "Month-end close takes a week of overtime",
+                  "Auditors asking for documents you can't find",
+                ].map((item) => (
+                  <li key={item} className="flex items-start gap-3 text-sm text-slate-500">
+                    <span className="text-red-300 mt-0.5 shrink-0">—</span>
+                    {item}
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div className="bg-blue-50 rounded-2xl p-8 border border-blue-100">
+              <div className="h-10 w-10 rounded-full bg-emerald-50 flex items-center justify-center mb-5">
+                <Check className="h-5 w-5 text-emerald-600" />
+              </div>
+              <h3 className="text-lg font-bold text-slate-900 mb-3">With ZedBooks</h3>
+              <ul className="space-y-3">
+                {[
+                  "One-click payroll with ZRA, NAPSA, NHIMA auto-calc",
+                  "Automated compliance calendar — never miss a deadline",
+                  "All grants, expenses, and approvals in one place",
+                  "Month-end close in hours, not days",
+                  "Audit trail on every transaction — ready when you are",
+                ].map((item) => (
+                  <li key={item} className="flex items-start gap-3 text-sm text-slate-700">
+                    <Check className="h-4 w-4 text-emerald-500 mt-0.5 shrink-0" />
+                    {item}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ===== FEATURES ===== */}
+      <section id="features" className="py-24 lg:py-32 bg-slate-50">
+        <div className="container mx-auto px-4 lg:px-6">
+          <div className="max-w-3xl mx-auto text-center mb-16">
+            <Badge variant="outline" className="mb-4 px-3 py-1 rounded-full text-slate-500 border-slate-200 text-xs">
+              Everything you need
+            </Badge>
+            <h2 className="text-3xl lg:text-5xl font-bold text-slate-900 mb-6 tracking-tight">
+              Built for Zambian compliance, designed for calm
+            </h2>
+            <p className="text-lg text-slate-500 leading-relaxed">
+              Every feature exists because an NGO finance manager asked for it. Nothing extra, nothing missing.
+            </p>
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-6 max-w-5xl mx-auto">
             {features.map((feature, i) => (
-              <Card key={i} className={`shadow-sm hover:shadow-lg transition-all border-slate-200 bg-white ${feature.className}`}>
+              <Card key={i} className="border-slate-200 bg-white shadow-sm hover:shadow-md transition-all duration-300 hover:-translate-y-0.5 group">
                 <CardContent className="p-8">
-                  <div className="h-12 w-12 rounded-xl bg-slate-50 flex items-center justify-center mb-6">
-                    <feature.icon className="h-6 w-6 text-slate-700" />
+                  <div className="flex items-start gap-5">
+                    <div className="h-12 w-12 rounded-xl bg-slate-100 flex items-center justify-center shrink-0 group-hover:bg-slate-200 transition-colors">
+                      <feature.icon className="h-6 w-6 text-slate-700" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2 mb-2">
+                        <h3 className="font-bold text-lg text-slate-900">{feature.title}</h3>
+                        <ChevronRight className="h-4 w-4 text-slate-300 group-hover:text-slate-500 transition-colors" />
+                      </div>
+                      <p className="text-sm text-slate-500 mb-2">{feature.description}</p>
+                      <p className="text-xs font-medium text-slate-400 italic">"{feature.painPoint}"</p>
+                    </div>
                   </div>
-                  <h3 className="font-bold text-lg text-slate-900 mb-3">{feature.title}</h3>
-                  <p className="text-sm text-slate-500 leading-relaxed">{feature.description}</p>
                 </CardContent>
               </Card>
             ))}
@@ -311,79 +377,135 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* App Download / Compliance */}
-      <section id="compliance" className="py-24 bg-slate-900 text-white overflow-hidden relative">
-        <div className="absolute top-0 right-0 w-[600px] h-[600px] bg-blue-600/10 rounded-full blur-[120px] translate-x-1/2 -translate-y-1/2" />
+      {/* ===== TESTIMONIALS ===== */}
+      <section id="testimonials" className="py-24 lg:py-32 bg-white">
+        <div className="container mx-auto px-4 lg:px-6">
+          <div className="max-w-3xl mx-auto text-center mb-16">
+            <Badge variant="outline" className="mb-4 px-3 py-1 rounded-full text-slate-500 border-slate-200 text-xs">
+              Real voices
+            </Badge>
+            <h2 className="text-3xl lg:text-5xl font-bold text-slate-900 mb-6 tracking-tight">
+              Trusted by finance teams across Zambia
+            </h2>
+          </div>
 
-        <div className="container mx-auto px-4 lg:px-6 relative z-10">
-          <div className="grid lg:grid-cols-2 gap-16 items-center">
-            <div>
-              <h2 className="text-4xl font-bold mb-6">Fully Compliant with Zambian Regulation</h2>
-              <p className="text-slate-300 text-lg mb-8">
-                Stay ahead of regulatory requirements with automated updates for domestic tax laws and labor regulations.
-              </p>
-              <div className="flex flex-wrap gap-4 mb-8">
-                {['ZRA Smart Invoice', 'NAPSA e-Returns', 'NHIMA Compliant', 'PACRA Returns'].map((badge) => (
-                  <div key={badge} className="flex items-center gap-2 px-4 py-2 rounded-full bg-slate-800 border border-slate-700 text-sm font-medium text-slate-200">
-                    <Check className="h-4 w-4 text-green-400" />
-                    {badge}
-                  </div>
-                ))}
-              </div>
-              <Link to="/auth">
-                <Button className="rounded-full bg-white text-slate-900 hover:bg-slate-100 px-8 h-12 shadow-md">
-                  Get Compliant Today
-                </Button>
-              </Link>
-              <a href={demoHref} target="_blank" rel="noreferrer" className="ml-3 inline-flex">
-                <Button variant="outline" className="rounded-full border-slate-600 bg-transparent text-white hover:bg-white hover:text-slate-900 px-8 h-12 shadow-md">
-                  Book Compliance Demo
-                </Button>
-              </a>
-            </div>
-            <div className="relative">
-              <div className="bg-gradient-to-br from-slate-800 to-slate-900 p-8 rounded-3xl border border-slate-700 shadow-2xl">
-                <div className="flex items-center gap-4 mb-8 border-b border-slate-700 pb-8">
-                  <div className="h-14 w-14 bg-blue-600 rounded-2xl flex items-center justify-center">
-                    <Shield className="h-8 w-8 text-white" />
+          <div className="grid md:grid-cols-2 gap-8 max-w-4xl mx-auto">
+            {testimonials.map((t, i) => (
+              <div key={i} className="relative bg-white rounded-2xl p-8 border border-slate-200 shadow-sm">
+                <Quote className="h-8 w-8 text-slate-200 absolute top-6 right-6" />
+                <p className="text-base text-slate-600 leading-relaxed mb-8 italic">
+                  "{t.quote}"
+                </p>
+                <div className="flex items-center gap-3">
+                  <div className="h-10 w-10 rounded-full bg-slate-100 flex items-center justify-center text-sm font-bold text-slate-600">
+                    {t.initials}
                   </div>
                   <div>
-                    <h3 className="text-xl font-bold">Compliance Monitor</h3>
-                    <p className="text-slate-400 text-sm">Real-time status tracking</p>
-                  </div>
-                </div>
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between p-4 rounded-xl bg-slate-800/50 border border-slate-700">
-                    <span className="text-slate-200 font-medium">TPIN Verification</span>
-                    <Badge className="bg-green-500/20 text-green-400 hover:bg-green-500/20 border-green-500/20">Verified</Badge>
-                  </div>
-                  <div className="flex items-center justify-between p-4 rounded-xl bg-slate-800/50 border border-slate-700">
-                    <span className="text-slate-200 font-medium">Tax Clearance</span>
-                    <Badge className="bg-green-500/20 text-green-400 hover:bg-green-500/20 border-green-500/20">Valid</Badge>
-                  </div>
-                  <div className="flex items-center justify-between p-4 rounded-xl bg-slate-800/50 border border-slate-700">
-                    <span className="text-slate-200 font-medium">Annual Returns</span>
-                    <Badge className="bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/20 border-yellow-500/20">Due in 5 days</Badge>
+                    <p className="text-sm font-bold text-slate-900">{t.role}</p>
+                    <p className="text-xs text-slate-400">{t.org}</p>
                   </div>
                 </div>
               </div>
-            </div>
+            ))}
           </div>
         </div>
       </section>
 
-      {/* Footer */}
-      <section className="py-20 bg-blue-600 text-white">
-        <div className="container mx-auto px-4 text-center max-w-3xl">
-          <p className="text-sm font-semibold uppercase tracking-[0.18em] text-blue-100 mb-4">Demo-ready for finance teams</p>
-          <h2 className="text-4xl font-bold mb-5">See how ZedBooks can clean up your NGO finance workflow.</h2>
-          <p className="text-blue-50 text-lg mb-8">We will walk through payroll, compliance, approvals, grants, and reporting using a Zambia-specific workflow.</p>
+      {/* ===== COMPLIANCE ===== */}
+      <section id="compliance" className="py-24 lg:py-32 bg-slate-900 text-white overflow-hidden relative">
+        <div className="absolute top-0 right-0 w-[600px] h-[600px] bg-blue-500/5 rounded-full blur-[120px] translate-x-1/2 -translate-y-1/2" />
+        <div className="absolute bottom-0 left-0 w-[400px] h-[400px] bg-emerald-500/5 rounded-full blur-[100px] -translate-x-1/3 translate-y-1/3" />
+
+        <div className="container mx-auto px-4 lg:px-6 relative z-10">
+          <div className="max-w-3xl mx-auto text-center mb-16">
+            <Badge variant="outline" className="mb-4 px-3 py-1 rounded-full border-slate-700 text-slate-300 text-xs">
+              Regulatory compliance
+            </Badge>
+            <h2 className="text-3xl lg:text-5xl font-bold mb-6 tracking-tight">
+              Fully Zambian-compliant. Automatically.
+            </h2>
+            <p className="text-lg text-slate-300 leading-relaxed">
+              Built from the ground up for ZRA, NAPSA, NHIMA, and PACRA requirements. 
+              When regulations change, ZedBooks updates — you don't lift a finger.
+            </p>
+          </div>
+
+          <div className="grid lg:grid-cols-2 gap-12 items-center max-w-5xl mx-auto">
+            <div className="flex flex-wrap gap-3">
+              {[
+                { name: "ZRA Smart Invoice", icon: Globe },
+                { name: "NAPSA e-Returns", icon: Globe },
+                { name: "NHIMA Compliant", icon: Shield },
+                { name: "PACRA Returns", icon: Building2 },
+              ].map((badge) => (
+                <div key={badge.name} className="flex items-center gap-2.5 px-5 py-3 rounded-xl bg-slate-800/60 border border-slate-700/60 text-sm font-medium text-slate-200">
+                  <Check className="h-4 w-4 text-emerald-400 shrink-0" />
+                  {badge.name}
+                </div>
+              ))}
+            </div>
+            <div className="bg-gradient-to-br from-slate-800 to-slate-900 p-6 rounded-2xl border border-slate-700/60 shadow-xl">
+              <div className="flex items-center gap-3 mb-6 pb-6 border-b border-slate-700/60">
+                <div className="h-12 w-12 bg-blue-600/20 rounded-xl flex items-center justify-center">
+                  <Shield className="h-6 w-6 text-blue-400" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold">Compliance Monitor</h3>
+                  <p className="text-xs text-slate-400">Real-time status tracking</p>
+                </div>
+              </div>
+              <div className="space-y-3">
+                {[
+                  ['TPIN Verification', 'Verified', 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'],
+                  ['Tax Clearance', 'Valid', 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'],
+                  ['Annual Returns', 'Due in 5 days', 'bg-amber-500/10 text-amber-400 border-amber-500/20'],
+                ].map(([item, status, klass]) => (
+                  <div key={item} className="flex items-center justify-between rounded-xl bg-slate-800/40 px-4 py-3 border border-slate-700/40">
+                    <span className="text-sm font-medium text-slate-200">{item}</span>
+                    <Badge className={`${klass} text-[10px] font-bold border`}>{status}</Badge>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-4 mt-12">
+            <Link to="/auth">
+              <Button className="rounded-lg bg-white text-slate-900 hover:bg-slate-100 px-8 h-12 shadow-lg font-semibold transition-all hover:shadow-xl hover:-translate-y-0.5">
+                Get Compliant Today
+              </Button>
+            </Link>
+            <a href={demoHref} target="_blank" rel="noreferrer">
+              <Button variant="outline" className="rounded-lg border-slate-600 bg-transparent text-white hover:bg-white hover:text-slate-900 px-8 h-12 transition-all">
+                Book Compliance Demo
+              </Button>
+            </a>
+          </div>
+        </div>
+      </section>
+
+      {/* ===== FINAL CTA ===== */}
+      <section className="py-24 lg:py-32 bg-white">
+        <div className="container mx-auto px-4 lg:px-6 text-center max-w-3xl">
+          <Badge variant="outline" className="mb-4 px-3 py-1 rounded-full text-slate-500 border-slate-200 text-xs">
+            Ready to simplify?
+          </Badge>
+          <h2 className="text-3xl lg:text-5xl font-bold text-slate-900 mb-6 tracking-tight">
+            Your next month-end could be the calmest one yet
+          </h2>
+          <p className="text-lg text-slate-500 mb-10 leading-relaxed">
+            We'll walk your team through the first payroll run, compliance setup, and grant tracking. 
+            No fluff, no upsell — just a product that works for Zambian NGOs.
+          </p>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
             <a href={demoHref} target="_blank" rel="noreferrer">
-              <Button className="rounded-full bg-white text-blue-700 hover:bg-blue-50 px-8 h-12 shadow-md">Book ZedBooks Demo</Button>
+              <Button size="lg" className="h-14 px-10 rounded-lg bg-slate-900 hover:bg-slate-800 text-white shadow-xl shadow-slate-900/20 text-base font-semibold transition-all hover:shadow-2xl hover:-translate-y-0.5">
+                Book ZedBooks Demo
+                <ArrowRight className="ml-2 h-5 w-5" />
+              </Button>
             </a>
             {deferredPrompt && (
-              <Button onClick={handleInstallClick} variant="outline" className="rounded-full border-blue-200 bg-transparent text-white hover:bg-white hover:text-blue-700 px-8 h-12">
+              <Button onClick={handleInstallClick} variant="outline" className="h-14 px-8 rounded-lg border-slate-200 text-slate-600 hover:bg-slate-50 hover:text-slate-900 hover:border-slate-300 transition-all">
                 <Download className="mr-2 h-5 w-5" />
                 Install Web App
               </Button>
@@ -392,12 +514,23 @@ export default function Landing() {
         </div>
       </section>
 
-      <footer className="py-12 bg-white border-t border-slate-200">
-        <div className="container mx-auto px-4 text-center">
-          <div className="flex items-center justify-center gap-2 mb-4">
-            <Logo variant="full" size="md" className="grayscale opacity-70 hover:grayscale-0 hover:opacity-100" />
+      {/* ===== FOOTER ===== */}
+      <footer className="py-12 bg-slate-50 border-t border-slate-100">
+        <div className="container mx-auto px-4 lg:px-6">
+          <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+            <div className="flex items-center gap-2">
+              <Logo variant="full" size="sm" />
+            </div>
+            <div className="flex items-center gap-6 text-sm text-slate-400">
+              <span className="flex items-center gap-1.5">
+                <MapPin className="h-3.5 w-3.5" /> Lusaka, Zambia
+              </span>
+              <a href="https://byteandberry.com" className="hover:text-slate-600 transition-colors" target="_blank" rel="noreferrer">
+                Byte & Berry
+              </a>
+              <span>© {new Date().getFullYear()}</span>
+            </div>
           </div>
-          <p className="text-slate-500 text-sm">© {new Date().getFullYear()} Byte & Berry. All rights reserved.</p>
         </div>
       </footer>
       <ByteBerryWatermark />
