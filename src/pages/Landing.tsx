@@ -143,8 +143,8 @@ export default function Landing() {
 
       {/* ===== HERO ===== */}
       <section className="relative pt-16 pb-28 lg:pt-24 lg:pb-36 overflow-hidden">
-        {/* Subtle background texture */}
-        <div className="absolute inset-0 bg-[radial-gradient(#e2e8f0_1px,transparent_1px)] [background-size:24px_24px] opacity-40" />
+        {/* Subtle box grid background */}
+        <div className="absolute inset-0 bg-[linear-gradient(#e2e8f0_1px,transparent_1px),linear-gradient(90deg,#e2e8f0_1px,transparent_1px)] [background-size:48px_48px] opacity-30" />
         <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[900px] h-[500px] bg-blue-50/60 rounded-full blur-[120px] -z-10" />
         <div className="absolute bottom-0 right-0 w-[400px] h-[400px] bg-amber-50/40 rounded-full blur-[100px] -z-10" />
 
@@ -158,7 +158,7 @@ export default function Landing() {
 
             <h1 className="text-4xl sm:text-5xl lg:text-7xl font-bold tracking-tight text-slate-900 mb-6 leading-[1.08]">
               Financial peace of mind for{" "}
-              <span className="text-transparent bg-clip-text bg-gradient-to-r from-slate-900 via-blue-800 to-slate-900">
+              <span className="text-blue-800">
                 Zambian NGOs
               </span>
             </h1>
