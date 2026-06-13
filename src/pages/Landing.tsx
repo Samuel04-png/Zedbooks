@@ -16,7 +16,6 @@ import {
   Globe,
   Quote,
   MapPin,
-  Sparkles,
   ChevronRight
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -150,12 +149,6 @@ export default function Landing() {
 
         <div className="container mx-auto px-4 lg:px-6 relative z-10">
           <div className="max-w-4xl mx-auto text-center">
-            {/* New badge */}
-            <Badge variant="outline" className="mb-6 px-4 py-1.5 rounded-full bg-amber-50/60 text-amber-800 border-amber-200/60 inline-flex items-center gap-2">
-              <Sparkles className="h-3.5 w-3.5 text-amber-600" />
-              <span>New: Automated ZRA Tax Submission</span>
-            </Badge>
-
             <h1 className="text-4xl sm:text-5xl lg:text-7xl font-bold tracking-tight text-slate-900 mb-6 leading-[1.08]">
               Financial peace of mind for{" "}
               <span className="text-blue-800">
